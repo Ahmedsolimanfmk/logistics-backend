@@ -1,0 +1,2 @@
+CREATE EXTENSION IF NOT EXISTS citext;
+ALTER TABLE vehicles ALTER COLUMN plate_no TYPE citext;
