@@ -20,7 +20,7 @@ router.post("/login", async (req, res) => {
 
    const emailNorm = String(email).trim().toLowerCase();
      const user = await prisma.users.findFirst({
-      where: { email: emailNorm },
+      where: { email: { equals: emailNorm, mode: "insensitive" } },
       select: {
         id: true,
         full_name: true,
