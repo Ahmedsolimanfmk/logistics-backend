@@ -14,12 +14,12 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
-      return res.status(400).json({ message: "email and password are required" });
+     return res.status(400).json({ message: "email and password are required" });
+
     }
 
-    const emailInput = String(email).trim();
-
-     const user = await prisma.users.findUnique({
+   const emailNorm = String(email).trim().toLowerCase();
+     const user = await prisma.users.findFirst({
       where: { email: emailNorm },
       select: {
         id: true,
@@ -51,14 +51,15 @@ router.post("/login", async (req, res) => {
     );
 
     return res.json({
-      token,
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        role: user.role,
-      },
-    });
+ _build: "AUTH_LOGIN_V2_2026-02-08",
+token,
+  user: {
+    id: user.id,
+    full_name: user.full_name,
+    email: user.email,
+    role: user.role,
+  },
+});
   } catch (e) {
     console.error("LOGIN ERROR:", e);
     return res.status(500).json({ message: "Login failed", error: e.message });
