@@ -14,13 +14,19 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
-     return res.status(400).json({ message: "email and password are required" });
-
+      return res.status(400).json({ message: "email and password are required" });
     }
 
-   const emailNorm = String(email).trim().toLowerCase();
-     const user = await prisma.users.findFirst({
-      where: { email: { equals: emailNorm, mode: "insensitive" } },
+    // ✅ Normalize email (trim only)
+    // IMPORTANT: DB قد تحتوي Email بحروف كبيرة (Ahmed...)
+    // لذلك لا نعتمد على toLowerCase، ونستخدم lookup insensitive
+    const emailNorm = String(email).trim();
+
+    // ✅ Case-insensitive lookup
+    const user = await prisma.users.findFirst({
+      where: {
+        email: { equals: emailNorm, mode: "insensitive" },
+      },
       select: {
         id: true,
         full_name: true,
@@ -31,35 +37,42 @@ router.post("/login", async (req, res) => {
       },
     });
 
-    if (!user || !user.is_active) {
+    if (!user || user.is_active === false) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const ok = await bcrypt.compare(String(password), String(user.password_hash));
+    const hash = user.password_hash;
+    if (!hash) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const ok = await bcrypt.compare(String(password), String(hash));
     if (!ok) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
     if (!process.env.JWT_SECRET) {
-      return res.status(500).json({ message: "Server misconfigured: JWT_SECRET missing" });
+      return res
+        .status(500)
+        .json({ message: "Server misconfigured: JWT_SECRET missing" });
     }
 
     const token = jwt.sign(
-      { sub: user.id, role: user.role },
+      { sub: user.id, role: user.role, email: user.email || undefined },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     return res.json({
- _build: "AUTH_LOGIN_V2_2026-02-08",
-token,
-  user: {
-    id: user.id,
-    full_name: user.full_name,
-    email: user.email,
-    role: user.role,
-  },
-});
+      _build: "AUTH_LOGIN_V3_2026-02-15",
+      token,
+      user: {
+        id: user.id,
+        full_name: user.full_name,
+        email: user.email,
+        role: user.role,
+      },
+    });
   } catch (e) {
     console.error("LOGIN ERROR:", e);
     return res.status(500).json({ message: "Login failed", error: e.message });
