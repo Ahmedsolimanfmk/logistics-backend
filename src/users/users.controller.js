@@ -1,10 +1,11 @@
 // =======================
-// src/users/users.controller.js (FINAL)
+// src/users/users.controller.js (SCHEMA-MATCHED)
 // =======================
 
 const bcrypt = require("bcrypt");
 const prisma = require("../prisma");
 
+// ---------- Normalizers ----------
 function normalizeEmail(email) {
   const v = String(email || "").trim();
   if (!v) return null;
@@ -16,7 +17,12 @@ function normalizePhone(phone) {
   return v ? v : null;
 }
 
-// نرجّع نفس الحقول اللي الصفحة محتاجاها (Supervisors Page)
+function normalizeRole(role) {
+  const v = String(role || "").trim();
+  return v ? v.toUpperCase() : null;
+}
+
+// ---------- Safe Select ----------
 function safeUserSelect() {
   return {
     id: true,
@@ -26,14 +32,25 @@ function safeUserSelect() {
     role: true,
     is_active: true,
     created_at: true,
-    // updated_at: true, // اختياري لو محتاجه
+    updated_at: true, // ✅ موجودة في schema (@updatedAt)
   };
+}
+
+// ---------- Prisma error helper ----------
+function handlePrismaUnique(e, res) {
+  if (e?.code === "P2002") {
+    const target = Array.isArray(e.meta?.target) ? e.meta.target.join(",") : String(e.meta?.target || "");
+    return res.status(409).json({
+      message: "Duplicate value",
+      field: target || undefined,
+    });
+  }
+  return null;
 }
 
 // =======================
 // GET /users
 // Query: q, role, is_active, take, skip
-// Returns: { items, total }
 // =======================
 async function listUsers(req, res) {
   try {
@@ -42,15 +59,23 @@ async function listUsers(req, res) {
 
     if (q) {
       const query = String(q).trim();
-      where.OR = [
-        { full_name: { contains: query, mode: "insensitive" } },
-        { email: { contains: query, mode: "insensitive" } },
-        { phone: { contains: query, mode: "insensitive" } },
-      ];
+      if (query) {
+        where.OR = [
+          { full_name: { contains: query, mode: "insensitive" } },
+          { email: { contains: query, mode: "insensitive" } },
+          { phone: { contains: query, mode: "insensitive" } },
+        ];
+      }
     }
 
-    if (role) where.role = String(role).trim();
-    if (is_active !== undefined) where.is_active = String(is_active) === "true";
+    if (role) {
+      const rr = normalizeRole(role);
+      if (rr) where.role = rr;
+    }
+
+    // ✅ only accept true/false
+    if (is_active === "true") where.is_active = true;
+    else if (is_active === "false") where.is_active = false;
 
     const takeN = take ? Math.min(Math.max(Number(take), 1), 200) : 50;
     const skipN = skip ? Math.max(Number(skip), 0) : 0;
@@ -74,7 +99,6 @@ async function listUsers(req, res) {
 
 // =======================
 // GET /users/:id
-// Returns: { data }
 // =======================
 async function getUserById(req, res) {
   try {
@@ -95,20 +119,25 @@ async function getUserById(req, res) {
 // =======================
 // POST /users
 // body: { full_name, phone?, email?, role, password }
-// NOTE: password is REQUIRED because password_hash is required in schema.
-// Returns: { data }
+// schema: password_hash is REQUIRED ✅
 // =======================
 async function createUser(req, res) {
   try {
     const { full_name, phone, email, role, password } = req.body ?? {};
 
-    // password لازم يكون إجباري لأن password_hash في schema String (مش nullable)
     if (!full_name || !role || !password) {
       return res.status(400).json({ message: "full_name, role, password are required" });
     }
 
-    const emailNorm = email ? normalizeEmail(email) : null;
-    const phoneNorm = phone ? String(phone).trim() : null;
+    const roleNorm = normalizeRole(role);
+    if (!roleNorm) return res.status(400).json({ message: "role is invalid" });
+
+    const emailNorm = email !== undefined ? normalizeEmail(email) : null;
+    const phoneNorm = phone !== undefined ? normalizePhone(phone) : null;
+
+    if (String(password).length < 6) {
+      return res.status(400).json({ message: "password must be at least 6 characters" });
+    }
 
     const password_hash = await bcrypt.hash(String(password), 10);
 
@@ -117,25 +146,25 @@ async function createUser(req, res) {
         full_name: String(full_name).trim(),
         phone: phoneNorm,
         email: emailNorm,
-        role: String(role).trim(),
+        role: roleNorm,
         is_active: true,
         password_hash,
-        // ❌ لا تبعت created_at/updated_at هنا
+        // ✅ created_at/updated_at managed by DB/schema
       },
       select: safeUserSelect(),
     });
 
     return res.status(201).json({ data: created });
   } catch (e) {
+    const handled = handlePrismaUnique(e, res);
+    if (handled) return;
     return res.status(500).json({ message: "Failed to create user", error: e.message });
   }
 }
 
-
 // =======================
 // PATCH /users/:id
 // body: { full_name?, phone?, email?, role? }
-// Returns: { data }
 // =======================
 async function updateUser(req, res) {
   try {
@@ -146,7 +175,11 @@ async function updateUser(req, res) {
     if (full_name !== undefined) data.full_name = String(full_name).trim();
     if (phone !== undefined) data.phone = normalizePhone(phone);
     if (email !== undefined) data.email = normalizeEmail(email);
-    if (role !== undefined) data.role = String(role).trim();
+    if (role !== undefined) data.role = normalizeRole(role);
+
+    if (role !== undefined && !data.role) {
+      return res.status(400).json({ message: "role is invalid" });
+    }
 
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ message: "No fields to update" });
@@ -160,6 +193,8 @@ async function updateUser(req, res) {
 
     return res.json({ data: updated });
   } catch (e) {
+    const handled = handlePrismaUnique(e, res);
+    if (handled) return;
     return res.status(500).json({ message: "Failed to update user", error: e.message });
   }
 }
@@ -167,7 +202,6 @@ async function updateUser(req, res) {
 // =======================
 // PATCH /users/:id/status
 // body: { is_active: true|false }
-// Returns: { data }
 // =======================
 async function setUserStatus(req, res) {
   try {
@@ -193,7 +227,6 @@ async function setUserStatus(req, res) {
 // =======================
 // POST /users/:id/reset-password
 // body: { newPassword }
-// Returns: { ok: true }
 // =======================
 async function resetUserPassword(req, res) {
   try {
@@ -202,6 +235,9 @@ async function resetUserPassword(req, res) {
 
     if (!newPassword) {
       return res.status(400).json({ message: "newPassword is required" });
+    }
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ message: "newPassword must be at least 6 characters" });
     }
 
     const hash = await bcrypt.hash(String(newPassword), 10);
