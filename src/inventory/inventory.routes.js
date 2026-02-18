@@ -40,6 +40,8 @@ router.get("/requests/:id", requestsCtrl.getRequest);
 router.post("/requests", requestsCtrl.createRequest);
 router.post("/requests/:id/approve", requestsCtrl.approveRequest);
 router.post("/requests/:id/reject", requestsCtrl.rejectRequest);
+router.post("/requests/:id/unreserve", requestsCtrl.unreserveRequest);
+
 
 // ---------- Issues (storekeeper) ----------
 router.get("/issues", issuesCtrl.listIssues);
