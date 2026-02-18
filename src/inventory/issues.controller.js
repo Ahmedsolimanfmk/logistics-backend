@@ -3,9 +3,14 @@
 // =======================
 
 const prisma = require("../maintenance/prisma");
+const { ROLES } = require("../constants/roles"); // عدّل المسار لو مختلف عندك
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
+}
+
+function getAuthUserRole(req) {
+  return req?.user?.role || null;
 }
 
 function isUuid(v) {
@@ -15,22 +20,19 @@ function isUuid(v) {
   );
 }
 
-/**
- * Quick behavior:
- * - createIssueDraft: creates issue + lines, status DRAFT.
- * - postIssue: validates part_items are IN_STOCK in same warehouse, then marks them ISSUED, sets issue status POSTED, and marks request ISSUED.
- *
- * Body for createIssueDraft:
- * {
- *   "warehouse_id": "...",
- *   "work_order_id": "...",
- *   "request_id": "... (optional)",
- *   "notes": "free text",
- *   "lines": [
- *     { "part_id":"...", "part_item_id":"...", "qty": 1, "unit_cost": 1200, "notes":"..." }
- *   ]
- * }
- */
+function isPrismaModelMissing(err) {
+  // Prisma sometimes throws "Unknown arg" or "Invalid prisma.<model>" etc.
+  // Here we only want to detect "inventory_request_reservations model doesn't exist"
+  const msg = String(err?.message || "");
+  return (
+    msg.includes("inventory_request_reservations") &&
+    (msg.includes("is not a function") ||
+      msg.includes("Unknown arg") ||
+      msg.includes("Unknown field") ||
+      msg.includes("does not exist") ||
+      msg.includes("Invalid `prisma."))
+  );
+}
 
 async function listIssues(req, res) {
   try {
@@ -50,6 +52,7 @@ async function listIssues(req, res) {
       orderBy: [{ created_at: "desc" }],
       include: {
         warehouses: true,
+        requests: true,
         inventory_issue_lines: { include: { parts: true, part_items: true } },
       },
     });
@@ -86,6 +89,7 @@ async function getIssue(req, res) {
 async function createIssueDraft(req, res) {
   try {
     const issued_by = getAuthUserId(req);
+    const userRole = getAuthUserRole(req);
 
     const warehouse_id = String(req.body?.warehouse_id || "").trim();
     const work_order_id = String(req.body?.work_order_id || "").trim();
@@ -103,16 +107,125 @@ async function createIssueDraft(req, res) {
     if (request_id && !isUuid(request_id)) return res.status(400).json({ message: "request_id invalid" });
     if (!lines.length) return res.status(400).json({ message: "lines is required" });
 
+    // Direct issue must have reason + role allowed
+    if (!request_id) {
+      if (![ROLES.ADMIN, ROLES.STOREKEEPER].includes(userRole)) {
+        return res.status(403).json({ message: "Direct issue allowed only for ADMIN or STOREKEEPER" });
+      }
+      if (!notes || notes.length < 5) {
+        return res.status(400).json({ message: "Direct issue requires reason in notes" });
+      }
+    }
+
     for (const [i, ln] of lines.entries()) {
       const part_id = String(ln?.part_id || "").trim();
       const part_item_id = String(ln?.part_item_id || "").trim();
       const qty = ln?.qty == null ? 1 : Number(ln.qty);
 
       if (!isUuid(part_id)) return res.status(400).json({ message: `lines[${i}].part_id invalid` });
-      if (!isUuid(part_item_id)) return res.status(400).json({ message: `lines[${i}].part_item_id invalid (serial required)` });
+      if (!isUuid(part_item_id)) {
+        return res
+          .status(400)
+          .json({ message: `lines[${i}].part_item_id invalid (serial required)` });
+      }
       if (!Number.isFinite(qty) || qty !== 1) {
-        // serial-based issue -> qty must be 1 per line
         return res.status(400).json({ message: `lines[${i}].qty must be 1 for serial items` });
+      }
+    }
+
+    // If request-based: request must be APPROVED + (optional) reservation checks
+    if (request_id) {
+      const reqRow = await prisma.inventory_requests.findUnique({
+        where: { id: request_id },
+        select: { id: true, status: true, warehouse_id: true, work_order_id: true },
+      });
+
+      if (!reqRow) return res.status(404).json({ message: "Request not found" });
+      if (reqRow.status !== "APPROVED") {
+        return res.status(400).json({ message: "Request must be APPROVED before issuing" });
+      }
+      if (String(reqRow.warehouse_id) !== warehouse_id) {
+        return res.status(400).json({ message: "Issue warehouse_id must match request warehouse_id" });
+      }
+      if (reqRow.work_order_id && String(reqRow.work_order_id) !== work_order_id) {
+        return res.status(400).json({ message: "work_order_id must match request work_order_id" });
+      }
+
+      // Ensure each part_item is RESERVED in that warehouse and matches part_id
+      const partItemIds = lines.map((ln) => String(ln.part_item_id).trim());
+      const partItems = await prisma.part_items.findMany({
+        where: { id: { in: partItemIds } },
+        select: { id: true, status: true, warehouse_id: true, part_id: true },
+      });
+
+      const map = new Map(partItems.map((p) => [p.id, p]));
+      for (const [i, ln] of lines.entries()) {
+        const part_id = String(ln.part_id).trim();
+        const part_item_id = String(ln.part_item_id).trim();
+        const pi = map.get(part_item_id);
+
+        if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+        if (String(pi.warehouse_id) !== warehouse_id) {
+          return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+        }
+        if (String(pi.part_id) !== part_id) {
+          return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+        }
+        if (pi.status !== "RESERVED") {
+          return res.status(409).json({
+            message: `lines[${i}].part_item_id must be RESERVED (current=${pi.status})`,
+          });
+        }
+      }
+
+      // Optional: verify reservations table if exists
+      try {
+        const reservations = await prisma.inventory_request_reservations.findMany({
+          where: { request_id, part_item_id: { in: partItemIds } },
+          select: { part_item_id: true },
+        });
+
+        const set = new Set(reservations.map((r) => r.part_item_id));
+        for (const pid of partItemIds) {
+          if (!set.has(pid)) {
+            return res.status(409).json({
+              message: `part_item_id is not reserved for this request: ${pid}`,
+            });
+          }
+        }
+      } catch (e) {
+        // if model not present, ignore (system will still work using part_items.status RESERVED)
+        if (!isPrismaModelMissing(e)) {
+          console.error("reservations check error:", e);
+          return res.status(500).json({ message: "Failed to validate reservations" });
+        }
+      }
+    } else {
+      // Direct: ensure IN_STOCK now (early feedback)
+      const partItemIds = lines.map((ln) => String(ln.part_item_id).trim());
+      const partItems = await prisma.part_items.findMany({
+        where: { id: { in: partItemIds } },
+        select: { id: true, status: true, warehouse_id: true, part_id: true },
+      });
+
+      const map = new Map(partItems.map((p) => [p.id, p]));
+      for (const [i, ln] of lines.entries()) {
+        const part_id = String(ln.part_id).trim();
+        const part_item_id = String(ln.part_item_id).trim();
+        const pi = map.get(part_item_id);
+
+        if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+        if (String(pi.warehouse_id) !== warehouse_id) {
+          return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+        }
+        if (String(pi.part_id) !== part_id) {
+          return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+        }
+        if (pi.status !== "IN_STOCK") {
+          return res.status(409).json({
+            message: `lines[${i}].part_item_id must be IN_STOCK for direct issue (current=${pi.status})`,
+          });
+        }
       }
     }
 
@@ -148,6 +261,7 @@ async function createIssueDraft(req, res) {
 async function postIssue(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const userRole = getAuthUserRole(req);
 
     const id = String(req.params.id || "").trim();
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
@@ -180,15 +294,83 @@ async function postIssue(req, res) {
         throw e;
       }
 
-      // validate each part_item is IN_STOCK and in same warehouse
-      const partItemIds = issue.inventory_issue_lines
-        .map((l) => l.part_item_id)
-        .filter(Boolean);
+      const isRequestBased = !!issue.request_id;
+
+      // Direct post permission + reason
+      if (!isRequestBased) {
+        if (![ROLES.ADMIN, ROLES.STOREKEEPER].includes(userRole)) {
+          const e = new Error("Direct issue allowed only for ADMIN or STOREKEEPER");
+          e.statusCode = 403;
+          throw e;
+        }
+        if (!issue.notes || String(issue.notes).trim().length < 5) {
+          const e = new Error("Direct issue requires reason in notes");
+          e.statusCode = 400;
+          throw e;
+        }
+      }
+
+      // If request-based: request must still be APPROVED
+      if (isRequestBased) {
+        const reqRow = await tx.inventory_requests.findUnique({
+          where: { id: issue.request_id },
+          select: { id: true, status: true, warehouse_id: true, work_order_id: true },
+        });
+
+        if (!reqRow) {
+          const e = new Error("Linked request not found");
+          e.statusCode = 400;
+          throw e;
+        }
+        if (reqRow.status !== "APPROVED") {
+          const e = new Error("Linked request must be APPROVED before posting issue");
+          e.statusCode = 400;
+          throw e;
+        }
+        if (String(reqRow.warehouse_id) !== String(issue.warehouse_id)) {
+          const e = new Error("Request warehouse mismatch");
+          e.statusCode = 400;
+          throw e;
+        }
+        if (reqRow.work_order_id && String(reqRow.work_order_id) !== String(issue.work_order_id)) {
+          const e = new Error("Request work order mismatch");
+          e.statusCode = 400;
+          throw e;
+        }
+      }
+
+      const partItemIds = issue.inventory_issue_lines.map((l) => l.part_item_id).filter(Boolean);
 
       if (partItemIds.length !== issue.inventory_issue_lines.length) {
         const e = new Error("All lines must include part_item_id (serial)");
         e.statusCode = 400;
         throw e;
+      }
+
+      // If request-based: verify reservations table if exists (optional)
+      if (isRequestBased) {
+        try {
+          const reservations = await tx.inventory_request_reservations.findMany({
+            where: { request_id: issue.request_id, part_item_id: { in: partItemIds } },
+            select: { part_item_id: true },
+          });
+
+          const set = new Set(reservations.map((r) => r.part_item_id));
+          for (const pid of partItemIds) {
+            if (!set.has(pid)) {
+              const e = new Error(`part_item is not reserved for this request: ${pid}`);
+              e.statusCode = 409;
+              throw e;
+            }
+          }
+        } catch (e) {
+          if (!isPrismaModelMissing(e)) {
+            console.error("reservations check error:", e);
+            const er = new Error("Failed to validate reservations");
+            er.statusCode = 500;
+            throw er;
+          }
+        }
       }
 
       const partItems = await tx.part_items.findMany({
@@ -197,22 +379,36 @@ async function postIssue(req, res) {
       });
 
       const map = new Map(partItems.map((p) => [p.id, p]));
+
       for (const line of issue.inventory_issue_lines) {
         const pi = map.get(line.part_item_id);
+
         if (!pi) {
           const e = new Error(`part_item not found: ${line.part_item_id}`);
           e.statusCode = 400;
           throw e;
         }
-        if (pi.warehouse_id !== issue.warehouse_id) {
+
+        if (String(pi.warehouse_id) !== String(issue.warehouse_id)) {
           const e = new Error(`part_item not in this warehouse: ${line.part_item_id}`);
           e.statusCode = 400;
           throw e;
         }
-        if (pi.status !== "IN_STOCK") {
-          const e = new Error(`part_item not available (status=${pi.status}): ${line.part_item_id}`);
-          e.statusCode = 409;
-          throw e;
+
+        if (isRequestBased) {
+          // request-based => must be RESERVED
+          if (pi.status !== "RESERVED") {
+            const e = new Error(`part_item must be RESERVED (status=${pi.status}): ${line.part_item_id}`);
+            e.statusCode = 409;
+            throw e;
+          }
+        } else {
+          // direct => must be IN_STOCK
+          if (pi.status !== "IN_STOCK") {
+            const e = new Error(`part_item must be IN_STOCK (status=${pi.status}): ${line.part_item_id}`);
+            e.statusCode = 409;
+            throw e;
+          }
         }
       }
 
@@ -225,18 +421,29 @@ async function postIssue(req, res) {
       // post issue
       const posted = await tx.inventory_issues.update({
         where: { id: issue.id },
-        data: {
-          status: "POSTED",
-          posted_at: new Date(),
-        },
+        data: { status: "POSTED", posted_at: new Date() },
       });
 
-      // if linked to request: set request to ISSUED
+      // if linked to request: set request to ISSUED and clear reservations if table exists
       if (issue.request_id) {
         await tx.inventory_requests.update({
           where: { id: issue.request_id },
           data: { status: "ISSUED" },
         });
+
+        // clear reservations if model exists
+        try {
+          await tx.inventory_request_reservations.deleteMany({
+            where: { request_id: issue.request_id },
+          });
+        } catch (e) {
+          if (!isPrismaModelMissing(e)) {
+            console.error("reservations cleanup error:", e);
+            const er = new Error("Failed to clear reservations");
+            er.statusCode = 500;
+            throw er;
+          }
+        }
       }
 
       return posted;

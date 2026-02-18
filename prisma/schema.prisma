@@ -488,6 +488,7 @@ model part_items {
 
   inventory_issue_lines    inventory_issue_lines[]
   work_order_installations work_order_installations[]
+  reservations inventory_request_reservations[]
 
   @@index([warehouse_id], map: "idx_part_items_warehouse_id")
   @@index([part_id], map: "idx_part_items_part_id")
@@ -573,6 +574,7 @@ model inventory_requests {
 
   lines  inventory_request_lines[]
   issues inventory_issues[]
+  reservations inventory_request_reservations[]
 
   @@index([warehouse_id], map: "idx_inventory_requests_warehouse_id")
   @@index([status], map: "idx_inventory_requests_status")
@@ -617,6 +619,24 @@ model inventory_request_lines {
   @@index([request_id], map: "idx_inventory_request_lines_request_id")
   @@index([part_id], map: "idx_inventory_request_lines_part_id")
   @@map("inventory_request_lines")
+}
+// =======================
+// REQUEST RESERVATIONS (Enterprise)
+// Link each reserved serial (part_item) to a specific request
+// =======================
+model inventory_request_reservations {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  request_id  String   @db.Uuid
+  part_item_id String  @db.Uuid
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  requests   inventory_requests @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  part_items part_items         @relation(fields: [part_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([request_id, part_item_id], map: "uq_req_res_request_part_item")
+  @@index([request_id], map: "idx_req_res_request_id")
+  @@index([part_item_id], map: "idx_req_res_part_item_id")
+  @@map("inventory_request_reservations")
 }
 
 // =======================

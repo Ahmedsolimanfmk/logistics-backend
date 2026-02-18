@@ -10,6 +10,9 @@ const ROLES = Object.freeze({
   GENERAL_MANAGER: "GENERAL_MANAGER",       // المدير العام
   GENERAL_RESPONSIBLE: "GENERAL_RESPONSIBLE", // المسؤول العام
 
+  // Store
+  STOREKEEPER: "STOREKEEPER",   // 
+
   // existing
   HR: "HR",
   ACCOUNTANT: "ACCOUNTANT",
