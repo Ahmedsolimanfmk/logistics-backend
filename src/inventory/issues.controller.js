@@ -3,7 +3,8 @@
 // =======================
 
 const prisma = require("../maintenance/prisma");
-const { ROLES } = require("../constants/roles"); // عدّل المسار لو مختلف عندك
+const { ROLES } = require("../auth/roles");
+ // عدّل المسار لو مختلف عندك
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
