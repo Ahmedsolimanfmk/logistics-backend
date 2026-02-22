@@ -144,6 +144,73 @@ function parseOptionalDate(v) {
 	"modelVersionId": 14,
 	"origin": "extHost1"
 }]
+// GET /cash/cash-advances/summary?q=&status=
+// Returns KPI counts + total amount across ALL matching rows (no pagination)
+async function getCashAdvancesSummary(req, res) {
+  try {
+    const userId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const isPrivileged = isAccountantOrAdmin(role);
+    const { status, q } = req.query || {};
+
+    const where = {};
+
+    if (status) where.status = String(status).toUpperCase();
+
+    // supervisors: only their advances
+    if (!isPrivileged) {
+      where.field_supervisor_id = userId;
+    }
+
+    // Search: حاولنا نستخدم الحقول الموجودة عندك في closeCashAdvance
+    if (q && String(q).trim()) {
+      const qq = String(q).trim();
+      where.OR = [
+        { settlement_reference: { contains: qq, mode: "insensitive" } },
+        { settlement_notes: { contains: qq, mode: "insensitive" } },
+      ];
+    }
+
+    const rows = await prisma.cash_advances.findMany({
+      where,
+      select: { amount: true, status: true },
+    });
+
+    const st = (x) => String(x?.status || "").toUpperCase();
+    const sumAmount = rows.reduce((acc, x) => acc + Number(x.amount || 0), 0);
+
+    const isOpen = (s) => ["OPEN", "IN_REVIEW", "PENDING"].includes(s);
+    const isSettled = (s) => ["SETTLED", "CLOSED"].includes(s);
+    const isCanceled = (s) => ["CANCELED", "REJECTED"].includes(s);
+
+    const openCount = rows.filter((x) => isOpen(st(x))).length;
+    const settledCount = rows.filter((x) => isSettled(st(x))).length;
+    const canceledCount = rows.filter((x) => isCanceled(st(x))).length;
+
+    return res.json({
+      where_applied: {
+        status: status ? String(status).toUpperCase() : null,
+        q: q ? String(q) : null,
+        scope: isPrivileged ? "ALL" : "OWN_ONLY",
+      },
+      totals: {
+        sumAmount,
+        countAll: rows.length,
+        openCount,
+        settledCount,
+        canceledCount,
+      },
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Failed to fetch advances summary",
+      error: e.message,
+    });
+  }
+}
+
 // GET /cash/cash-advances
 async function getCashAdvances(req, res) {
   try {
@@ -1380,24 +1447,26 @@ async function getTripFinanceSummary(req, res) {
 
 module.exports = {
   // Cash Advances
+  getCashAdvancesSummary,
   getCashAdvances,
   getCashAdvanceById,
   createCashAdvance,
 
-  // ✅ Phase B endpoints
+  // Phase B endpoints
   submitCashAdvanceForReview,
   closeCashAdvance,
   reopenCashAdvance,
 
   getAdvanceExpenses,
+
+  // Reports/Audit
   getSupervisorDeficitReport,
   getExpenseAudit,
 
   // Cash Expenses
   createCashExpense,
-
-  // ✅ Expenses list & details
   listCashExpenses,
+  getCashExpensesSummary,
   getCashExpenseById,
 
   // Workflow endpoints
@@ -1411,6 +1480,4 @@ module.exports = {
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,
-  getCashExpensesSummary,
-   getCashAdvancesSummary,
 };
