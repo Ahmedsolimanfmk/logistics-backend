@@ -183,51 +183,56 @@ async function getCashAdvancesSummary(req, res) {
   }
 }
 
-// GET /cash/cash-advances
+// GET /cash/cash-advances?status=&q=&page=&page_size=
 async function getCashAdvances(req, res) {
   try {
-    const list = await prisma.cash_advances.findMany({
-      orderBy: { created_at: "desc" },
-      include: {
-        users_cash_advances_field_supervisor_idTousers: true,
-        users_cash_advances_issued_byTousers: true,
-        cash_expenses: { orderBy: { created_at: "desc" } },
-      },
-    });
+    const userId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    res.json(list);
-  } catch (e) {
-    res.status(500).json({ message: "Failed to fetch cash advances", error: e?.message || String(e) });
-  }
-}
+    const isPrivileged = isAccountantOrAdmin(role);
+    const { status, q, page = "1", page_size = "50" } = req.query || {};
 
-// GET /cash/cash-advances/:id
-async function getCashAdvanceById(req, res) {
-  try {
-    const { id } = req.params;
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
+    const where = {};
 
-    const row = await prisma.cash_advances.findUnique({
-      where: { id },
-      include: {
-        users_cash_advances_field_supervisor_idTousers: true,
-        users_cash_advances_issued_byTousers: true,
-        cash_expenses: {
-          include: {
-            users_cash_expenses_created_byTousers: true,
-            users_cash_expenses_approved_byTousers: true,
-            trips: true,
-            vehicles: true,
-          },
-          orderBy: { created_at: "desc" },
+    if (status) where.status = String(status).toUpperCase();
+
+    // supervisors: only their advances
+    if (!isPrivileged) {
+      where.field_supervisor_id = userId;
+    }
+
+    // simple search
+    if (q && String(q).trim()) {
+      const qq = String(q).trim();
+      where.OR = [
+        { settlement_reference: { contains: qq, mode: "insensitive" } },
+        { settlement_notes: { contains: qq, mode: "insensitive" } },
+      ];
+    }
+
+    const p = Math.max(1, Number(page) || 1);
+    const ps = Math.min(200, Math.max(1, Number(page_size) || 50));
+    const skip = (p - 1) * ps;
+
+    const [items, total] = await Promise.all([
+      prisma.cash_advances.findMany({
+        where,
+        orderBy: { created_at: "desc" },
+        skip,
+        take: ps,
+        include: {
+          users_cash_advances_field_supervisor_idTousers: true,
+          users_cash_advances_issued_byTousers: true,
+          cash_expenses: { orderBy: { created_at: "desc" } },
         },
-      },
-    });
+      }),
+      prisma.cash_advances.count({ where }),
+    ]);
 
-    if (!row) return res.status(404).json({ message: "Cash advance not found" });
-    res.json(row);
+    return res.json({ items, total, page: p, page_size: ps });
   } catch (e) {
-    res.status(500).json({ message: "Failed to fetch cash advance", error: e?.message || String(e) });
+    return res.status(500).json({ message: "Failed to fetch cash advances", error: e.message });
   }
 }
 

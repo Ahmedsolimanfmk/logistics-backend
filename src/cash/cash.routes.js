@@ -5,53 +5,63 @@ const router = express.Router();
 const cashController = require("./cash.controller");
 const authMiddleware = require("../middleware/authMiddleware");
 
+// UUID v4-ish (general UUID) regex for routing
+const UUID_RE = "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})";
+
 // =======================
 // Cash Advances
 // =======================
 
-// ✅ IMPORTANT: summary MUST come BEFORE :id
+// summary MUST come BEFORE :id (still keep it)
 router.get("/cash-advances/summary", authMiddleware, cashController.getCashAdvancesSummary);
 
+// list
 router.get("/cash-advances", authMiddleware, cashController.getCashAdvances);
-router.get("/cash-advances/:id", authMiddleware, cashController.getCashAdvanceById);
+
+// id routes restricted to UUID only ✅
+router.get(`/cash-advances/:id${UUID_RE}`, authMiddleware, cashController.getCashAdvanceById);
+
 router.post("/cash-advances", authMiddleware, cashController.createCashAdvance);
 
-// Phase B: Advance settlement workflow
-router.post("/cash-advances/:id/submit-review", authMiddleware, cashController.submitCashAdvanceForReview);
-router.post("/cash-advances/:id/close", authMiddleware, cashController.closeCashAdvance);
-router.post("/cash-advances/:id/reopen", authMiddleware, cashController.reopenCashAdvance);
+// Phase B
+router.post(`/cash-advances/:id${UUID_RE}/submit-review`, authMiddleware, cashController.submitCashAdvanceForReview);
+router.post(`/cash-advances/:id${UUID_RE}/close`, authMiddleware, cashController.closeCashAdvance);
+router.post(`/cash-advances/:id${UUID_RE}/reopen`, authMiddleware, cashController.reopenCashAdvance);
 
-router.get("/cash-advances/:id/expenses", authMiddleware, cashController.getAdvanceExpenses);
+router.get(`/cash-advances/:id${UUID_RE}/expenses`, authMiddleware, cashController.getAdvanceExpenses);
 
 // =======================
 // Cash Expenses
 // =======================
 
-// ✅ IMPORTANT: summary MUST come BEFORE :id
+// summary MUST come BEFORE :id (still keep it)
 router.get("/cash-expenses/summary", authMiddleware, cashController.getCashExpensesSummary);
 
+// list
 router.get("/cash-expenses", authMiddleware, cashController.listCashExpenses);
-router.get("/cash-expenses/:id", authMiddleware, cashController.getCashExpenseById);
+
+// id route restricted to UUID only ✅
+router.get(`/cash-expenses/:id${UUID_RE}`, authMiddleware, cashController.getCashExpenseById);
 
 router.post("/cash-expenses", authMiddleware, cashController.createCashExpense);
 
-router.post("/cash-expenses/:id/approve", authMiddleware, cashController.approveCashExpense);
-router.post("/cash-expenses/:id/reject", authMiddleware, cashController.rejectCashExpense);
-router.post("/cash-expenses/:id/appeal", authMiddleware, cashController.appealRejectedExpense);
-router.post("/cash-expenses/:id/resolve-appeal", authMiddleware, cashController.resolveAppeal);
-router.post("/cash-expenses/:id/reopen", authMiddleware, cashController.reopenRejectedExpense);
+router.post(`/cash-expenses/:id${UUID_RE}/approve`, authMiddleware, cashController.approveCashExpense);
+router.post(`/cash-expenses/:id${UUID_RE}/reject`, authMiddleware, cashController.rejectCashExpense);
+router.post(`/cash-expenses/:id${UUID_RE}/appeal`, authMiddleware, cashController.appealRejectedExpense);
+router.post(`/cash-expenses/:id${UUID_RE}/resolve-appeal`, authMiddleware, cashController.resolveAppeal);
+router.post(`/cash-expenses/:id${UUID_RE}/reopen`, authMiddleware, cashController.reopenRejectedExpense);
 
 // =======================
-// Reports / Audit
+// Reports
 // =======================
 router.get("/reports/supervisor-deficit", authMiddleware, cashController.getSupervisorDeficitReport);
-router.get("/cash-expenses/:id/audit", authMiddleware, cashController.getExpenseAudit);
+router.get(`/cash-expenses/:id${UUID_RE}/audit`, authMiddleware, cashController.getExpenseAudit);
 
 // =======================
 // Trip Finance
 // =======================
-router.post("/trips/:id/finance/open-review", authMiddleware, cashController.openTripFinanceReview);
-router.post("/trips/:id/finance/close", authMiddleware, cashController.closeTripFinance);
-router.get("/trips/:id/finance/summary", authMiddleware, cashController.getTripFinanceSummary);
+router.post(`/trips/:id${UUID_RE}/finance/open-review`, authMiddleware, cashController.openTripFinanceReview);
+router.post(`/trips/:id${UUID_RE}/finance/close`, authMiddleware, cashController.closeTripFinance);
+router.get(`/trips/:id${UUID_RE}/finance/summary`, authMiddleware, cashController.getTripFinanceSummary);
 
 module.exports = router;
