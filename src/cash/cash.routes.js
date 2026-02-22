@@ -3,9 +3,7 @@ const express = require("express");
 const router = express.Router();
 
 const cashController = require("./cash.controller");
-
-// ✅ عدّل المسار ده حسب مشروعك
-const authMiddleware = require("../middleware/authMiddleware"); // <-- غيّرها لو اسم/مكان مختلف
+const authMiddleware = require("../middleware/authMiddleware");
 
 // =======================
 // Cash Advances
@@ -44,7 +42,7 @@ router.post("/cash-expenses/:id/resolve-appeal", authMiddleware, cashController.
 router.post("/cash-expenses/:id/reopen", authMiddleware, cashController.reopenRejectedExpense);
 
 // =======================
-// Reports
+// Reports / Audit
 // =======================
 router.get("/reports/supervisor-deficit", authMiddleware, cashController.getSupervisorDeficitReport);
 router.get("/cash-expenses/:id/audit", authMiddleware, cashController.getExpenseAudit);
