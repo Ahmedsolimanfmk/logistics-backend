@@ -13,13 +13,17 @@ router.post("/cash-advances/:id/submit-review", cashController.submitCashAdvance
 router.post("/cash-advances/:id/close", cashController.closeCashAdvance);
 router.post("/cash-advances/:id/reopen", cashController.reopenCashAdvance);
 
+router.get("/cash-advances/summary", authMiddleware, cashController.getCashAdvancesSummary);
 router.get("/cash-advances/:id/expenses", cashController.getAdvanceExpenses);
 
 // Cash Expenses
 router.get("/cash-expenses", cashController.listCashExpenses);
+router.get("/cash-expenses/summary", authMiddleware, cashController.getCashExpensesSummary);
 router.get("/cash-expenses/:id", cashController.getCashExpenseById);
 
 router.post("/cash-expenses", cashController.createCashExpense);
+
+
 router.post("/cash-expenses/:id/approve", cashController.approveCashExpense);
 router.post("/cash-expenses/:id/reject", cashController.rejectCashExpense);
 router.post("/cash-expenses/:id/appeal", cashController.appealRejectedExpense);

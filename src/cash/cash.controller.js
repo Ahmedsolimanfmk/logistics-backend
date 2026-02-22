@@ -115,7 +115,35 @@ function parseOptionalDate(v) {
 // =======================
 // Cash Advances
 // =======================
-
+// GET /cash/cash-advances/summary?q=&status=
+// Returns KPI counts + total amount across ALL matching rows (no pagination)
+[{
+	"resource": "/D:/logistics-system/backend/src/cash/cash.controller.js",
+	"owner": "typescript",
+	"code": "1005",
+	"severity": 8,
+	"message": "'try' expected.",
+	"source": "ts",
+	"startLineNumber": 260,
+	"startColumn": 5,
+	"endLineNumber": 260,
+	"endColumn": 10,
+	"modelVersionId": 14,
+	"origin": "extHost1"
+},{
+	"resource": "/D:/logistics-system/backend/src/cash/cash.controller.js",
+	"owner": "typescript",
+	"code": "1128",
+	"severity": 8,
+	"message": "Declaration or statement expected.",
+	"source": "ts",
+	"startLineNumber": 266,
+	"startColumn": 1,
+	"endLineNumber": 266,
+	"endColumn": 2,
+	"modelVersionId": 14,
+	"origin": "extHost1"
+}]
 // GET /cash/cash-advances
 async function getCashAdvances(req, res) {
   try {
@@ -649,6 +677,110 @@ async function listCashExpenses(req, res) {
     return res.json({ items, total, page: p, page_size: ps });
   } catch (e) {
     return res.status(500).json({ message: "Failed to fetch expenses", error: e.message });
+  }
+}
+
+// GET /cash/cash-expenses/summary?status=&payment_source=&q=
+// Returns KPI sums across ALL matching rows (no pagination)
+async function getCashExpensesSummary(req, res) {
+  try {
+    const userId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const isPrivileged = isAccountantOrAdmin(role);
+
+    const { status, payment_source, q } = req.query || {};
+
+    const where = {};
+
+    // optional filter: specific status (approval_status)
+    if (status) where.approval_status = String(status).toUpperCase();
+
+    // optional filter: payment_source (ADVANCE/COMPANY)
+    if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
+
+    // supervisors: only their created expenses
+    if (!isPrivileged) {
+      where.created_by = userId;
+    }
+
+    // search
+    if (q && String(q).trim()) {
+      const qq = String(q).trim();
+      where.OR = [
+        { expense_type: { contains: qq, mode: "insensitive" } },
+        { notes: { contains: qq, mode: "insensitive" } },
+        { vendor_name: { contains: qq, mode: "insensitive" } },
+        { invoice_no: { contains: qq, mode: "insensitive" } },
+        { payment_ref: { contains: qq, mode: "insensitive" } },
+      ];
+    }
+
+    // Group by approval_status -> sums & counts
+    const groups = await prisma.cash_expenses.groupBy({
+      by: ["approval_status"],
+      where,
+      _sum: { amount: true },
+      _count: { _all: true },
+    });
+
+    // total sum across all rows (optional but useful)
+    const agg = await prisma.cash_expenses.aggregate({
+      where,
+      _sum: { amount: true },
+      _count: { _all: true },
+    });
+
+    const map = new Map();
+    for (const g of groups) {
+      map.set(String(g.approval_status || "").toUpperCase(), {
+        sum: Number(g._sum?.amount || 0),
+        count: Number(g._count?._all || 0),
+      });
+    }
+
+    const pick = (k) => map.get(k)?.sum || 0;
+    const pickCount = (k) => map.get(k)?.count || 0;
+
+    // ✅ combine APPROVED + REAPPROVED
+    const sumApproved = pick("APPROVED") + pick("REAPPROVED");
+    const countApproved = pickCount("APPROVED") + pickCount("REAPPROVED");
+
+    const result = {
+      where_applied: {
+        status: status ? String(status).toUpperCase() : null,
+        payment_source: payment_source ? normalizePaymentSource(payment_source) : null,
+        q: q ? String(q) : null,
+        scope: isPrivileged ? "ALL" : "OWN_CREATED",
+      },
+      totals: {
+        sumAll: Number(agg._sum?.amount || 0),
+        countAll: Number(agg._count?._all || 0),
+
+        sumApproved,
+        countApproved,
+
+        sumPending: pick("PENDING"),
+        countPending: pickCount("PENDING"),
+
+        sumRejected: pick("REJECTED"),
+        countRejected: pickCount("REJECTED"),
+
+        sumAppealed: pick("APPEALED"),
+        countAppealed: pickCount("APPEALED"),
+      },
+      // useful for debugging
+      raw_by_status: groups.map((g) => ({
+        approval_status: String(g.approval_status || "").toUpperCase(),
+        sum: Number(g._sum?.amount || 0),
+        count: Number(g._count?._all || 0),
+      })),
+    };
+
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch expenses summary", error: e.message });
   }
 }
 
@@ -1279,4 +1411,6 @@ module.exports = {
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,
+  getCashExpensesSummary,
+   getCashAdvancesSummary,
 };
