@@ -747,7 +747,39 @@ async function listCashExpenses(req, res) {
     return res.status(500).json({ message: "Failed to fetch expenses", error: e?.message || String(e) });
   }
 }
+// GET /cash/cash-advances/:id
+async function getCashAdvanceById(req, res) {
+  try {
+    const userId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
+
+    const row = await prisma.cash_advances.findUnique({
+      where: { id },
+      include: {
+        users_cash_advances_field_supervisor_idTousers: true,
+        users_cash_advances_issued_byTousers: true,
+        cash_expenses: { orderBy: { created_at: "desc" } },
+      },
+    });
+
+    if (!row) return res.status(404).json({ message: "Cash advance not found" });
+
+    const isPrivileged = isAccountantOrAdmin(role);
+    const isOwnerSupervisor = row.field_supervisor_id === userId;
+
+    if (!isPrivileged && !isOwnerSupervisor) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    return res.json(row);
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch cash advance", error: e?.message || String(e) });
+  }
+}
 // GET /cash/cash-expenses/summary?status=&payment_source=&q=
 async function getCashExpensesSummary(req, res) {
   try {
