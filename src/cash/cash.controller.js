@@ -117,7 +117,6 @@ function parseOptionalDate(v) {
 // =======================
 
 // GET /cash/cash-advances/summary?q=&status=
-// Returns KPI counts + total amount across ALL matching rows (no pagination)
 async function getCashAdvancesSummary(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -232,7 +231,7 @@ async function getCashAdvances(req, res) {
 
     return res.json({ items, total, page: p, page_size: ps });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch cash advances", error: e.message });
+    return res.status(500).json({ message: "Failed to fetch cash advances", error: e?.message || String(e) });
   }
 }
 
@@ -272,10 +271,10 @@ async function createCashAdvance(req, res) {
       },
     });
 
-    res.status(201).json(created);
+    return res.status(201).json(created);
   } catch (e) {
     console.log("CREATE CASH ADVANCE ERROR:", e);
-    res.status(500).json({ message: "Failed to create cash advance", error: e?.message || String(e) });
+    return res.status(500).json({ message: "Failed to create cash advance", error: e?.message || String(e) });
   }
 }
 
@@ -299,7 +298,9 @@ async function submitCashAdvanceForReview(req, res) {
     const st = String(advance.status || "OPEN").toUpperCase();
     if (st === "CLOSED") return res.status(409).json({ message: "Cash advance already CLOSED" });
     if (st !== "OPEN") {
-      return res.status(400).json({ message: `Cash advance must be OPEN to submit review (current: ${st})` });
+      return res
+        .status(400)
+        .json({ message: `Cash advance must be OPEN to submit review (current: ${st})` });
     }
 
     const updated = await prisma.cash_advances.update({ where: { id }, data: { status: "IN_REVIEW" } });
@@ -315,7 +316,8 @@ async function closeCashAdvance(req, res) {
     const role = getAuthRole(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can close cash advances" });
+    if (!isAccountantOrAdmin(role))
+      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can close cash advances" });
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
@@ -422,7 +424,8 @@ async function reopenCashAdvance(req, res) {
     const role = getAuthRole(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reopen cash advances" });
+    if (!isAccountantOrAdmin(role))
+      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reopen cash advances" });
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
@@ -431,7 +434,8 @@ async function reopenCashAdvance(req, res) {
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = String(advance.status || "OPEN").toUpperCase();
-    if (st !== "CLOSED") return res.status(400).json({ message: `Only CLOSED advances can be reopened (current: ${st})` });
+    if (st !== "CLOSED")
+      return res.status(400).json({ message: `Only CLOSED advances can be reopened (current: ${st})` });
 
     const updated = await prisma.cash_advances.update({
       where: { id },
@@ -476,9 +480,9 @@ async function getAdvanceExpenses(req, res) {
       },
     });
 
-    res.json(list);
+    return res.json(list);
   } catch (e) {
-    res.status(500).json({ message: "Failed to fetch advance expenses", error: e?.message || String(e) });
+    return res.status(500).json({ message: "Failed to fetch advance expenses", error: e?.message || String(e) });
   }
 }
 
@@ -487,9 +491,6 @@ async function getAdvanceExpenses(req, res) {
 // =======================
 
 // POST /cash/cash-expenses
-// supports:
-// - ADVANCE: requires cash_advance_id (supervisor only)
-// - COMPANY: no cash_advance_id (admin/accountant only)
 async function createCashExpense(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -497,7 +498,6 @@ async function createCashExpense(req, res) {
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const {
-      // legacy + new
       expense_source,
       payment_source,
 
@@ -511,7 +511,6 @@ async function createCashExpense(req, res) {
       notes,
       receipt_url,
 
-      // ✅ company fields
       vendor_name,
       invoice_no,
       invoice_date,
@@ -526,14 +525,12 @@ async function createCashExpense(req, res) {
     if (!expense_type) return res.status(400).json({ message: "expense_type is required" });
     if (!amount || Number(amount) <= 0) return res.status(400).json({ message: "amount must be > 0" });
 
-    // ✅ Validate uuids
     if (trip_id && !isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
     if (vehicle_id && !isUuid(vehicle_id)) return res.status(400).json({ message: "Invalid vehicle_id" });
     if (maintenance_work_order_id && !isUuid(maintenance_work_order_id)) {
       return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
     }
 
-    // ✅ If linked to work order: ensure exists + derive vehicle if missing
     let mwoVehicleId = null;
     if (maintenance_work_order_id) {
       const mwo = await prisma.maintenance_work_orders.findUnique({
@@ -544,9 +541,7 @@ async function createCashExpense(req, res) {
       mwoVehicleId = mwo.vehicle_id || null;
     }
 
-    // ==========================
-    // Mode: COMPANY
-    // ==========================
+    // COMPANY
     if (src === "COMPANY") {
       if (!isAccountantOrAdmin(role)) {
         return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can create COMPANY expenses" });
@@ -563,7 +558,6 @@ async function createCashExpense(req, res) {
       const invDate = parseOptionalDate(invoice_date);
       if (invDate === undefined) return res.status(400).json({ message: "Invalid invoice_date" });
 
-      // ✅ If trip provided: respect trip finance lock
       if (trip_id) {
         const trip = await prisma.trips.findUnique({
           where: { id: trip_id },
@@ -609,9 +603,7 @@ async function createCashExpense(req, res) {
       return res.status(201).json(created);
     }
 
-    // ==========================
-    // Mode: ADVANCE (Supervisor)
-    // ==========================
+    // ADVANCE (Supervisor)
     if (!isUuid(cash_advance_id)) {
       return res.status(400).json({
         message: "cash_advance_id is required for ADVANCE expenses and must be uuid",
@@ -627,7 +619,6 @@ async function createCashExpense(req, res) {
       return res.status(403).json({ message: "Only the assigned field supervisor can add ADVANCE expenses" });
     }
 
-    // ✅ If trip_id: ensure not locked + supervisor owns trip
     if (trip_id) {
       const trip = await prisma.trips.findUnique({
         where: { id: trip_id },
@@ -653,7 +644,6 @@ async function createCashExpense(req, res) {
       }
     }
 
-    // ✅ If no trip_id but vehicle_id: must be in supervisor portfolio
     if (!trip_id && vehicle_id) {
       const okVehicle = await assertVehicleInSupervisorPortfolio({ vehicle_id, userId });
       if (!okVehicle) {
@@ -689,7 +679,7 @@ async function createCashExpense(req, res) {
   }
 }
 
-// GET /cash/cash-expenses?status=&payment_source=&q=&page=&page_size=
+// GET /cash/cash-expenses?...
 async function listCashExpenses(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -747,6 +737,7 @@ async function listCashExpenses(req, res) {
     return res.status(500).json({ message: "Failed to fetch expenses", error: e?.message || String(e) });
   }
 }
+
 // GET /cash/cash-advances/:id
 async function getCashAdvanceById(req, res) {
   try {
@@ -780,7 +771,8 @@ async function getCashAdvanceById(req, res) {
     return res.status(500).json({ message: "Failed to fetch cash advance", error: e?.message || String(e) });
   }
 }
-// GET /cash/cash-expenses/summary?status=&payment_source=&q=
+
+// GET /cash/cash-expenses/summary?...
 async function getCashExpensesSummary(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -912,9 +904,31 @@ async function getCashExpenseById(req, res) {
   }
 }
 
-// (Approve/Reject/Appeal/Resolve/Reopen/Audit/Reports/TripFinance) ---
-// ✅ خلي باقي الدوال عندك زي ما هي بدون تغيير
-// ✅ طالما كانت سليمة عندك، فقط تأكد مفيش أي JSON blocks متلزقة في النص
+// =======================
+// Fallback stubs (prevent server crash if routes call missing handlers)
+// Replace these with your real implementations if you already have them elsewhere.
+// =======================
+
+function notImplemented(name) {
+  return (req, res) => res.status(501).json({ message: `${name} is not implemented in cash.controller.js` });
+}
+
+const approveCashExpense = notImplemented("approveCashExpense");
+const rejectCashExpense = notImplemented("rejectCashExpense");
+const appealRejectedExpense = notImplemented("appealRejectedExpense");
+const resolveAppeal = notImplemented("resolveAppeal");
+const reopenRejectedExpense = notImplemented("reopenRejectedExpense");
+
+const getSupervisorDeficitReport = notImplemented("getSupervisorDeficitReport");
+const getExpenseAudit = notImplemented("getExpenseAudit");
+
+const openTripFinanceReview = notImplemented("openTripFinanceReview");
+const closeTripFinance = notImplemented("closeTripFinance");
+const getTripFinanceSummary = notImplemented("getTripFinanceSummary");
+
+// =======================
+// Exports
+// =======================
 
 module.exports = {
   // Cash Advances
@@ -935,4 +949,20 @@ module.exports = {
   listCashExpenses,
   getCashExpensesSummary,
   getCashExpenseById,
+
+  // Handlers referenced in routes (real or stubs)
+  approveCashExpense,
+  rejectCashExpense,
+  appealRejectedExpense,
+  resolveAppeal,
+  reopenRejectedExpense,
+
+  // Reports
+  getSupervisorDeficitReport,
+  getExpenseAudit,
+
+  // Trip Finance
+  openTripFinanceReview,
+  closeTripFinance,
+  getTripFinanceSummary,
 };

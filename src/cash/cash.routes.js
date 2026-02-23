@@ -3,10 +3,13 @@ const express = require("express");
 const router = express.Router();
 
 const cashController = require("./cash.controller");
-const authMiddleware = require("../middleware/authMiddleware");
+
+// ✅ Use the real middleware path in your project
+const authMiddleware = require("../auth/jwt.middleware");
 
 // UUID v4-ish (NO outer parentheses here)
-const UUID_RE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89ab][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
+const UUID_RE =
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89ab][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
 
 // =======================
 // Cash Advances
@@ -24,7 +27,11 @@ router.get(`/cash-advances/:id(${UUID_RE})`, authMiddleware, cashController.getC
 router.post("/cash-advances", authMiddleware, cashController.createCashAdvance);
 
 // Phase B
-router.post(`/cash-advances/:id(${UUID_RE})/submit-review`, authMiddleware, cashController.submitCashAdvanceForReview);
+router.post(
+  `/cash-advances/:id(${UUID_RE})/submit-review`,
+  authMiddleware,
+  cashController.submitCashAdvanceForReview
+);
 router.post(`/cash-advances/:id(${UUID_RE})/close`, authMiddleware, cashController.closeCashAdvance);
 router.post(`/cash-advances/:id(${UUID_RE})/reopen`, authMiddleware, cashController.reopenCashAdvance);
 
@@ -45,6 +52,7 @@ router.get(`/cash-expenses/:id(${UUID_RE})`, authMiddleware, cashController.getC
 
 router.post("/cash-expenses", authMiddleware, cashController.createCashExpense);
 
+// These handlers MUST exist in controller (we provide safe fallbacks in controller below)
 router.post(`/cash-expenses/:id(${UUID_RE})/approve`, authMiddleware, cashController.approveCashExpense);
 router.post(`/cash-expenses/:id(${UUID_RE})/reject`, authMiddleware, cashController.rejectCashExpense);
 router.post(`/cash-expenses/:id(${UUID_RE})/appeal`, authMiddleware, cashController.appealRejectedExpense);
