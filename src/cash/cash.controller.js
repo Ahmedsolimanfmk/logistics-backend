@@ -937,7 +937,6 @@ module.exports = {
   getCashAdvanceById,
   createCashAdvance,
 
-  // Phase B endpoints
   submitCashAdvanceForReview,
   closeCashAdvance,
   reopenCashAdvance,
@@ -950,18 +949,16 @@ module.exports = {
   getCashExpensesSummary,
   getCashExpenseById,
 
-  // Handlers referenced in routes (real or stubs)
+  // لازم تكون موجودة لو موجودة في routes (حتى stubs)
   approveCashExpense,
   rejectCashExpense,
   appealRejectedExpense,
   resolveAppeal,
   reopenRejectedExpense,
 
-  // Reports
   getSupervisorDeficitReport,
   getExpenseAudit,
 
-  // Trip Finance
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,
