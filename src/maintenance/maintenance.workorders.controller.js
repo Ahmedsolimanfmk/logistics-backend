@@ -390,7 +390,7 @@ async function getWorkOrderReport(req, res) {
             approval_status: true,
             approved_at: true,
             approved_by: true,
-            expense_source: true,
+            payment_source: true,
             payer: true,
             created_at: true,
             created_by: true,
