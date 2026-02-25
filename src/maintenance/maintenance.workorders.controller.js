@@ -379,24 +379,23 @@ async function getWorkOrderReport(req, res) {
 
         // ✅ IMPORTANT: bring all WO-linked expenses (company or supervisor)
         cash_expenses: {
-          where: { maintenance_work_order_id: workOrderId },
-          orderBy: { created_at: "desc" },
-          select: {
-            id: true,
-            amount: true,
-            expense_type: true,
-            notes: true,
-            receipt_url: true,
-            approval_status: true,
-            approved_at: true,
-            approved_by: true,
-            payment_source: true,
-            payer: true,
-            created_at: true,
-            created_by: true,
-            cash_advance_id: true,
-          },
-        },
+  where: { maintenance_work_order_id: workOrderId },
+  orderBy: { created_at: "desc" },
+  select: {
+    id: true,
+    amount: true,
+    expense_type: true,
+    notes: true,
+    receipt_url: true,
+    approval_status: true,
+    approved_at: true,
+    approved_by: true,
+    payment_source: true, // ✅ موجود في schema
+    created_at: true,
+    created_by: true,
+    cash_advance_id: true,
+  },
+},
       },
     });
 
@@ -419,17 +418,17 @@ async function getWorkOrderReport(req, res) {
     );
 
     // split (optional but useful)
-    const approved_company_total = round2(
-      approvedExpenses
-        .filter((e) => String(e.payer || "").toUpperCase() === "COMPANY_ACCOUNT")
-        .reduce((s, e) => s + toNum(e.amount), 0)
-    );
+  const approved_company_total = round2(
+  approvedExpenses
+    .filter((e) => String(e.payment_source || "").toUpperCase() === "COMPANY")
+    .reduce((s, e) => s + toNum(e.amount), 0)
+);
 
-    const approved_supervisor_total = round2(
-      approvedExpenses
-        .filter((e) => String(e.payer || "").toUpperCase() === "SUPERVISOR_CASH")
-        .reduce((s, e) => s + toNum(e.amount), 0)
-    );
+const approved_supervisor_total = round2(
+  approvedExpenses
+    .filter((e) => String(e.payment_source || "").toUpperCase() === "ADVANCE")
+    .reduce((s, e) => s + toNum(e.amount), 0)
+);
 
     totals.maintenance_cash_cost_total = maintenance_cash_cost_total;
     totals.maintenance_company_cost_total = approved_company_total;
