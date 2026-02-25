@@ -470,9 +470,15 @@ async function getWorkOrderReport(req, res) {
       report_runtime,
     });
   } catch (e) {
-    console.error("GET WORK ORDER REPORT ERROR:", e);
-    return res.status(500).json({ message: "Failed to get work order report" });
-  }
+  console.error("GET WORK ORDER REPORT ERROR:", e);
+
+  // ✅ مؤقت للتشخيص فقط
+  return res.status(500).json({
+    message: "Failed to get work order report",
+    error: e?.message || String(e),
+    stack: process.env.NODE_ENV === "production" ? undefined : e?.stack,
+  });
+}
 }
 
 // =======================
