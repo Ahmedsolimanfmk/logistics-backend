@@ -4,10 +4,35 @@
 
 const prisma = require("../maintenance/prisma");
 
+// -----------------------
+// Auth helpers
+// -----------------------
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
 }
 
+function roleUpper(role) {
+  return String(role || "").toUpperCase();
+}
+
+function getAuthRole(req) {
+  return roleUpper(req?.user?.role);
+}
+
+function isAccountantOrAdmin(req) {
+  const r = getAuthRole(req);
+  return r === "ADMIN" || r === "ACCOUNTANT";
+}
+
+// ✅ المخزن + الأدمن يقدر يعمل Submit
+function isStorekeeperOrAdmin(req) {
+  const r = getAuthRole(req);
+  return r === "STOREKEEPER" || r === "ADMIN";
+}
+
+// -----------------------
+// Validation helpers
+// -----------------------
 function isUuid(v) {
   return (
     typeof v === "string" &&
@@ -19,7 +44,6 @@ function toMoney(v) {
   if (v == null || v === "") return null;
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return null;
-  // keep 2 decimals
   return Math.round(n * 100) / 100;
 }
 
@@ -35,9 +59,12 @@ function dedupeCheck(list) {
   return null;
 }
 
+// -----------------------
+// Controllers
+// -----------------------
 async function listReceipts(req, res) {
   try {
-    const status = String(req.query.status || "").trim(); // DRAFT/POSTED/CANCELLED
+    const status = String(req.query.status || "").trim(); // DRAFT/SUBMITTED/POSTED/CANCELLED
     const warehouse_id = String(req.query.warehouse_id || "").trim();
 
     const where = {};
@@ -161,7 +188,6 @@ async function createReceipt(req, res) {
 
     res.status(201).json(created);
   } catch (err) {
-    // unique constraints from schema (serials etc)
     if (String(err?.code) === "P2002") {
       return res.status(409).json({ message: "Unique constraint failed (possibly invoice/serial duplication)" });
     }
@@ -170,8 +196,71 @@ async function createReceipt(req, res) {
   }
 }
 
+// ✅ المخزن يعمل Submit فقط (DRAFT -> SUBMITTED)
+async function submitReceipt(req, res) {
+  try {
+    // لو عايز تقفلها على المخزن/أدمن فقط:
+    if (!isStorekeeperOrAdmin(req)) {
+      return res.status(403).json({ message: "Only STOREKEEPER/ADMIN can submit receipts" });
+    }
+
+    const id = String(req.params.id || "").trim();
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
+
+    const userId = getAuthUserId(req);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const receipt = await tx.inventory_receipts.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+
+      if (!receipt) {
+        const e = new Error("Receipt not found");
+        e.statusCode = 404;
+        throw e;
+      }
+
+      if (receipt.status !== "DRAFT") {
+        const e = new Error("Only DRAFT receipts can be submitted");
+        e.statusCode = 400;
+        throw e;
+      }
+
+      if (!receipt.items || receipt.items.length === 0) {
+        const e = new Error("Receipt has no items");
+        e.statusCode = 400;
+        throw e;
+      }
+
+      // ✅ لو عندك submitted_at/submitted_by في schema سيبهم
+      // لو مش عندك احذفهم من هنا
+      return tx.inventory_receipts.update({
+        where: { id },
+        data: {
+          status: "SUBMITTED",
+          submitted_at: new Date(),
+          submitted_by: userId || null,
+        },
+      });
+    });
+
+    res.json({ message: "Receipt submitted", receipt: updated });
+  } catch (err) {
+    const sc = err?.statusCode || 500;
+    if (sc !== 500) return res.status(sc).json({ message: String(err.message || "Error") });
+    console.error("submitReceipt error:", err);
+    res.status(500).json({ message: "Failed to submit receipt" });
+  }
+}
+
+// ✅ المحاسب/الأدمن فقط يعمل POST (SUBMITTED -> POSTED + part_items + cash_expense)
 async function postReceipt(req, res) {
   try {
+    if (!isAccountantOrAdmin(req)) {
+      return res.status(403).json({ message: "Only ACCOUNTANT/ADMIN can post receipts" });
+    }
+
     const userId = getAuthUserId(req);
 
     const id = String(req.params.id || "").trim();
@@ -188,11 +277,13 @@ async function postReceipt(req, res) {
         e.statusCode = 404;
         throw e;
       }
-      if (receipt.status !== "DRAFT") {
-        const e = new Error("Only DRAFT receipts can be posted");
+
+      if (receipt.status !== "SUBMITTED") {
+        const e = new Error("Only SUBMITTED receipts can be posted");
         e.statusCode = 400;
         throw e;
       }
+
       if (!receipt.items || receipt.items.length === 0) {
         const e = new Error("Receipt has no items");
         e.statusCode = 400;
@@ -214,9 +305,7 @@ async function postReceipt(req, res) {
       });
 
       if (existing) {
-        const e = new Error(
-          `Serial already exists: ${existing.internal_serial || existing.manufacturer_serial}`
-        );
+        const e = new Error(`Serial already exists: ${existing.internal_serial || existing.manufacturer_serial}`);
         e.statusCode = 409;
         throw e;
       }
@@ -251,7 +340,7 @@ async function postReceipt(req, res) {
         },
       });
 
-      // create cash expense automatically (COMPANY)
+      // create cash expense automatically (COMPANY) => Pending (المحاسب يعتمدها من صفحة المصروفات)
       const cashExpense = await tx.cash_expenses.create({
         data: {
           payment_source: "COMPANY",
@@ -291,5 +380,6 @@ module.exports = {
   listReceipts,
   getReceipt,
   createReceipt,
+  submitReceipt,
   postReceipt,
 };

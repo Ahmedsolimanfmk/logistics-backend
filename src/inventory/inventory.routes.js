@@ -31,7 +31,8 @@ router.get("/part-items", partItemsCtrl.listPartItems);
 // ---------- Receipts (Purchases) ----------
 router.get("/receipts", receiptsCtrl.listReceipts);
 router.get("/receipts/:id", receiptsCtrl.getReceipt);
-router.post("/receipts", receiptsCtrl.createReceipt);            // DRAFT
+router.post("/receipts", receiptsCtrl.createReceipt);
+router.post("/receipts/:id/submit", receiptsCtrl.submitReceipt); // SUBMITTED فقط            // DRAFT
 router.post("/receipts/:id/post", receiptsCtrl.postReceipt);     // POSTED + part_items + cash_expense
 
 // ---------- Requests (maintenance -> store) ----------
