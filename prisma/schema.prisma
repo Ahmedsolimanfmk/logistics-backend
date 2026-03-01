@@ -81,8 +81,6 @@ model users {
   vehicle_portfolio   vehicle_portfolio[]
   supervised_vehicles vehicles[]
 
-  // Inventory (optional; useful later)
-
   inventory_requests_created      inventory_requests[] @relation("inventory_requests_created_by")
   inventory_issues_issued         inventory_issues[]   @relation("inventory_issues_issued_by")
   inventory_receipts_created_by   inventory_receipts[] @relation("inventory_receipts_created_by")
@@ -119,7 +117,6 @@ model vehicles {
   vehicle_portfolio        vehicle_portfolio[]
   work_order_installations work_order_installations[]
 
-  // ✅ Opposite for part_items.installed_vehicle_id
   installed_part_items part_items[] @relation("part_items_installed_vehicle")
 
   @@index([supervisor_id], map: "idx_vehicles_supervisor_id")
@@ -308,7 +305,6 @@ model cash_expenses {
 
   maintenance_work_order_id String? @db.Uuid
 
-  // ✅ link purchases receipt -> cash expense
   inventory_receipt_id String? @db.Uuid
 
   cash_expense_audits cash_expense_audits[]
@@ -380,7 +376,6 @@ model maintenance_work_orders {
   inventory_issues              inventory_issues[]
   maintenance_work_order_events maintenance_work_order_events[]
 
-  // ✅ Opposite for inventory_requests.work_order_id
   inventory_requests inventory_requests[] @relation("inventory_requests_work_order")
 
   vehicles                 vehicles                   @relation(fields: [vehicle_id], references: [id])
@@ -423,6 +418,7 @@ model warehouses {
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
   part_items         part_items[]
+  warehouse_parts    warehouse_parts[] // ✅ NEW (bulk stock)
   inventory_receipts inventory_receipts[]
   inventory_requests inventory_requests[]
   inventory_issues   inventory_issues[]
@@ -433,7 +429,6 @@ model warehouses {
 
 // =======================
 // PARTS (catalog)
-// part_number = internal_code
 // =======================
 model parts {
   id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
@@ -447,23 +442,22 @@ model parts {
   created_at  DateTime @default(now()) @db.Timestamptz(6)
   updated_at  DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
-  // serial units
   part_items part_items[]
 
-  // ✅ Opposite relations required by Prisma
-  inventory_receipt_items inventory_receipt_items[]
-  inventory_request_lines inventory_request_lines[]
+  inventory_receipt_items      inventory_receipt_items[]
+  inventory_receipt_bulk_lines inventory_receipt_bulk_lines[] // ✅ NEW
+  inventory_request_lines      inventory_request_lines[]
 
-  // existing relations
   inventory_issue_lines    inventory_issue_lines[]
   work_order_installations work_order_installations[]
+  warehouseParts           warehouse_parts[]
 
   @@index([name], map: "idx_parts_name")
   @@map("parts")
 }
 
 // =======================
-// PART ITEMS (each physical unit has unique serials)
+// PART ITEMS (serial)
 // =======================
 model part_items {
   id           String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
@@ -500,7 +494,29 @@ model part_items {
 }
 
 // =======================
-// PURCHASE RECEIPTS (Goods Receipt)
+// BULK STOCK (per warehouse + part)
+// =======================
+model warehouse_parts {
+  id           String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  warehouse_id String @db.Uuid
+  part_id      String @db.Uuid
+
+  qty_on_hand Int @default(0)
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  warehouses warehouses @relation(fields: [warehouse_id], references: [id], onDelete: Cascade)
+  parts      parts      @relation(fields: [part_id], references: [id], onDelete: Cascade)
+
+  @@unique([warehouse_id, part_id], map: "uq_warehouse_parts_warehouse_part")
+  @@index([warehouse_id], map: "idx_warehouse_parts_warehouse_id")
+  @@index([part_id], map: "idx_warehouse_parts_part_id")
+  @@map("warehouse_parts")
+}
+
+// =======================
+// PURCHASE RECEIPTS
 // =======================
 model inventory_receipts {
   id           String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
@@ -526,6 +542,7 @@ model inventory_receipts {
   users_submitted users?     @relation("inventory_receipts_submitted_by", fields: [submitted_by], references: [id], onDelete: SetNull)
 
   items         inventory_receipt_items[]
+  bulk_lines    inventory_receipt_bulk_lines[] // ✅ NEW
   part_items    part_items[]
   cash_expenses cash_expenses[]
 
@@ -558,7 +575,30 @@ model inventory_receipt_items {
 }
 
 // =======================
-// REQUESTS (from maintenance)
+// RECEIPT BULK LINES
+// =======================
+model inventory_receipt_bulk_lines {
+  id         String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  receipt_id String @db.Uuid
+  part_id    String @db.Uuid
+
+  qty        Int
+  unit_cost  Decimal? @db.Decimal(12, 2)
+  total_cost Decimal? @db.Decimal(12, 2)
+  notes      String?
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  inventory_receipts inventory_receipts @relation(fields: [receipt_id], references: [id], onDelete: Cascade)
+  parts              parts              @relation(fields: [part_id], references: [id], onDelete: NoAction)
+
+  @@index([receipt_id], map: "idx_receipt_bulk_lines_receipt_id")
+  @@index([part_id], map: "idx_receipt_bulk_lines_part_id")
+  @@map("inventory_receipt_bulk_lines")
+}
+
+// =======================
+// REQUESTS
 // =======================
 model inventory_requests {
   id            String  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
@@ -574,7 +614,6 @@ model inventory_requests {
 
   warehouses warehouses? @relation(fields: [warehouse_id], references: [id], onDelete: SetNull)
 
-  // ✅ Named relation + opposite exists in maintenance_work_orders
   work_orders maintenance_work_orders? @relation("inventory_requests_work_order", fields: [work_order_id], references: [id], onDelete: SetNull)
 
   users_created users? @relation("inventory_requests_created_by", fields: [requested_by], references: [id], onDelete: SetNull)
@@ -594,7 +633,6 @@ model inventory_issue_lines {
   issue_id String @db.Uuid
   part_id  String @db.Uuid
 
-  // حل (1) مرن
   part_item_id String? @db.Uuid
 
   qty        Int      @default(1)
@@ -628,10 +666,6 @@ model inventory_request_lines {
   @@map("inventory_request_lines")
 }
 
-// =======================
-// REQUEST RESERVATIONS (Enterprise)
-// Link each reserved serial (part_item) to a specific request
-// =======================
 model inventory_request_reservations {
   id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   request_id   String   @db.Uuid
@@ -648,12 +682,11 @@ model inventory_request_reservations {
 }
 
 // =======================
-// ISSUES (Storekeeper)
+// ISSUES
 // =======================
 model inventory_issues {
   id String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
 
-  // ✅ TEMP (حل 1): nullable to allow migration when table has existing rows
   warehouse_id String? @db.Uuid
 
   work_order_id String  @db.Uuid
@@ -671,7 +704,6 @@ model inventory_issues {
   inventory_issue_lines   inventory_issue_lines[]
   maintenance_work_orders maintenance_work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade)
 
-  // ✅ must be optional because warehouse_id is optional
   warehouses   warehouses?         @relation(fields: [warehouse_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   requests     inventory_requests? @relation(fields: [request_id], references: [id], onDelete: SetNull)
   users_issued users?              @relation("inventory_issues_issued_by", fields: [issued_by], references: [id], onDelete: SetNull)
@@ -781,9 +813,6 @@ model maintenance_request_attachments {
   @@index([request_id])
 }
 
-// =======================
-// DRIVERS
-// =======================
 model drivers {
   id         String  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   full_name  String

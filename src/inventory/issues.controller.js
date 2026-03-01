@@ -4,7 +4,7 @@
 
 const prisma = require("../maintenance/prisma");
 const { ROLES } = require("../auth/roles");
- // عدّل المسار لو مختلف عندك
+// عدّل المسار لو مختلف عندك
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
@@ -118,19 +118,31 @@ async function createIssueDraft(req, res) {
       }
     }
 
+    // ✅ UPDATED: allow both Serial and Bulk lines
+    // Serial: part_item_id required + qty must be 1
+    // Bulk: no part_item_id + qty > 0
     for (const [i, ln] of lines.entries()) {
       const part_id = String(ln?.part_id || "").trim();
       const part_item_id = String(ln?.part_item_id || "").trim();
       const qty = ln?.qty == null ? 1 : Number(ln.qty);
 
       if (!isUuid(part_id)) return res.status(400).json({ message: `lines[${i}].part_id invalid` });
-      if (!isUuid(part_item_id)) {
-        return res
-          .status(400)
-          .json({ message: `lines[${i}].part_item_id invalid (serial required)` });
-      }
-      if (!Number.isFinite(qty) || qty !== 1) {
-        return res.status(400).json({ message: `lines[${i}].qty must be 1 for serial items` });
+
+      const hasSerial = !!part_item_id;
+
+      if (hasSerial) {
+        // ===== OLD LOGIC preserved for serial =====
+        if (!isUuid(part_item_id)) {
+          return res.status(400).json({ message: `lines[${i}].part_item_id invalid (serial required)` });
+        }
+        if (!Number.isFinite(qty) || qty !== 1) {
+          return res.status(400).json({ message: `lines[${i}].qty must be 1 for serial items` });
+        }
+      } else {
+        // ===== NEW LOGIC for bulk =====
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return res.status(400).json({ message: `lines[${i}].qty must be > 0 for bulk items` });
+        }
       }
     }
 
@@ -152,82 +164,102 @@ async function createIssueDraft(req, res) {
         return res.status(400).json({ message: "work_order_id must match request work_order_id" });
       }
 
-      // Ensure each part_item is RESERVED in that warehouse and matches part_id
-      const partItemIds = lines.map((ln) => String(ln.part_item_id).trim());
-      const partItems = await prisma.part_items.findMany({
-        where: { id: { in: partItemIds } },
-        select: { id: true, status: true, warehouse_id: true, part_id: true },
-      });
+      // ✅ Serial-only validations remain; apply ONLY to serial lines
+      const serialPartItemIds = lines
+        .map((ln) => String(ln?.part_item_id || "").trim())
+        .filter(Boolean);
 
-      const map = new Map(partItems.map((p) => [p.id, p]));
-      for (const [i, ln] of lines.entries()) {
-        const part_id = String(ln.part_id).trim();
-        const part_item_id = String(ln.part_item_id).trim();
-        const pi = map.get(part_item_id);
-
-        if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
-        if (String(pi.warehouse_id) !== warehouse_id) {
-          return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
-        }
-        if (String(pi.part_id) !== part_id) {
-          return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
-        }
-        if (pi.status !== "RESERVED") {
-          return res.status(409).json({
-            message: `lines[${i}].part_item_id must be RESERVED (current=${pi.status})`,
-          });
-        }
-      }
-
-      // Optional: verify reservations table if exists
-      try {
-        const reservations = await prisma.inventory_request_reservations.findMany({
-          where: { request_id, part_item_id: { in: partItemIds } },
-          select: { part_item_id: true },
+      if (serialPartItemIds.length) {
+        const partItems = await prisma.part_items.findMany({
+          where: { id: { in: serialPartItemIds } },
+          select: { id: true, status: true, warehouse_id: true, part_id: true },
         });
 
-        const set = new Set(reservations.map((r) => r.part_item_id));
-        for (const pid of partItemIds) {
-          if (!set.has(pid)) {
+        const map = new Map(partItems.map((p) => [p.id, p]));
+
+        for (const [i, ln] of lines.entries()) {
+          const part_item_id = String(ln?.part_item_id || "").trim();
+          if (!part_item_id) continue; // bulk => skip
+
+          const part_id = String(ln.part_id).trim();
+          const pi = map.get(part_item_id);
+
+          if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+          if (String(pi.warehouse_id) !== warehouse_id) {
+            return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+          }
+          if (String(pi.part_id) !== part_id) {
+            return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+          }
+          if (pi.status !== "RESERVED") {
             return res.status(409).json({
-              message: `part_item_id is not reserved for this request: ${pid}`,
+              message: `lines[${i}].part_item_id must be RESERVED (current=${pi.status})`,
             });
           }
         }
-      } catch (e) {
-        // if model not present, ignore (system will still work using part_items.status RESERVED)
-        if (!isPrismaModelMissing(e)) {
-          console.error("reservations check error:", e);
-          return res.status(500).json({ message: "Failed to validate reservations" });
+
+        // Optional: verify reservations table if exists (serial only)
+        try {
+          const reservations = await prisma.inventory_request_reservations.findMany({
+            where: { request_id, part_item_id: { in: serialPartItemIds } },
+            select: { part_item_id: true },
+          });
+
+          const set = new Set(reservations.map((r) => r.part_item_id));
+          for (const pid of serialPartItemIds) {
+            if (!set.has(pid)) {
+              return res.status(409).json({
+                message: `part_item_id is not reserved for this request: ${pid}`,
+              });
+            }
+          }
+        } catch (e) {
+          // if model not present, ignore (system will still work using part_items.status RESERVED)
+          if (!isPrismaModelMissing(e)) {
+            console.error("reservations check error:", e);
+            return res.status(500).json({ message: "Failed to validate reservations" });
+          }
         }
       }
+
+      // ✅ bulk request-based lines will be validated at posting time against warehouse_parts
     } else {
       // Direct: ensure IN_STOCK now (early feedback)
-      const partItemIds = lines.map((ln) => String(ln.part_item_id).trim());
-      const partItems = await prisma.part_items.findMany({
-        where: { id: { in: partItemIds } },
-        select: { id: true, status: true, warehouse_id: true, part_id: true },
-      });
+      // ✅ Serial-only checks remain; apply ONLY to serial lines
+      const serialPartItemIds = lines
+        .map((ln) => String(ln?.part_item_id || "").trim())
+        .filter(Boolean);
 
-      const map = new Map(partItems.map((p) => [p.id, p]));
-      for (const [i, ln] of lines.entries()) {
-        const part_id = String(ln.part_id).trim();
-        const part_item_id = String(ln.part_item_id).trim();
-        const pi = map.get(part_item_id);
+      if (serialPartItemIds.length) {
+        const partItems = await prisma.part_items.findMany({
+          where: { id: { in: serialPartItemIds } },
+          select: { id: true, status: true, warehouse_id: true, part_id: true },
+        });
 
-        if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
-        if (String(pi.warehouse_id) !== warehouse_id) {
-          return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
-        }
-        if (String(pi.part_id) !== part_id) {
-          return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
-        }
-        if (pi.status !== "IN_STOCK") {
-          return res.status(409).json({
-            message: `lines[${i}].part_item_id must be IN_STOCK for direct issue (current=${pi.status})`,
-          });
+        const map = new Map(partItems.map((p) => [p.id, p]));
+        for (const [i, ln] of lines.entries()) {
+          const part_item_id = String(ln?.part_item_id || "").trim();
+          if (!part_item_id) continue; // bulk => skip
+
+          const part_id = String(ln.part_id).trim();
+          const pi = map.get(part_item_id);
+
+          if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+          if (String(pi.warehouse_id) !== warehouse_id) {
+            return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+          }
+          if (String(pi.part_id) !== part_id) {
+            return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+          }
+          if (pi.status !== "IN_STOCK") {
+            return res.status(409).json({
+              message: `lines[${i}].part_item_id must be IN_STOCK for direct issue (current=${pi.status})`,
+            });
+          }
         }
       }
+
+      // ✅ bulk direct lines will be validated at posting time against warehouse_parts
     }
 
     const created = await prisma.inventory_issues.create({
@@ -239,14 +271,40 @@ async function createIssueDraft(req, res) {
         status: "DRAFT",
         notes,
         inventory_issue_lines: {
-          create: lines.map((ln) => ({
-            part_id: String(ln.part_id).trim(),
-            part_item_id: String(ln.part_item_id).trim(),
-            qty: 1,
-            unit_cost: ln?.unit_cost == null || ln?.unit_cost === "" ? null : ln.unit_cost,
-            total_cost: ln?.unit_cost == null || ln?.unit_cost === "" ? null : ln.unit_cost,
-            notes: ln?.notes != null ? String(ln.notes).trim() : null,
-          })),
+          create: lines.map((ln) => {
+            const part_id = String(ln.part_id).trim();
+            const part_item_id = String(ln?.part_item_id || "").trim();
+            const qty = ln?.qty == null ? 1 : Number(ln.qty);
+
+            const unit_cost =
+              ln?.unit_cost == null || ln?.unit_cost === "" ? null : Number(ln.unit_cost);
+
+            const hasSerial = !!part_item_id;
+
+            // Serial: preserve old behavior
+            if (hasSerial) {
+              return {
+                part_id,
+                part_item_id,
+                qty: 1,
+                unit_cost: unit_cost,
+                total_cost: unit_cost,
+                notes: ln?.notes != null ? String(ln.notes).trim() : null,
+              };
+            }
+
+            // Bulk
+            const total_cost = unit_cost == null ? null : unit_cost * qty;
+
+            return {
+              part_id,
+              part_item_id: null,
+              qty: qty,
+              unit_cost: unit_cost,
+              total_cost: total_cost,
+              notes: ln?.notes != null ? String(ln.notes).trim() : null,
+            };
+          }),
         },
       },
       include: { inventory_issue_lines: true },
@@ -340,16 +398,40 @@ async function postIssue(req, res) {
         }
       }
 
-      const partItemIds = issue.inventory_issue_lines.map((l) => l.part_item_id).filter(Boolean);
+      // ✅ split serial vs bulk
+      const serialLines = issue.inventory_issue_lines.filter((l) => String(l.part_item_id || "").trim());
+      const bulkLines = issue.inventory_issue_lines.filter((l) => !String(l.part_item_id || "").trim());
 
-      if (partItemIds.length !== issue.inventory_issue_lines.length) {
-        const e = new Error("All lines must include part_item_id (serial)");
-        e.statusCode = 400;
-        throw e;
+      // ===== OLD CHECK (kept): "All lines must include part_item_id (serial)" =====
+      // Preserve the old strict behavior ONLY when there are no bulk lines.
+      const partItemIds = serialLines.map((l) => l.part_item_id).filter(Boolean);
+
+      if (!bulkLines.length) {
+        if (partItemIds.length !== issue.inventory_issue_lines.length) {
+          const e = new Error("All lines must include part_item_id (serial)");
+          e.statusCode = 400;
+          throw e;
+        }
+      } else {
+        // With bulk lines, still enforce: serial lines must include part_item_id
+        if (partItemIds.length !== serialLines.length) {
+          const e = new Error("All serial lines must include part_item_id (serial)");
+          e.statusCode = 400;
+          throw e;
+        }
+        // Validate bulk qty > 0
+        for (const l of bulkLines) {
+          const q = Number(l.qty);
+          if (!Number.isFinite(q) || q <= 0) {
+            const e = new Error(`Bulk line qty must be > 0 (part_id=${l.part_id})`);
+            e.statusCode = 400;
+            throw e;
+          }
+        }
       }
 
-      // If request-based: verify reservations table if exists (optional)
-      if (isRequestBased) {
+      // If request-based: verify reservations table if exists (optional) — serial only
+      if (isRequestBased && partItemIds.length) {
         try {
           const reservations = await tx.inventory_request_reservations.findMany({
             where: { request_id: issue.request_id, part_item_id: { in: partItemIds } },
@@ -374,58 +456,99 @@ async function postIssue(req, res) {
         }
       }
 
-      const partItems = await tx.part_items.findMany({
-        where: { id: { in: partItemIds } },
-        select: { id: true, status: true, warehouse_id: true },
-      });
+      // ===== OLD serial part_items validation & status logic (kept): now applied to serial only =====
+      if (partItemIds.length) {
+        const partItems = await tx.part_items.findMany({
+          where: { id: { in: partItemIds } },
+          select: { id: true, status: true, warehouse_id: true },
+        });
 
-      const map = new Map(partItems.map((p) => [p.id, p]));
+        const map = new Map(partItems.map((p) => [p.id, p]));
 
-      for (const line of issue.inventory_issue_lines) {
-        const pi = map.get(line.part_item_id);
+        for (const line of serialLines) {
+          const pi = map.get(line.part_item_id);
 
-        if (!pi) {
-          const e = new Error(`part_item not found: ${line.part_item_id}`);
-          e.statusCode = 400;
-          throw e;
+          if (!pi) {
+            const e = new Error(`part_item not found: ${line.part_item_id}`);
+            e.statusCode = 400;
+            throw e;
+          }
+
+          if (String(pi.warehouse_id) !== String(issue.warehouse_id)) {
+            const e = new Error(`part_item not in this warehouse: ${line.part_item_id}`);
+            e.statusCode = 400;
+            throw e;
+          }
+
+          if (isRequestBased) {
+            // request-based => must be RESERVED
+            if (pi.status !== "RESERVED") {
+              const e = new Error(`part_item must be RESERVED (status=${pi.status}): ${line.part_item_id}`);
+              e.statusCode = 409;
+              throw e;
+            }
+          } else {
+            // direct => must be IN_STOCK
+            if (pi.status !== "IN_STOCK") {
+              const e = new Error(`part_item must be IN_STOCK (status=${pi.status}): ${line.part_item_id}`);
+              e.statusCode = 409;
+              throw e;
+            }
+          }
         }
 
-        if (String(pi.warehouse_id) !== String(issue.warehouse_id)) {
-          const e = new Error(`part_item not in this warehouse: ${line.part_item_id}`);
-          e.statusCode = 400;
-          throw e;
+        // mark part_items as ISSUED (serial only) — unchanged
+        await tx.part_items.updateMany({
+          where: { id: { in: partItemIds } },
+          data: { status: "ISSUED", last_moved_at: new Date() },
+        });
+      }
+
+      // ✅ NEW: bulk stock decrement using warehouse_parts (safe & prevents negative)
+      if (bulkLines.length) {
+        // Aggregate per part_id for fewer queries (optional but better)
+        const agg = new Map();
+        for (const l of bulkLines) {
+          const pid = String(l.part_id);
+          const q = Number(l.qty);
+          agg.set(pid, (agg.get(pid) || 0) + q);
         }
 
-        if (isRequestBased) {
-          // request-based => must be RESERVED
-          if (pi.status !== "RESERVED") {
-            const e = new Error(`part_item must be RESERVED (status=${pi.status}): ${line.part_item_id}`);
+        for (const [part_id, qty] of agg.entries()) {
+          // ensure row exists and has enough qty_on_hand
+          const row = await tx.warehouse_parts.findUnique({
+            where: {
+              uq_warehouse_parts_warehouse_part: {
+                warehouse_id: String(issue.warehouse_id),
+                part_id: String(part_id),
+              },
+            },
+            select: { id: true, qty_on_hand: true },
+          });
+
+          const onHand = Number(row?.qty_on_hand || 0);
+          if (!row || onHand < qty) {
+            const e = new Error(
+              `Insufficient bulk stock for part_id=${part_id} (on_hand=${onHand}, required=${qty})`
+            );
             e.statusCode = 409;
             throw e;
           }
-        } else {
-          // direct => must be IN_STOCK
-          if (pi.status !== "IN_STOCK") {
-            const e = new Error(`part_item must be IN_STOCK (status=${pi.status}): ${line.part_item_id}`);
-            e.statusCode = 409;
-            throw e;
-          }
+
+          await tx.warehouse_parts.update({
+            where: { id: row.id },
+            data: { qty_on_hand: { decrement: qty } },
+          });
         }
       }
 
-      // mark part_items as ISSUED
-      await tx.part_items.updateMany({
-        where: { id: { in: partItemIds } },
-        data: { status: "ISSUED", last_moved_at: new Date() },
-      });
-
-      // post issue
+      // post issue (unchanged)
       const posted = await tx.inventory_issues.update({
         where: { id: issue.id },
         data: { status: "POSTED", posted_at: new Date() },
       });
 
-      // if linked to request: set request to ISSUED and clear reservations if table exists
+      // if linked to request: set request to ISSUED and clear reservations if table exists (unchanged)
       if (issue.request_id) {
         await tx.inventory_requests.update({
           where: { id: issue.request_id },

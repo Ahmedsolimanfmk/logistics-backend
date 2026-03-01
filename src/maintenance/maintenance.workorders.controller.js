@@ -74,6 +74,16 @@ function buildRuntimeReport(woFull, opts = {}) {
         unit_cost: round2(toNum(line.unit_cost)),
         total_cost: round2(totalCost),
         notes: line.notes || null,
+         part_item_id: line.part_item_id || null,
+         
+        part_item: line.part_items
+    ? {
+        id: line.part_items.id,
+        internal_serial: line.part_items.internal_serial,
+        manufacturer_serial: line.part_items.manufacturer_serial,
+        status: line.part_items.status,
+      }
+    : null,
       });
 
       const prev = issuedByPart.get(partId) || { part, qty: 0, cost: 0 };
@@ -360,16 +370,25 @@ async function getWorkOrderReport(req, res) {
           },
         },
         inventory_issues: {
-          include: {
-            inventory_issue_lines: {
-              include: {
-                parts: {
-                  select: { id: true, name: true, part_number: true, brand: true, unit: true },
-                },
-              },
-            },
+  include: {
+    inventory_issue_lines: {
+      include: {
+        parts: {
+          select: { id: true, name: true, part_number: true, brand: true, unit: true },
+        },
+        // ✅ NEW: bring serial info (if line has part_item_id)
+        part_items: {
+          select: {
+            id: true,
+            internal_serial: true,
+            manufacturer_serial: true,
+            status: true,
           },
         },
+      },
+    },
+  },
+},
         work_order_installations: {
           include: {
             parts: { select: { id: true, name: true, part_number: true, brand: true, unit: true } },
