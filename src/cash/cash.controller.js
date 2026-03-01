@@ -1,6 +1,7 @@
 // =======================
 // src/cash/cash.controller.js
 // FINAL: COMPANY + ADVANCE (enum payment_source) + backward compatibility
+// + ✅ Implemented: approve/reject/appeal/resolve/reopen + audits + trip finance helpers
 // =======================
 
 const prisma = require("../prisma");
@@ -95,6 +96,28 @@ async function getExpenseOr404(id, res) {
   return expense;
 }
 
+async function getExpenseFullOr404(id, res) {
+  const expense = await prisma.cash_expenses.findUnique({
+    where: { id },
+    include: {
+      cash_advances: true,
+      trips: true,
+      vehicles: true,
+      maintenance_work_orders: true,
+      users_cash_expenses_created_byTousers: true,
+      users_cash_expenses_approved_byTousers: true,
+      users_cash_expenses_rejected_byTousers: true,
+      users_cash_expenses_resolved_byTousers: true,
+    },
+  });
+
+  if (!expense) {
+    res.status(404).json({ message: "Cash expense not found" });
+    return null;
+  }
+  return expense;
+}
+
 // Backward compatibility:
 // - accepts payment_source: ADVANCE/COMPANY
 // - accepts expense_source: CASH/COMPANY
@@ -110,6 +133,10 @@ function parseOptionalDate(v) {
   const d = new Date(String(v));
   if (Number.isNaN(d.getTime())) return undefined; // invalid marker
   return d;
+}
+
+function safeUpper(v) {
+  return String(v || "").toUpperCase();
 }
 
 // =======================
@@ -905,26 +932,555 @@ async function getCashExpenseById(req, res) {
 }
 
 // =======================
-// Fallback stubs (prevent server crash if routes call missing handlers)
-// Replace these with your real implementations if you already have them elsewhere.
+// Expense Actions (✅ Implemented)
 // =======================
 
-function notImplemented(name) {
-  return (req, res) => res.status(501).json({ message: `${name} is not implemented in cash.controller.js` });
+// POST /cash/cash-expenses/:id/approve
+async function approveCashExpense(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can approve expenses" });
+
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
+
+    const notes = req.body?.notes ? String(req.body.notes) : null;
+
+    const expense = await getExpenseOr404(id, res);
+    if (!expense) return;
+
+    const st = safeUpper(expense.approval_status);
+    if (!["PENDING", "APPEALED"].includes(st)) {
+      return res.status(400).json({ message: `Expense must be PENDING or APPEALED to approve (current: ${st})` });
+    }
+
+    const nextStatus = st === "APPEALED" ? "REAPPROVED" : "APPROVED";
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const before = expense;
+
+      const after = await tx.cash_expenses.update({
+        where: { id },
+        data: {
+          approval_status: nextStatus,
+          approved_at: new Date(),
+          approved_by: actorId,
+
+          // when approving, clear reject fields if any
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+
+          // resolve fields
+          resolved_at: new Date(),
+          resolved_by: actorId,
+        },
+      });
+
+      await writeExpenseAuditSafe(tx, {
+        expense_id: id,
+        action: nextStatus === "REAPPROVED" ? "REAPPROVE" : "APPROVE",
+        actor_id: actorId,
+        before,
+        after,
+        notes,
+      });
+
+      return after;
+    });
+
+    return res.json({ message: "Expense approved", expense: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to approve expense", error: e?.message || String(e) });
+  }
 }
 
-const approveCashExpense = notImplemented("approveCashExpense");
-const rejectCashExpense = notImplemented("rejectCashExpense");
-const appealRejectedExpense = notImplemented("appealRejectedExpense");
-const resolveAppeal = notImplemented("resolveAppeal");
-const reopenRejectedExpense = notImplemented("reopenRejectedExpense");
+// POST /cash/cash-expenses/:id/reject
+async function rejectCashExpense(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reject expenses" });
 
-const getSupervisorDeficitReport = notImplemented("getSupervisorDeficitReport");
-const getExpenseAudit = notImplemented("getExpenseAudit");
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-const openTripFinanceReview = notImplemented("openTripFinanceReview");
-const closeTripFinance = notImplemented("closeTripFinance");
-const getTripFinanceSummary = notImplemented("getTripFinanceSummary");
+    const reason = req.body?.reason ? String(req.body.reason) : (req.body?.notes ? String(req.body.notes) : null);
+
+    const expense = await getExpenseOr404(id, res);
+    if (!expense) return;
+
+    const st = safeUpper(expense.approval_status);
+    if (!["PENDING", "APPEALED"].includes(st)) {
+      return res.status(400).json({ message: `Expense must be PENDING or APPEALED to reject (current: ${st})` });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const before = expense;
+
+      const after = await tx.cash_expenses.update({
+        where: { id },
+        data: {
+          approval_status: "REJECTED",
+          rejected_at: new Date(),
+          rejected_by: actorId,
+          rejection_reason: reason,
+
+          // resolve fields
+          resolved_at: new Date(),
+          resolved_by: actorId,
+        },
+      });
+
+      await writeExpenseAuditSafe(tx, {
+        expense_id: id,
+        action: "REJECT",
+        actor_id: actorId,
+        before,
+        after,
+        notes: reason,
+      });
+
+      return after;
+    });
+
+    return res.json({ message: "Expense rejected", expense: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to reject expense", error: e?.message || String(e) });
+  }
+}
+
+// POST /cash/cash-expenses/:id/appeal
+async function appealRejectedExpense(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
+
+    const appeal_reason = req.body?.reason ? String(req.body.reason) : (req.body?.notes ? String(req.body.notes) : null);
+
+    const expense = await getExpenseFullOr404(id, res);
+    if (!expense) return;
+
+    const st = safeUpper(expense.approval_status);
+    if (st !== "REJECTED") {
+      return res.status(400).json({ message: `Only REJECTED expenses can be appealed (current: ${st})` });
+    }
+
+    const isPrivileged = isAccountantOrAdmin(role);
+    const isOwner = expense.created_by === actorId;
+    const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
+
+    // Allow owner/supervisor to appeal (and admin/accountant too)
+    if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const before = expense;
+
+      const after = await tx.cash_expenses.update({
+        where: { id },
+        data: {
+          approval_status: "APPEALED",
+          appealed_at: new Date(),
+          appealed_by: actorId,
+          appeal_reason: appeal_reason,
+
+          // clear resolve stamps (new review cycle)
+          resolved_at: null,
+          resolved_by: null,
+        },
+      });
+
+      await writeExpenseAuditSafe(tx, {
+        expense_id: id,
+        action: "APPEAL",
+        actor_id: actorId,
+        before,
+        after,
+        notes: appeal_reason,
+      });
+
+      return after;
+    });
+
+    return res.json({ message: "Appeal submitted", expense: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to appeal rejected expense", error: e?.message || String(e) });
+  }
+}
+
+// POST /cash/cash-expenses/:id/resolve-appeal  body: { decision: "APPROVE"|"REJECT", notes? }
+async function resolveAppeal(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can resolve appeals" });
+
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
+
+    const decision = safeUpper(req.body?.decision);
+    const notes = req.body?.notes ? String(req.body.notes) : null;
+
+    if (!["APPROVE", "REJECT"].includes(decision)) {
+      return res.status(400).json({ message: "decision must be APPROVE | REJECT" });
+    }
+
+    const expense = await getExpenseOr404(id, res);
+    if (!expense) return;
+
+    const st = safeUpper(expense.approval_status);
+    if (st !== "APPEALED") {
+      return res.status(400).json({ message: `Expense must be APPEALED to resolve (current: ${st})` });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const before = expense;
+
+      let after;
+      if (decision === "APPROVE") {
+        after = await tx.cash_expenses.update({
+          where: { id },
+          data: {
+            approval_status: "REAPPROVED",
+            approved_at: new Date(),
+            approved_by: actorId,
+            rejected_at: null,
+            rejected_by: null,
+            rejection_reason: null,
+
+            resolved_at: new Date(),
+            resolved_by: actorId,
+          },
+        });
+      } else {
+        after = await tx.cash_expenses.update({
+          where: { id },
+          data: {
+            approval_status: "REJECTED",
+            rejected_at: new Date(),
+            rejected_by: actorId,
+            rejection_reason: notes,
+
+            resolved_at: new Date(),
+            resolved_by: actorId,
+          },
+        });
+      }
+
+      await writeExpenseAuditSafe(tx, {
+        expense_id: id,
+        action: decision === "APPROVE" ? "RESOLVE_APPEAL_APPROVE" : "RESOLVE_APPEAL_REJECT",
+        actor_id: actorId,
+        before,
+        after,
+        notes,
+      });
+
+      return after;
+    });
+
+    return res.json({ message: "Appeal resolved", expense: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to resolve appeal", error: e?.message || String(e) });
+  }
+}
+
+// POST /cash/cash-expenses/:id/reopen  (reopen rejected -> pending)
+async function reopenRejectedExpense(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reopen rejected expenses" });
+
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
+
+    const expense = await getExpenseOr404(id, res);
+    if (!expense) return;
+
+    const st = safeUpper(expense.approval_status);
+    if (st !== "REJECTED") {
+      return res.status(400).json({ message: `Only REJECTED expenses can be reopened (current: ${st})` });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const before = expense;
+
+      const after = await tx.cash_expenses.update({
+        where: { id },
+        data: {
+          approval_status: "PENDING",
+
+          rejected_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+
+          appealed_at: null,
+          appealed_by: null,
+          appeal_reason: null,
+
+          resolved_at: null,
+          resolved_by: null,
+        },
+      });
+
+      await writeExpenseAuditSafe(tx, {
+        expense_id: id,
+        action: "REOPEN",
+        actor_id: actorId,
+        before,
+        after,
+        notes: req.body?.notes ? String(req.body.notes) : null,
+      });
+
+      return after;
+    });
+
+    return res.json({ message: "Expense reopened to PENDING", expense: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to reopen expense", error: e?.message || String(e) });
+  }
+}
+
+// =======================
+// Reports / Audits (✅ Implemented minimal)
+// =======================
+
+// GET /cash/cash-expenses/:id/audit
+async function getExpenseAudit(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
+    const { id } = req.params || {};
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
+
+    const expense = await getExpenseFullOr404(id, res);
+    if (!expense) return;
+
+    const isPrivileged = isAccountantOrAdmin(role);
+    const isOwner = expense.created_by === actorId;
+    const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
+
+    if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (!prisma.cash_expense_audits?.findMany) {
+      return res.json({ items: [], note: "cash_expense_audits table not available in prisma schema" });
+    }
+
+    const items = await prisma.cash_expense_audits.findMany({
+      where: { expense_id: id },
+      orderBy: { created_at: "desc" },
+    });
+
+    return res.json({ items });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch expense audit", error: e?.message || String(e) });
+  }
+}
+
+// GET /cash/reports/supervisor-deficit?status=OPEN|IN_REVIEW|CLOSED (optional)
+async function getSupervisorDeficitReport(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can view this report" });
+
+    const status = req.query?.status ? safeUpper(req.query.status) : null;
+
+    const whereAdv = {};
+    if (status) whereAdv.status = status;
+
+    const advances = await prisma.cash_advances.findMany({
+      where: whereAdv,
+      include: {
+        users_cash_advances_field_supervisor_idTousers: true,
+      },
+      orderBy: { created_at: "desc" },
+      take: 2000,
+    });
+
+    const ids = advances.map((a) => a.id);
+    const expenses = ids.length
+      ? await prisma.cash_expenses.findMany({
+          where: { cash_advance_id: { in: ids }, approval_status: { in: ["APPROVED", "REAPPROVED"] } },
+          select: { cash_advance_id: true, amount: true },
+        })
+      : [];
+
+    const sumByAdvance = new Map();
+    for (const e of expenses) {
+      const k = e.cash_advance_id;
+      sumByAdvance.set(k, (sumByAdvance.get(k) || 0) + Number(e.amount || 0));
+    }
+
+    const items = advances.map((a) => {
+      const advanceAmount = Number(a.amount || 0);
+      const approvedSpent = Number(sumByAdvance.get(a.id) || 0);
+      const remaining = advanceAmount - approvedSpent;
+      const shortage = approvedSpent - advanceAmount;
+
+      return {
+        cash_advance_id: a.id,
+        supervisor_id: a.field_supervisor_id,
+        supervisor_name: a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
+        status: a.status,
+        advance_amount: advanceAmount,
+        approved_spent: approvedSpent,
+        remaining: Number(remaining.toFixed(2)),
+        shortage: Number(shortage > 0 ? shortage.toFixed(2) : 0),
+        created_at: a.created_at,
+      };
+    });
+
+    return res.json({ items, total: items.length, where_applied: { status: status || null } });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch deficit report", error: e?.message || String(e) });
+  }
+}
+
+// =======================
+// Trip Finance (✅ minimal - aligns with lock helper)
+// =======================
+
+// POST /cash/trips/:trip_id/open-review
+async function openTripFinanceReview(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can open trip finance review" });
+
+    const { trip_id } = req.params || {};
+    if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
+
+    const trip = await prisma.trips.findUnique({ where: { id: trip_id }, select: { id: true, financial_status: true } });
+    if (!trip) return res.status(404).json({ message: "Trip not found" });
+
+    const st = safeUpper(trip.financial_status || "OPEN");
+    if (st === "CLOSED") return res.status(409).json({ message: "Trip finance already CLOSED" });
+
+    const updated = await prisma.trips.update({
+      where: { id: trip_id },
+      data: { financial_status: "IN_REVIEW" },
+    });
+
+    return res.json({ message: "Trip finance moved to IN_REVIEW", trip: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to open trip finance review", error: e?.message || String(e) });
+  }
+}
+
+// POST /cash/trips/:trip_id/close-finance
+async function closeTripFinance(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can close trip finance" });
+
+    const { trip_id } = req.params || {};
+    if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
+
+    const trip = await prisma.trips.findUnique({ where: { id: trip_id }, select: { id: true, financial_status: true } });
+    if (!trip) return res.status(404).json({ message: "Trip not found" });
+
+    const st = safeUpper(trip.financial_status || "OPEN");
+    if (st !== "IN_REVIEW") {
+      return res.status(400).json({ message: `Trip must be IN_REVIEW to close finance (current: ${st})` });
+    }
+
+    const updated = await prisma.trips.update({
+      where: { id: trip_id },
+      data: { financial_status: "CLOSED" },
+    });
+
+    return res.json({ message: "Trip finance CLOSED", trip: updated });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to close trip finance", error: e?.message || String(e) });
+  }
+}
+
+// GET /cash/trips/finance-summary?trip_id=... (optional)  OR by status
+async function getTripFinanceSummary(req, res) {
+  try {
+    const actorId = getAuthUserId(req);
+    const role = getAuthRole(req);
+    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
+    const isPrivileged = isAccountantOrAdmin(role);
+    const trip_id = req.query?.trip_id ? String(req.query.trip_id) : null;
+    const status = req.query?.status ? safeUpper(req.query.status) : null;
+
+    const whereTrip = {};
+    if (trip_id) {
+      if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
+      whereTrip.id = trip_id;
+    }
+    if (status) whereTrip.financial_status = status;
+
+    // (minimal) admins/accountants only if no trip_id provided (avoid data leakage)
+    if (!isPrivileged && !trip_id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const trips = await prisma.trips.findMany({
+      where: whereTrip,
+      select: { id: true, financial_status: true },
+      orderBy: { created_at: "desc" },
+      take: 2000,
+    });
+
+    const tripIds = trips.map((t) => t.id);
+    const expenses = tripIds.length
+      ? await prisma.cash_expenses.findMany({
+          where: { trip_id: { in: tripIds }, approval_status: { in: ["APPROVED", "REAPPROVED"] } },
+          select: { trip_id: true, amount: true, payment_source: true },
+        })
+      : [];
+
+    const byTrip = new Map();
+    for (const e of expenses) {
+      const k = e.trip_id;
+      const cur = byTrip.get(k) || { sum: 0, sumCompany: 0, sumAdvance: 0 };
+      const amt = Number(e.amount || 0);
+      cur.sum += amt;
+      if (safeUpper(e.payment_source) === "COMPANY") cur.sumCompany += amt;
+      else cur.sumAdvance += amt;
+      byTrip.set(k, cur);
+    }
+
+    const items = trips.map((t) => {
+      const agg = byTrip.get(t.id) || { sum: 0, sumCompany: 0, sumAdvance: 0 };
+      return {
+        trip_id: t.id,
+        financial_status: t.financial_status || "OPEN",
+        sum_approved_expenses: Number(agg.sum.toFixed(2)),
+        sum_company: Number(agg.sumCompany.toFixed(2)),
+        sum_advance: Number(agg.sumAdvance.toFixed(2)),
+      };
+    });
+
+    return res.json({ items, total: items.length, where_applied: { trip_id: trip_id || null, status: status || null } });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch trip finance summary", error: e?.message || String(e) });
+  }
+}
 
 // =======================
 // Exports
@@ -949,16 +1505,18 @@ module.exports = {
   getCashExpensesSummary,
   getCashExpenseById,
 
-  // لازم تكون موجودة لو موجودة في routes (حتى stubs)
+  // ✅ Implemented actions
   approveCashExpense,
   rejectCashExpense,
   appealRejectedExpense,
   resolveAppeal,
   reopenRejectedExpense,
 
+  // ✅ Reports / Audits
   getSupervisorDeficitReport,
   getExpenseAudit,
 
+  // ✅ Trip finance
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,
