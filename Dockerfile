@@ -7,11 +7,12 @@ RUN npm install
 
 COPY . .
 
-# 👇 مهم جداً: generate بعد copy كامل المشروع
+# ✅ Generate Prisma client داخل الـ image
 RUN npx prisma generate
 
 ENV NODE_ENV=production
 
+# (اختياري) مش مؤثر قوي على Render
 EXPOSE 8080
 
 CMD ["npm", "start"]
