@@ -26,6 +26,7 @@ const supervisorsRoutes = require("./supervisors/supervisors.routes");
 const inventoryRoutes = require("./inventory/inventory.routes");
 
 const app = express();
+app.set("trust proxy", 1);
 
 // =======================
 // CORS (production-ready)
@@ -38,18 +39,25 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "")
 app.use(
   cors({
     origin: function (origin, cb) {
-      // Allow requests without origin (Postman, server-to-server)
       if (!origin) return cb(null, true);
-
-      // If no origin specified yet, allow all (temporary)
       if (allowedOrigins.length === 0) return cb(null, true);
 
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
+
+      // ✅ Return explicit CORS error
+      const e = new Error("Not allowed by CORS");
+      e.status = 403;
+      return cb(e);
     },
     credentials: true,
   })
 );
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log("Origin:", req.headers.origin);
+  }
+  next();
+});
 
 app.use(express.json());
 
@@ -105,8 +113,10 @@ app.use((req, res) => {
 // =======================
 app.use((err, req, res, next) => {
   console.error("UNHANDLED ERROR:", err);
-  res.status(500).json({
-    message: "Internal Server Error",
+
+  const status = err.status || 500;
+  res.status(status).json({
+    message: err.message || "Internal Server Error",
   });
 });
 
