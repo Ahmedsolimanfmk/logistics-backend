@@ -42,7 +42,6 @@ exports.listClients = async (req, res) => {
         orderBy: { created_at: "desc" },
         skip,
         take: limit,
-        // ✅ اختيارى: لو تحب ترجّع email في القائمة
         // select: { id:true, name:true, email:true, is_active:true, created_at:true }
       }),
       prisma.clients.count({ where }),
@@ -98,6 +97,7 @@ exports.createClient = async (req, res) => {
 /**
  * PUT /clients/:id
  * body: prisma fields
+ * ✅ Requires name
  */
 exports.updateClient = async (req, res) => {
   try {
@@ -131,6 +131,42 @@ exports.updateClient = async (req, res) => {
   } catch (e) {
     console.error("updateClient error:", e);
     return res.status(500).json({ message: "Failed to update client" });
+  }
+};
+
+/**
+ * PUT /clients/:id/profile
+ * ✅ Does NOT require name (profile fields only)
+ */
+exports.updateClientProfile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: "id is required" });
+
+    const exists = await prisma.clients.findUnique({ where: { id } });
+    if (!exists) return res.status(404).json({ message: "Client not found" });
+
+    const updated = await prisma.clients.update({
+      where: { id },
+      data: {
+        // name is NOT updated here
+        phone: s(req.body?.phone),
+        email: s(req.body?.email),
+        hq_address: s(req.body?.hq_address),
+
+        contact_name: s(req.body?.contact_name),
+        contact_phone: s(req.body?.contact_phone),
+        contact_email: s(req.body?.contact_email),
+
+        tax_no: s(req.body?.tax_no),
+        notes: s(req.body?.notes),
+      },
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("updateClientProfile error:", e);
+    return res.status(500).json({ message: "Failed to update client profile" });
   }
 };
 
@@ -343,9 +379,7 @@ exports.getClientDashboard = async (req, res) => {
 
     return res.json({
       client,
-      month:
-        month ||
-        `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}`,
+      month: month || `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}`,
       financial: {
         total_invoiced: totalInvoiced,
         total_paid: totalPaid,
