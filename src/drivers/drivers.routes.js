@@ -1,10 +1,15 @@
+// =======================
+// src/drivers/drivers.routes.js
+// FINAL: protect all routes + keep /active and /:id/status before /:id
+// =======================
+
 const { Router } = require("express");
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
 
 const {
   getDrivers,
-  getActiveDrivers,   // ✅ لازم تكون موجودة
+  getActiveDrivers,
   createDriver,
   getDriverById,
   updateDriver,
@@ -13,16 +18,17 @@ const {
 
 const router = Router();
 
-// ✅ routes الخاصة لازم تيجي قبل :id
-router.get("/active", authRequired, requireAdminOrHR, getActiveDrivers);
+// ✅ Apply auth + role once for all drivers routes
+router.use(authRequired, requireAdminOrHR);
 
-// status قبل :id
-router.patch("/:id/status", authRequired, requireAdminOrHR, setDriverStatus);
+// ✅ Special routes must come before ":id"
+router.get("/active", getActiveDrivers);
+router.patch("/:id/status", setDriverStatus);
 
-// باقي الـ CRUD
-router.get("/", authRequired, requireAdminOrHR, getDrivers);
-router.post("/", authRequired, requireAdminOrHR, createDriver);
-router.get("/:id", authRequired, requireAdminOrHR, getDriverById);
-router.patch("/:id", authRequired, requireAdminOrHR, updateDriver);
+// CRUD
+router.get("/", getDrivers);
+router.post("/", createDriver);
+router.get("/:id", getDriverById);
+router.patch("/:id", updateDriver);
 
 module.exports = router;

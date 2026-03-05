@@ -1,8 +1,13 @@
+// =======================
+// src/vehicles/vehicles.routes.js
+// =======================
+
 const { Router } = require("express");
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
 
 const {
+  getActiveVehicles, // ✅ NEW
   getVehicles,
   createVehicle,
   getVehicleById,
@@ -12,6 +17,9 @@ const {
 } = require("./vehicles.controller");
 
 const router = Router();
+
+// ✅ IMPORTANT: routes الخاصة لازم تيجي قبل :id
+router.get("/active", authRequired, getActiveVehicles);
 
 // ✅ GET يسمح للمشرف كمان (authRequired فقط)
 // وداخل controller هيحصرها تلقائيًا في عربياته لو FIELD_SUPERVISOR

@@ -4,6 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // =======================
@@ -46,6 +47,25 @@ enum inventory_issue_status {
   CANCELLED
 }
 
+enum driver_status {
+  ACTIVE
+  INACTIVE
+  DISABLED
+}
+
+enum driver_disable_reason {
+  LICENSE_EXPIRED
+  ADMIN
+  OTHER
+}
+
+enum vehicle_disable_reason {
+  LICENSE_EXPIRED
+  MAINTENANCE
+  ADMIN
+  OTHER
+}
+
 // =======================
 // USERS
 // =======================
@@ -79,7 +99,7 @@ model users {
   trips_trips_general_supervisor_idTousers trips[]            @relation("trips_general_supervisor_idTousers")
 
   vehicle_portfolio   vehicle_portfolio[]
-  supervised_vehicles vehicles[]
+  supervised_vehicles vehicles[] @relation("vehicles_supervisor")
 
   inventory_requests_created      inventory_requests[] @relation("inventory_requests_created_by")
   inventory_issues_issued         inventory_issues[]   @relation("inventory_issues_issued_by")
@@ -109,8 +129,15 @@ model vehicles {
   gps_device_id    String?
   is_active        Boolean @default(true)
 
+  // ✅ License fields (vehicle license)
+  license_no          String?
+  license_issue_date  DateTime? @db.Timestamptz(6)
+  license_expiry_date DateTime? @db.Timestamptz(6)
+
+  disable_reason vehicle_disable_reason?
+
   supervisor_id String? @db.Uuid
-  supervisor    users?  @relation(fields: [supervisor_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  supervisor    users?  @relation("vehicles_supervisor", fields: [supervisor_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   created_at DateTime @default(now()) @db.Timestamptz(6)
   updated_at DateTime @updatedAt @db.Timestamptz(6)
@@ -125,6 +152,8 @@ model vehicles {
   installed_part_items part_items[] @relation("part_items_installed_vehicle")
 
   @@index([supervisor_id], map: "idx_vehicles_supervisor_id")
+  @@index([license_expiry_date], map: "idx_vehicles_license_expiry")
+  @@index([status], map: "idx_vehicles_status")
   @@map("vehicles")
 }
 
@@ -184,7 +213,6 @@ model client_contracts {
 
   billing_cycle contract_billing_cycle @default(MONTHLY)
 
-  // ممكن يبقى شهري أو إجمالي حسب الاتفاق
   contract_value Decimal? @db.Decimal(12, 2)
   currency       String?  @default("EGP")
 
@@ -238,7 +266,6 @@ model ar_invoices {
   rejection_reason String?
   notes            String?
 
-  // Optional link to trip if you want later
   source_trip_id String? @db.Uuid
 
   clients          clients           @relation(fields: [client_id], references: [id], onDelete: Cascade)
@@ -334,8 +361,9 @@ model sites {
   is_active  Boolean  @default(true)
   created_at DateTime @default(now()) @db.Timestamptz(6)
   updated_at DateTime @default(now()) @db.Timestamptz(6)
-  clients    clients  @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  trips      trips[]
+
+  clients clients @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  trips   trips[]
 
   @@map("sites")
 }
@@ -492,8 +520,7 @@ model cash_expenses {
   invoice_total Decimal?  @db.Decimal(12, 2)
 
   maintenance_work_order_id String? @db.Uuid
-
-  inventory_receipt_id String? @db.Uuid
+  inventory_receipt_id      String? @db.Uuid
 
   cash_expense_audits cash_expense_audits[]
 
@@ -606,7 +633,7 @@ model warehouses {
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
   part_items         part_items[]
-  warehouse_parts    warehouse_parts[] // ✅ NEW (bulk stock)
+  warehouse_parts    warehouse_parts[]
   inventory_receipts inventory_receipts[]
   inventory_requests inventory_requests[]
   inventory_issues   inventory_issues[]
@@ -633,12 +660,11 @@ model parts {
   part_items part_items[]
 
   inventory_receipt_items      inventory_receipt_items[]
-  inventory_receipt_bulk_lines inventory_receipt_bulk_lines[] // ✅ NEW
+  inventory_receipt_bulk_lines inventory_receipt_bulk_lines[]
   inventory_request_lines      inventory_request_lines[]
-
-  inventory_issue_lines    inventory_issue_lines[]
-  work_order_installations work_order_installations[]
-  warehouseParts           warehouse_parts[]
+  inventory_issue_lines        inventory_issue_lines[]
+  work_order_installations     work_order_installations[]
+  warehouseParts               warehouse_parts[]
 
   @@index([name], map: "idx_parts_name")
   @@map("parts")
@@ -730,7 +756,7 @@ model inventory_receipts {
   users_submitted users?     @relation("inventory_receipts_submitted_by", fields: [submitted_by], references: [id], onDelete: SetNull)
 
   items         inventory_receipt_items[]
-  bulk_lines    inventory_receipt_bulk_lines[] // ✅ NEW
+  bulk_lines    inventory_receipt_bulk_lines[]
   part_items    part_items[]
   cash_expenses cash_expenses[]
 
@@ -762,9 +788,6 @@ model inventory_receipt_items {
   @@map("inventory_receipt_items")
 }
 
-// =======================
-// RECEIPT BULK LINES
-// =======================
 model inventory_receipt_bulk_lines {
   id         String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   receipt_id String @db.Uuid
@@ -967,11 +990,12 @@ model maintenance_requests {
   created_at          DateTime  @default(now()) @db.Timestamptz(6)
   updated_at          DateTime  @default(now()) @db.Timestamptz(6)
 
-  requested_by_user users                             @relation("maintenance_requests_requested_by", fields: [requested_by], references: [id], onUpdate: NoAction)
-  reviewed_by_user  users?                            @relation("maintenance_requests_reviewed_by", fields: [reviewed_by], references: [id], onUpdate: NoAction)
-  vehicles          vehicles                          @relation(fields: [vehicle_id], references: [id], onUpdate: NoAction)
-  work_orders       maintenance_work_orders[]
-  attachments       maintenance_request_attachments[]
+  requested_by_user users  @relation("maintenance_requests_requested_by", fields: [requested_by], references: [id], onUpdate: NoAction)
+  reviewed_by_user  users? @relation("maintenance_requests_reviewed_by", fields: [reviewed_by], references: [id], onUpdate: NoAction)
+  vehicles          vehicles @relation(fields: [vehicle_id], references: [id], onUpdate: NoAction)
+
+  work_orders  maintenance_work_orders[]
+  attachments  maintenance_request_attachments[]
 
   @@index([requested_at], map: "idx_mr_requested_at")
   @@index([status], map: "idx_mr_status")
@@ -1001,12 +1025,26 @@ model maintenance_request_attachments {
   @@index([request_id])
 }
 
+// =======================
+// DRIVERS
+// =======================
 model drivers {
-  id         String  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  id         String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   full_name  String
   phone      String?
-  license_no String?
-  is_active  Boolean @default(true)
+  phone2     String?
+
+  national_id String? // الرقم القومي
+  hire_date   DateTime? @db.Timestamptz(6)
+
+  license_no          String?
+  license_issue_date  DateTime? @db.Timestamptz(6)
+  license_expiry_date DateTime? @db.Timestamptz(6)
+
+  status         driver_status @default(ACTIVE)
+  disable_reason driver_disable_reason?
+
+  is_active Boolean @default(true)
 
   created_at DateTime @default(now()) @db.Timestamptz(6)
   updated_at DateTime @updatedAt @db.Timestamptz(6)
@@ -1014,7 +1052,14 @@ model drivers {
   trip_assignments trip_assignments[]
 
   @@unique([phone])
+  @@unique([phone2])
   @@unique([license_no])
+  @@unique([national_id])
+
   @@index([is_active])
   @@index([full_name])
+  @@index([status])
+  @@index([license_expiry_date])
+
+  @@map("drivers")
 }

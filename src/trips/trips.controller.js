@@ -1,4 +1,9 @@
+// =======================
 // src/trips/trips.controller.js
+// FINAL: enforce driver/vehicle compliance on ASSIGN + START
+// - block expired licenses
+// - auto-disable driver/vehicle when license expired
+// =======================
 
 const prisma = require("../prisma");
 const { ROLES } = require("../auth/roles");
@@ -7,7 +12,6 @@ const { ROLES } = require("../auth/roles");
 // Helpers
 // =======================
 function getAuthUserId(req) {
-  // JWT payload: { sub, role, iat, exp }
   return req.user?.sub || null;
 }
 
@@ -26,7 +30,6 @@ function canViewAllTrips(role) {
 }
 
 function canAccessTrips(role) {
-  // allowed roles to access trips module at all
   return canViewAllTrips(role) || role === ROLES.FIELD_SUPERVISOR;
 }
 
@@ -54,6 +57,107 @@ function dayRangeLocal(now = new Date()) {
   return { start, end };
 }
 
+function isExpiredDate(d) {
+  if (!d) return false;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return false;
+  return dt.getTime() < Date.now();
+}
+
+function upper(v) {
+  return String(v || "").trim().toUpperCase();
+}
+
+// =======================
+// Compliance enforcement
+// =======================
+async function enforceDriverCompliance(tx, driver) {
+  if (!driver) return { ok: false, status: 404, message: "Driver not found" };
+
+  if (driver.is_active === false) return { ok: false, status: 400, message: "Cannot assign inactive driver" };
+
+  const st = upper(driver.status);
+  if (st === "DISABLED") return { ok: false, status: 400, message: "Driver is DISABLED" };
+  if (st === "INACTIVE") return { ok: false, status: 400, message: "Driver is INACTIVE" };
+
+  if (isExpiredDate(driver.license_expiry_date)) {
+    // auto mark disabled
+    try {
+      await tx.drivers.update({
+        where: { id: driver.id },
+        data: { status: "DISABLED", disable_reason: "LICENSE_EXPIRED" },
+      });
+    } catch (_) {}
+    return { ok: false, status: 400, message: "Driver license expired" };
+  }
+
+  return { ok: true };
+}
+
+async function enforceVehicleCompliance(tx, vehicle) {
+  if (!vehicle) return { ok: false, status: 404, message: "Vehicle not found" };
+
+  if (typeof vehicle.is_active === "boolean" && !vehicle.is_active) {
+    return { ok: false, status: 400, message: "Cannot assign inactive vehicle" };
+  }
+
+  const st = upper(vehicle.status);
+
+  // existing rule remains
+  if (st && st !== "AVAILABLE") {
+    if (st === "DISABLED") return { ok: false, status: 400, message: "Vehicle is DISABLED" };
+    return { ok: false, status: 400, message: `Vehicle not AVAILABLE (current=${vehicle.status})` };
+  }
+
+  if (isExpiredDate(vehicle.license_expiry_date)) {
+    try {
+      await tx.vehicles.update({
+        where: { id: vehicle.id },
+        data: { status: "DISABLED", disable_reason: "LICENSE_EXPIRED" },
+      });
+    } catch (_) {}
+
+    return { ok: false, status: 400, message: "Vehicle license expired" };
+  }
+
+  return { ok: true };
+}
+
+async function runComplianceCheck(driver_id, vehicle_id) {
+  const [driver, vehicle] = await Promise.all([
+    prisma.drivers.findUnique({
+      where: { id: driver_id },
+      select: {
+        id: true,
+        is_active: true,
+        status: true,
+        disable_reason: true,
+        license_expiry_date: true,
+      },
+    }),
+    prisma.vehicles.findUnique({
+      where: { id: vehicle_id },
+      select: {
+        id: true,
+        is_active: true,
+        status: true,
+        disable_reason: true,
+        license_expiry_date: true,
+      },
+    }),
+  ]);
+
+  return prisma.$transaction(async (tx) => {
+    const d = await enforceDriverCompliance(tx, driver);
+    if (!d.ok) return d;
+
+    const v = await enforceVehicleCompliance(tx, vehicle);
+    if (!v.ok) return v;
+
+    return { ok: true };
+  });
+}
+
 // =======================
 // GET /trips
 // =======================
@@ -71,18 +175,15 @@ async function getTrips(req, res) {
 
     const where = {};
 
-    // status filter (single or list)
     const statusList = parseStatusList(req.query.status);
     if (statusList && statusList.length === 1) where.status = statusList[0];
     if (statusList && statusList.length > 1) where.status = { in: statusList };
 
-    // range=today (على created_at)
     if (String(req.query.range || "").toLowerCase() === "today") {
       const { start, end } = dayRangeLocal(new Date());
       where.created_at = { gte: start, lte: end };
     }
 
-    // financial_closed_at=null => IS NULL
     if (String(req.query.financial_closed_at || "").toLowerCase() === "null") {
       where.financial_closed_at = null;
     }
@@ -94,7 +195,6 @@ async function getTrips(req, res) {
       where.trip_assignments = { some: { field_supervisor_id: userId } };
     }
 
-    // 1) Trips list (خفيفة بدون trip_assignments)
     const [trips, total] = await Promise.all([
       prisma.trips.findMany({
         where,
@@ -112,7 +212,6 @@ async function getTrips(req, res) {
           client_id: true,
           site_id: true,
           financial_closed_at: true,
-
           clients: { select: { id: true, name: true } },
           sites: { select: { id: true, name: true } },
         },
@@ -123,11 +222,10 @@ async function getTrips(req, res) {
     const tripIds = trips.map((t) => t.id);
     if (tripIds.length === 0) return res.json({ page, pageSize, total, items: [] });
 
-    // 2) Latest assignment لكل Trip في Query واحدة
     const latestAssignments = await prisma.trip_assignments.findMany({
       where: { trip_id: { in: tripIds } },
       orderBy: { assigned_at: "desc" },
-      distinct: ["trip_id"], // ✅ مهم جدًا: ياخد أحدث assignment لكل trip_id
+      distinct: ["trip_id"],
       select: {
         id: true,
         trip_id: true,
@@ -136,7 +234,6 @@ async function getTrips(req, res) {
         vehicle_id: true,
         driver_id: true,
         field_supervisor_id: true,
-
         vehicles: {
           select: {
             id: true,
@@ -145,6 +242,8 @@ async function getTrips(req, res) {
             display_name: true,
             status: true,
             is_active: true,
+            license_expiry_date: true,
+            disable_reason: true,
           },
         },
         drivers: {
@@ -152,20 +251,17 @@ async function getTrips(req, res) {
             id: true,
             full_name: true,
             phone: true,
+            status: true,
+            license_expiry_date: true,
+            disable_reason: true,
           },
         },
-        users_trip_assignments_supervisor: {
-          select: {
-            id: true,
-            full_name: true,
-          },
-        },
+        users_trip_assignments_supervisor: { select: { id: true, full_name: true } },
       },
     });
 
     const assignmentByTripId = new Map(latestAssignments.map((a) => [a.trip_id, a]));
 
-    // 3) دمج النتائج
     const items = trips.map((t) => ({
       ...t,
       trip_assignments: assignmentByTripId.get(t.id) ? [assignmentByTripId.get(t.id)] : [],
@@ -198,22 +294,14 @@ async function getTripById(req, res) {
         sites: true,
         trip_assignments: {
           orderBy: { assigned_at: "desc" },
-          include: {
-            vehicles: true,
-            drivers: true,
-            users_trip_assignments_supervisor: true,
-          },
+          include: { vehicles: true, drivers: true, users_trip_assignments_supervisor: true },
         },
-        trip_events: {
-          orderBy: { created_at: "desc" },
-          take: 50,
-        },
+        trip_events: { orderBy: { created_at: "desc" }, take: 50 },
       },
     });
 
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
-    // FIELD_SUPERVISOR can access only if assigned as supervisor
     if (role === ROLES.FIELD_SUPERVISOR) {
       const ok = (trip.trip_assignments || []).some((a) => a.field_supervisor_id === userId);
       if (!ok) return res.status(403).json({ message: "Forbidden" });
@@ -240,16 +328,6 @@ async function createTrip(req, res) {
 
     if (!isUuid(client_id)) return res.status(400).json({ message: "Invalid client_id" });
     if (!isUuid(site_id)) return res.status(400).json({ message: "Invalid site_id" });
-
-    // ✅ المشرف هو المسؤول عن إنشاء رحلات التشغيل
-    // ✅ ومسموح للإدارات العليا (اختياري)
-    if (role === ROLES.FIELD_SUPERVISOR) {
-      // ok
-    } else if (canViewAllTrips(role)) {
-      // ok (اختياري)
-    } else {
-      return res.status(403).json({ message: "Forbidden" });
-    }
 
     const created = await prisma.trips.create({
       data: {
@@ -299,28 +377,11 @@ async function assignTrip(req, res) {
       return res.status(400).json({ message: `Trip must be DRAFT to assign (current=${trip.status})` });
     }
 
-    // =========================================================
-    // ✅ NEW GUARDS (Driver must exist + must be active)
-    // =========================================================
-    const driver = await prisma.drivers.findUnique({ where: { id: driver_id } });
-    if (!driver) return res.status(400).json({ message: "Driver not found" });
-    if (!driver.is_active) return res.status(400).json({ message: "Cannot assign inactive driver" });
+    // ✅ Compliance checks (driver/vehicle) + lazy auto-disable
+    const compliance = await runComplianceCheck(driver_id, vehicle_id);
+    if (!compliance.ok) return res.status(compliance.status || 400).json({ message: compliance.message });
 
-    // ✅ OPTIONAL: Vehicle must exist + must be AVAILABLE + active
-    const vehicle = await prisma.vehicles.findUnique({ where: { id: vehicle_id } });
-    if (!vehicle) return res.status(400).json({ message: "Vehicle not found" });
-
-    // لو عندك is_active في vehicles
-    if (typeof vehicle.is_active === "boolean" && !vehicle.is_active) {
-      return res.status(400).json({ message: "Cannot assign inactive vehicle" });
-    }
-
-    // لو عندك status في vehicles
-    if (vehicle.status && String(vehicle.status).toUpperCase() !== "AVAILABLE") {
-      return res.status(400).json({ message: `Vehicle not AVAILABLE (current=${vehicle.status})` });
-    }
-
-    // ✅ OPTIONAL: prevent busy driver/vehicle (already assigned somewhere else)
+    // prevent busy driver/vehicle
     const [busyDriver, busyVehicle] = await Promise.all([
       prisma.trip_assignments.findFirst({
         where: { driver_id, is_active: true, trip_id: { not: id } },
@@ -332,13 +393,8 @@ async function assignTrip(req, res) {
       }),
     ]);
 
-    if (busyDriver) {
-      return res.status(400).json({ message: "Driver is already assigned to another active trip" });
-    }
-    if (busyVehicle) {
-      return res.status(400).json({ message: "Vehicle is already assigned to another active trip" });
-    }
-    // =========================================================
+    if (busyDriver) return res.status(400).json({ message: "Driver is already assigned to another active trip" });
+    if (busyVehicle) return res.status(400).json({ message: "Vehicle is already assigned to another active trip" });
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.trip_assignments.updateMany({
@@ -395,12 +451,27 @@ async function startTrip(req, res) {
 
     const trip = await prisma.trips.findUnique({
       where: { id },
-      include: { trip_assignments: { where: { is_active: true }, take: 1 } },
+      include: {
+        trip_assignments: {
+          where: { is_active: true },
+          take: 1,
+          select: { driver_id: true, vehicle_id: true },
+        },
+      },
     });
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "ASSIGNED") {
       return res.status(400).json({ message: `Trip must be ASSIGNED to start (current=${trip.status})` });
+    }
+
+    const activeAssignment = (trip.trip_assignments || [])[0];
+    if (!activeAssignment) return res.status(400).json({ message: "Trip has no active assignment" });
+
+    // ✅ compliance check again at start (licenses can expire anytime)
+    const compliance = await runComplianceCheck(activeAssignment.driver_id, activeAssignment.vehicle_id);
+    if (!compliance.ok) {
+      return res.status(compliance.status || 400).json({ message: `Cannot start trip: ${compliance.message}` });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -410,12 +481,7 @@ async function startTrip(req, res) {
       });
 
       await tx.trip_events.create({
-        data: {
-          trip_id: id,
-          event_type: "START",
-          created_by_user: userId,
-          payload: {},
-        },
+        data: { trip_id: id, event_type: "START", created_by_user: userId, payload: {} },
       });
 
       return t;
@@ -460,12 +526,7 @@ async function finishTrip(req, res) {
       });
 
       await tx.trip_events.create({
-        data: {
-          trip_id: id,
-          event_type: "FINISH",
-          created_by_user: userId,
-          payload: {},
-        },
+        data: { trip_id: id, event_type: "FINISH", created_by_user: userId, payload: {} },
       });
 
       return t;

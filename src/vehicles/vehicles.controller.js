@@ -1,7 +1,8 @@
 // =======================
 // src/vehicles/vehicles.controller.js
-// FINAL (fleet_no + plate_no, status default ACTIVE)
+// FINAL: supports license fields + disable_reason
 // + FIX: allow PATCH supervisor_id (Admin/HR only)
+// + NEW: GET /vehicles/active (for dropdown) with compliance filtering
 // =======================
 
 const prisma = require("../prisma");
@@ -25,6 +26,14 @@ function parseIntQuery(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseDateOrNull(v) {
+  if (v === undefined) return undefined; // not provided
+  if (v === null || v === "") return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
+
 function getAuthRole(req) {
   return String(req.user?.role || "").toUpperCase();
 }
@@ -36,6 +45,17 @@ function isUuid(v) {
   );
 }
 
+function upper(v) {
+  return String(v || "").trim().toUpperCase();
+}
+
+function isExpiredDate(d) {
+  if (!d) return false;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return false;
+  return dt.getTime() < Date.now();
+}
+
 // ✅ dropdown label: fleet_no - plate_no (fallbacks)
 function buildVehicleLabel(v) {
   const fn = v.fleet_no ? String(v.fleet_no).trim() : "";
@@ -45,12 +65,72 @@ function buildVehicleLabel(v) {
   return fn || pn || dn || v.id;
 }
 
+// =======================
+// ✅ NEW: GET /vehicles/active
+// query: q (optional) => dropdown search
+// returns ONLY compliant vehicles:
+// - is_active=true
+// - status=AVAILABLE
+// - license_expiry_date not expired (or null)
+// =======================
+async function getActiveVehicles(req, res) {
+  try {
+    const q = String(req.query.q || "").trim();
+
+    const where = {
+      is_active: true,
+      status: "AVAILABLE",
+      ...(q
+        ? {
+            OR: [
+              { fleet_no: { contains: q, mode: "insensitive" } },
+              { plate_no: { contains: q, mode: "insensitive" } },
+              { display_name: { contains: q, mode: "insensitive" } },
+              { license_no: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    // Pull minimal fields first
+    const list = await prisma.vehicles.findMany({
+      where,
+      orderBy: [{ fleet_no: "asc" }, { plate_no: "asc" }],
+      select: {
+        id: true,
+        fleet_no: true,
+        plate_no: true,
+        display_name: true,
+        status: true,
+        is_active: true,
+        license_expiry_date: true,
+        disable_reason: true,
+      },
+    });
+
+    // Hard compliance filter (no expired licenses)
+    const items = (list || [])
+      .filter((v) => !isExpiredDate(v.license_expiry_date))
+      .map((v) => ({
+        ...v,
+        value: v.id,
+        label: buildVehicleLabel(v),
+      }));
+
+    return res.json(items);
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to fetch active vehicles", error: e.message });
+  }
+}
+
 /**
  * GET /vehicles
  * query:
  *  - q
  *  - status
  *  - is_active=true|false
+ *  - unassigned=true
+ *  - supervisor_id
  *  - page
  *  - limit
  */
@@ -59,7 +139,7 @@ async function getVehicles(req, res) {
     const { q, status, is_active, page, limit, unassigned, supervisor_id } = req.query || {};
     const where = {};
 
-    // --------- NEW: role awareness (for unassigned) ----------
+    // --------- role awareness (for unassigned + supervisor scope) ----------
     const role = getAuthRole(req);
     const userId = req.user?.sub || null;
 
@@ -72,15 +152,15 @@ async function getVehicles(req, res) {
     }
 
     // supervisor_id filter:
-    // - لو Field Supervisor: يشوف عربياته فقط (حتى لو لم يرسل supervisor_id)
-    // - لو Admin/HR: يقدر يفلتر بأي supervisor_id
+    // - Field Supervisor: يشوف عربياته فقط (حتى لو لم يرسل supervisor_id)
+    // - Admin/HR: يقدر يفلتر بأي supervisor_id
     if (role === "FIELD_SUPERVISOR") {
       where.supervisor_id = userId;
     } else if (supervisor_id) {
       where.supervisor_id = String(supervisor_id).trim();
     }
 
-    if (status) where.status = String(status).trim().toUpperCase();
+    if (status) where.status = upper(status);
 
     const isActiveParsed = parseBooleanQuery(is_active);
     if (typeof isActiveParsed === "boolean") where.is_active = isActiveParsed;
@@ -91,6 +171,7 @@ async function getVehicles(req, res) {
         { fleet_no: { contains: query, mode: "insensitive" } },
         { plate_no: { contains: query, mode: "insensitive" } },
         { display_name: { contains: query, mode: "insensitive" } },
+        { license_no: { contains: query, mode: "insensitive" } },
       ];
     }
 
@@ -111,9 +192,16 @@ async function getVehicles(req, res) {
           display_name: true,
           status: true,
           is_active: true,
-          supervisor_id: true, // ✅ NEW
+          supervisor_id: true,
+
           current_odometer: true,
           gps_device_id: true,
+
+          license_no: true,
+          license_issue_date: true,
+          license_expiry_date: true,
+          disable_reason: true,
+
           created_at: true,
           updated_at: true,
         },
@@ -129,12 +217,7 @@ async function getVehicles(req, res) {
 
     return res.json({
       items,
-      meta: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        pages: Math.ceil(total / limitNum),
-      },
+      meta: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
     });
   } catch (e) {
     console.log("GET VEHICLES ERROR:", e);
@@ -152,11 +235,7 @@ async function getVehicleById(req, res) {
     const vehicle = await prisma.vehicles.findUnique({ where: { id } });
     if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
 
-    return res.json({
-      ...vehicle,
-      value: vehicle.id,
-      label: buildVehicleLabel(vehicle),
-    });
+    return res.json({ ...vehicle, value: vehicle.id, label: buildVehicleLabel(vehicle) });
   } catch (e) {
     return res.status(500).json({ message: "Failed to fetch vehicle", error: e.message });
   }
@@ -164,7 +243,8 @@ async function getVehicleById(req, res) {
 
 /**
  * POST /vehicles
- * body: { fleet_no, plate_no, status?, display_name?, ... }
+ * body: { fleet_no, plate_no, status?, display_name?, model?, year?, current_odometer?, gps_device_id?, is_active? }
+ * + license fields
  */
 async function createVehicle(req, res) {
   try {
@@ -178,6 +258,11 @@ async function createVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
+
+      license_no,
+      license_issue_date,
+      license_expiry_date,
+      disable_reason,
     } = req.body || {};
 
     if (!fleet_no) return res.status(400).json({ message: "fleet_no is required" });
@@ -204,29 +289,38 @@ async function createVehicle(req, res) {
       yearValue = n;
     }
 
+    const licIssue = parseDateOrNull(license_issue_date);
+    const licExpiry = parseDateOrNull(license_expiry_date);
+    if (license_issue_date !== undefined && licIssue === undefined)
+      return res.status(400).json({ message: "Invalid license_issue_date" });
+    if (license_expiry_date !== undefined && licExpiry === undefined)
+      return res.status(400).json({ message: "Invalid license_expiry_date" });
+
     const now = new Date();
 
     const vehicle = await prisma.vehicles.create({
       data: {
         fleet_no: fleetNormalized,
         plate_no: plateNormalized,
-        status: status ? String(status).trim().toUpperCase() : "AVAILABLE",
+        status: status ? upper(status) : "AVAILABLE",
         display_name: display_name ? String(display_name).trim() : null,
         model: model ? String(model).trim() : null,
         year: yearValue,
         current_odometer: odometerValue,
         gps_device_id: gps_device_id ? String(gps_device_id).trim() : null,
         is_active: typeof is_active === "boolean" ? is_active : true,
+
+        license_no: license_no ? String(license_no).trim() : null,
+        license_issue_date: licIssue === undefined ? null : licIssue,
+        license_expiry_date: licExpiry === undefined ? null : licExpiry,
+        disable_reason: disable_reason ? upper(disable_reason) : null,
+
         created_at: now,
         updated_at: now,
       },
     });
 
-    return res.status(201).json({
-      ...vehicle,
-      value: vehicle.id,
-      label: buildVehicleLabel(vehicle),
-    });
+    return res.status(201).json({ ...vehicle, value: vehicle.id, label: buildVehicleLabel(vehicle) });
   } catch (e) {
     if (e.code === "P2002") {
       return res.status(409).json({ message: "fleet_no or plate_no already exists" });
@@ -259,7 +353,12 @@ async function updateVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
-      supervisor_id, // ✅ NEW
+      supervisor_id,
+
+      license_no,
+      license_issue_date,
+      license_expiry_date,
+      disable_reason,
     } = body;
 
     const data = {};
@@ -274,7 +373,7 @@ async function updateVehicle(req, res) {
       data.plate_no = normalizeText(plate_no);
     }
 
-    if (status !== undefined) data.status = status ? String(status).trim().toUpperCase() : null;
+    if (status !== undefined) data.status = status ? upper(status) : null;
     if (display_name !== undefined) data.display_name = display_name ? String(display_name).trim() : null;
     if (model !== undefined) data.model = model ? String(model).trim() : null;
 
@@ -282,9 +381,7 @@ async function updateVehicle(req, res) {
       if (year === null) data.year = null;
       else {
         const n = Number(year);
-        if (!Number.isFinite(n) || !Number.isInteger(n)) {
-          return res.status(400).json({ message: "year must be an integer" });
-        }
+        if (!Number.isFinite(n) || !Number.isInteger(n)) return res.status(400).json({ message: "year must be an integer" });
         data.year = n;
       }
     }
@@ -303,8 +400,24 @@ async function updateVehicle(req, res) {
     if (gps_device_id !== undefined) data.gps_device_id = gps_device_id ? String(gps_device_id).trim() : null;
     if (typeof is_active === "boolean") data.is_active = is_active;
 
-    // ✅ FIX: allow supervisor_id update (Admin/HR only)
-    // We check presence, so "null" unassign works.
+    // license fields
+    if (license_no !== undefined) data.license_no = license_no ? String(license_no).trim() : null;
+
+    if (license_issue_date !== undefined) {
+      const d = parseDateOrNull(license_issue_date);
+      if (d === undefined) return res.status(400).json({ message: "Invalid license_issue_date" });
+      data.license_issue_date = d;
+    }
+
+    if (license_expiry_date !== undefined) {
+      const d = parseDateOrNull(license_expiry_date);
+      if (d === undefined) return res.status(400).json({ message: "Invalid license_expiry_date" });
+      data.license_expiry_date = d;
+    }
+
+    if (disable_reason !== undefined) data.disable_reason = disable_reason ? upper(disable_reason) : null;
+
+    // ✅ allow supervisor_id update (Admin/HR only)
     if (Object.prototype.hasOwnProperty.call(body, "supervisor_id")) {
       if (role !== "ADMIN" && role !== "HR") {
         return res.status(403).json({ message: "Forbidden (supervisor assignment is ADMIN/HR only)" });
@@ -323,11 +436,7 @@ async function updateVehicle(req, res) {
 
     const updated = await prisma.vehicles.update({ where: { id }, data });
 
-    return res.json({
-      ...updated,
-      value: updated.id,
-      label: buildVehicleLabel(updated),
-    });
+    return res.json({ ...updated, value: updated.id, label: buildVehicleLabel(updated) });
   } catch (e) {
     if (e.code === "P2002") {
       return res.status(409).json({ message: "fleet_no or plate_no already exists" });
@@ -351,11 +460,7 @@ async function toggleVehicle(req, res) {
       data: { is_active: !exists.is_active, updated_at: new Date() },
     });
 
-    return res.json({
-      ...updated,
-      value: updated.id,
-      label: buildVehicleLabel(updated),
-    });
+    return res.json({ ...updated, value: updated.id, label: buildVehicleLabel(updated) });
   } catch (e) {
     return res.status(500).json({ message: "Failed to toggle vehicle", error: e.message });
   }
@@ -384,6 +489,7 @@ async function deleteVehicle(req, res) {
 }
 
 module.exports = {
+  getActiveVehicles, // ✅ NEW export
   getVehicles,
   getVehicleById,
   createVehicle,

@@ -10,6 +10,10 @@ const path = require("path");
 
 const { authRequired } = require("./auth/jwt.middleware");
 
+// ✅ Jobs (Auto disable on license expiry)
+const { startVehicleLicenseMonitor, runVehicleLicenseSweepOnce } = require("./jobs/vehicleLicense.job");
+const { startDriverLicenseMonitor, runDriverLicenseSweepOnce } = require("./jobs/driverLicense.job");
+
 // Routes
 const authRoutes = require("./auth/auth.routes");
 const vehiclesRoutes = require("./vehicles/vehicles.routes");
@@ -30,37 +34,51 @@ const app = express();
 app.set("trust proxy", 1);
 
 // =======================
+// Body parsers
+// =======================
+const JSON_LIMIT = process.env.JSON_LIMIT || "2mb";
+app.use(express.json({ limit: JSON_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_LIMIT }));
+
+// =======================
 // CORS (production-ready)
 // =======================
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
-  .map(s => s.trim())
+  .map((s) => s.trim())
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin: function (origin, cb) {
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.length === 0) return cb(null, true);
+function corsOriginCheck(origin, cb) {
+  // origin can be undefined (server-to-server / curl), or sometimes "null" (some browsers/file contexts)
+  if (!origin || origin === "null") return cb(null, true);
 
-      if (allowedOrigins.includes(origin)) return cb(null, true);
+  // If no allowlist configured, allow all
+  if (allowedOrigins.length === 0) return cb(null, true);
 
-      // ✅ Return explicit CORS error
-      const e = new Error("Not allowed by CORS");
-      e.status = 403;
-      return cb(e);
-    },
-    credentials: true,
-  })
-);
+  if (allowedOrigins.includes(origin)) return cb(null, true);
+
+  // ✅ Return explicit CORS error
+  const e = new Error("Not allowed by CORS");
+  e.status = 403;
+  e.code = "CORS_NOT_ALLOWED";
+  return cb(e);
+}
+
+const corsOptions = {
+  origin: corsOriginCheck,
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+// Explicit preflight support (helps some deployments/proxies)
+app.options("*", cors(corsOptions));
+
 app.use((req, res, next) => {
   if (process.env.NODE_ENV !== "production") {
     console.log("Origin:", req.headers.origin);
   }
   next();
 });
-
-app.use(express.json());
 
 // =======================
 // Serve uploads
@@ -119,6 +137,7 @@ app.use((err, req, res, next) => {
   const status = err.status || 500;
   res.status(status).json({
     message: err.message || "Internal Server Error",
+    code: err.code || undefined,
   });
 });
 
@@ -128,6 +147,23 @@ app.use((err, req, res, next) => {
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = "0.0.0.0";
 
-app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, async () => {
   console.log(`🚀 API running on port ${PORT}`);
+
+  // ✅ Run once at boot (covers restarts + ensures state is correct immediately)
+  try {
+    await runVehicleLicenseSweepOnce();
+  } catch (e) {
+    console.error("[BOOT] vehicle license sweep failed:", e?.message || e);
+  }
+
+  try {
+    await runDriverLicenseSweepOnce();
+  } catch (e) {
+    console.error("[BOOT] driver license sweep failed:", e?.message || e);
+  }
+
+  // ✅ Start cron monitors
+  startVehicleLicenseMonitor();
+  startDriverLicenseMonitor();
 });

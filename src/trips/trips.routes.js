@@ -6,8 +6,8 @@ const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
 
-// IMPORTANT: ما تعملش destructuring مباشرة عشان لو اسم غلط يبقى undefined
 const tripsController = require("./trips.controller");
+const { requireTripStartFinishPermission } = require("./trip-permissions.middleware");
 
 // Guard helper: لو أي handler undefined هنطلع error واضح
 function mustBeFn(name, fn) {
@@ -25,10 +25,8 @@ const getTripById = mustBeFn("getTripById", tripsController.getTripById);
 const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
 const startTrip = mustBeFn("startTrip", tripsController.startTrip);
 const finishTrip = mustBeFn("finishTrip", tripsController.finishTrip);
-const { requireTripStartFinishPermission } = require("./trip-permissions.middleware");
 
-// لو عندك endpoints مالية داخل trips.controller (اختياري)
-// مثال: openTripFinanceReview / closeTripFinance / getTripFinanceSummary
+// Optional finance handlers
 const openTripFinanceReview = tripsController.openTripFinanceReview
   ? mustBeFn("openTripFinanceReview", tripsController.openTripFinanceReview)
   : null;
@@ -42,28 +40,29 @@ const getTripFinanceSummary = tripsController.getTripFinanceSummary
   : null;
 
 // =======================
-// Routes
+// Routes (JWT required)
 // =======================
+router.use(authRequired);
 
-// قائمة الرحلات / إنشاء رحلة
-router.get("/", authRequired, getTrips);
-router.post("/", authRequired, createTrip);
-router.get("/:id", authRequired, getTripById);
+// List / Create / Details
+router.get("/", getTrips);
+router.post("/", createTrip);
+router.get("/:id", getTripById);
 
 // Assign / Start / Finish
-router.post("/:id/assign", authRequired, assignTrip);
-router.post("/:id/start", authRequired, requireTripStartFinishPermission, startTrip);
-router.post("/:id/finish", authRequired, requireTripStartFinishPermission, finishTrip);
+router.post("/:id/assign", assignTrip);
+router.post("/:id/start", requireTripStartFinishPermission, startTrip);
+router.post("/:id/finish", requireTripStartFinishPermission, finishTrip);
 
-// Finance (لو موجودة في controller)
+// Finance (لو موجودة)
 if (openTripFinanceReview) {
-  router.post("/:id/finance/open-review", authRequired, requireAdminOrHR, openTripFinanceReview);
+  router.post("/:id/finance/open-review", requireAdminOrHR, openTripFinanceReview);
 }
 if (closeTripFinance) {
-  router.post("/:id/finance/close", authRequired, requireAdminOrHR, closeTripFinance);
+  router.post("/:id/finance/close", requireAdminOrHR, closeTripFinance);
 }
 if (getTripFinanceSummary) {
-  router.get("/:id/finance/summary", authRequired, getTripFinanceSummary);
+  router.get("/:id/finance/summary", getTripFinanceSummary);
 }
 
 module.exports = router;

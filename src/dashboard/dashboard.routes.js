@@ -1,10 +1,17 @@
+// =======================
+// src/dashboard/dashboard.routes.js
+// =======================
+
 const express = require("express");
 const router = express.Router();
+
+const { requireAdminOrHR } = require("../auth/role.middleware");
 
 const {
   getDashboardSummary,
   getDashboardTrends,
   getDashboardTrendsBundle,
+  getComplianceAlerts, // ✅ NEW
 } = require("./dashboard.controller");
 
 // KPIs summary
@@ -15,5 +22,8 @@ router.get("/trends", getDashboardTrends);
 
 // Bundle trends
 router.get("/trends/bundle", getDashboardTrendsBundle);
+
+// ✅ Compliance alerts (Drivers/Vehicles license expiry)
+router.get("/compliance-alerts", requireAdminOrHR, getComplianceAlerts);
 
 module.exports = router;
