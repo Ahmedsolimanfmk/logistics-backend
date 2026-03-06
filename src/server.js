@@ -10,10 +10,6 @@ const path = require("path");
 
 const { authRequired } = require("./auth/jwt.middleware");
 
-// ✅ Jobs (Auto disable on license expiry)
-const { startVehicleLicenseMonitor, runVehicleLicenseSweepOnce } = require("./jobs/vehicleLicense.job");
-const { startDriverLicenseMonitor, runDriverLicenseSweepOnce } = require("./jobs/driverLicense.job");
-
 // Routes
 const authRoutes = require("./auth/auth.routes");
 const vehiclesRoutes = require("./vehicles/vehicles.routes");
@@ -49,7 +45,7 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 function corsOriginCheck(origin, cb) {
-  // origin can be undefined (server-to-server / curl), or sometimes "null" (some browsers/file contexts)
+  // origin can be undefined (server-to-server / curl), or sometimes "null"
   if (!origin || origin === "null") return cb(null, true);
 
   // If no allowlist configured, allow all
@@ -57,7 +53,6 @@ function corsOriginCheck(origin, cb) {
 
   if (allowedOrigins.includes(origin)) return cb(null, true);
 
-  // ✅ Return explicit CORS error
   const e = new Error("Not allowed by CORS");
   e.status = 403;
   e.code = "CORS_NOT_ALLOWED";
@@ -70,8 +65,9 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// Explicit preflight support (helps some deployments/proxies)
-app.options("*", cors(corsOptions));
+
+// ✅ Express 5 / path-to-regexp: "*" breaks, use regex or "/*"
+app.options(/.*/, cors(corsOptions));
 
 app.use((req, res, next) => {
   if (process.env.NODE_ENV !== "production") {
@@ -147,23 +143,6 @@ app.use((err, req, res, next) => {
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = "0.0.0.0";
 
-app.listen(PORT, HOST, async () => {
+app.listen(PORT, HOST, () => {
   console.log(`🚀 API running on port ${PORT}`);
-
-  // ✅ Run once at boot (covers restarts + ensures state is correct immediately)
-  try {
-    await runVehicleLicenseSweepOnce();
-  } catch (e) {
-    console.error("[BOOT] vehicle license sweep failed:", e?.message || e);
-  }
-
-  try {
-    await runDriverLicenseSweepOnce();
-  } catch (e) {
-    console.error("[BOOT] driver license sweep failed:", e?.message || e);
-  }
-
-  // ✅ Start cron monitors
-  startVehicleLicenseMonitor();
-  startDriverLicenseMonitor();
 });
