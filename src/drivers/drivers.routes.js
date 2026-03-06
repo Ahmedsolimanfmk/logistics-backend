@@ -23,13 +23,14 @@ router.use(authRequired, requireAdminOrHR);
 
 // ✅ Special routes must come before ":id"
 router.get("/active", getActiveDrivers);
-router.get("/:id/financial-summary", getDriverFinancialSummary);
-router.get("/:id", getDriverById);
+router.patch("/:id/status", setDriverStatus);
 
 // CRUD
 router.get("/", getDrivers);
 router.post("/", createDriver);
+router.get("/:id/financial-summary", getDriverFinancialSummary);
 router.get("/:id", getDriverById);
 router.patch("/:id", updateDriver);
+
 
 module.exports = router;
