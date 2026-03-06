@@ -475,11 +475,117 @@ async function deleteVehicle(req, res) {
     return res.status(500).json({ message: "Failed to delete/deactivate vehicle", error: e.message });
   }
 }
+// =======================
+// GET /vehicles/:id/summary
+// =======================
+async function getVehicleSummary(req, res) {
+  try {
+    const { id } = req.params;
 
+    const vehicle = await prisma.vehicles.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        fleet_no: true,
+        plate_no: true,
+        display_name: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        status: true,
+        is_active: true,
+        disable_reason: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    if (!vehicle) {
+      return res.status(404).json({ message: "Vehicle not found" });
+    }
+
+    const assignments = await prisma.trip_assignments.findMany({
+      where: { vehicle_id: id },
+      orderBy: { assigned_at: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        trip_id: true,
+        assigned_at: true,
+        is_active: true,
+        trips: {
+          select: {
+            id: true,
+            status: true,
+            scheduled_at: true,
+            financial_status: true,
+            clients: { select: { name: true } },
+            sites: { select: { name: true } },
+          },
+        },
+        drivers: {
+          select: {
+            id: true,
+            full_name: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    const tripIds = assignments.map(a => a.trip_id).filter(Boolean);
+
+    let expenses = [];
+
+    if (tripIds.length > 0) {
+      expenses = await prisma.cash_expenses.findMany({
+        where: {
+          trip_id: { in: tripIds },
+          vehicle_id: id,
+        },
+        orderBy: { created_at: "desc" },
+        take: 200,
+      });
+    }
+
+    const totalTrips = tripIds.length;
+    const completedTrips = assignments.filter(a => a?.trips?.status === "COMPLETED").length;
+    const activeTrips = assignments.filter(a => a.is_active === true).length;
+
+    const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const approvedExpenses = expenses
+      .filter(e => e.approval_status === "APPROVED")
+      .reduce((s, e) => s + Number(e.amount || 0), 0);
+
+    return res.json({
+      vehicle,
+
+      summary: {
+        total_trips: totalTrips,
+        completed_trips: completedTrips,
+        active_trips: activeTrips,
+        expenses_count: expenses.length,
+        total_expenses: totalExpenses,
+        approved_expenses: approvedExpenses,
+      },
+
+      recent_trips: assignments.slice(0, 20),
+
+      recent_expenses: expenses.slice(0, 20),
+    });
+
+  } catch (e) {
+    return res.status(500).json({
+      message: "Failed to fetch vehicle summary",
+      error: e.message,
+    });
+  }
+}
 module.exports = {
   getActiveVehicles,
   getVehicles,
   getVehicleById,
+  getVehicleSummary, // ✅ NEW
   createVehicle,
   updateVehicle,
   toggleVehicle,

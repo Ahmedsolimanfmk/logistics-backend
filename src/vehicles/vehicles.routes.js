@@ -7,10 +7,11 @@ const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
 
 const {
-  getActiveVehicles, // ✅ NEW
+  getActiveVehicles,
   getVehicles,
   createVehicle,
   getVehicleById,
+  getVehicleSummary, // ✅ NEW
   updateVehicle,
   toggleVehicle,
   deleteVehicle,
@@ -18,15 +19,19 @@ const {
 
 const router = Router();
 
-// ✅ IMPORTANT: routes الخاصة لازم تيجي قبل :id
+// special routes
 router.get("/active", authRequired, getActiveVehicles);
 
-// ✅ GET يسمح للمشرف كمان (authRequired فقط)
-// وداخل controller هيحصرها تلقائيًا في عربياته لو FIELD_SUPERVISOR
+// list
 router.get("/", authRequired, getVehicles);
 
-// باقي العمليات Admin/HR
+// summary (قبل :id)
+router.get("/:id/summary", authRequired, getVehicleSummary);
+
+// single
 router.get("/:id", authRequired, requireAdminOrHR, getVehicleById);
+
+// CRUD
 router.post("/", authRequired, requireAdminOrHR, createVehicle);
 router.patch("/:id", authRequired, requireAdminOrHR, updateVehicle);
 router.patch("/:id/toggle", authRequired, requireAdminOrHR, toggleVehicle);
