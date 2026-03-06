@@ -28,7 +28,11 @@ function pickPagination(req) {
 function prismaErrorToHttp(e) {
   const code = e?.code;
   if (code === "P2002") {
-    return { status: 400, message: "Duplicate value (unique field conflict)", details: e?.meta };
+    return {
+      status: 400,
+      message: "Duplicate value (unique field conflict)",
+      details: e?.meta,
+    };
   }
   return null;
 }
@@ -67,7 +71,10 @@ function isExpired(expiryDate) {
 
 function applyDriverStateRules(res, data, incoming) {
   const nextStatus = incoming.status !== undefined ? incoming.status : data.status;
-  const nextExpiry = incoming.license_expiry_date !== undefined ? incoming.license_expiry_date : data.license_expiry_date;
+  const nextExpiry =
+    incoming.license_expiry_date !== undefined
+      ? incoming.license_expiry_date
+      : data.license_expiry_date;
 
   if (nextExpiry && isExpired(nextExpiry)) {
     data.status = "DISABLED";
@@ -92,7 +99,9 @@ function applyDriverStateRules(res, data, incoming) {
   return true;
 }
 
-// ✅ GET /drivers/active
+// =======================
+// GET /drivers/active
+// =======================
 async function getActiveDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -128,11 +137,16 @@ async function getActiveDrivers(req, res) {
 
     return res.json(drivers);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch active drivers", error: e.message });
+    return res.status(500).json({
+      message: "Failed to fetch active drivers",
+      error: e.message,
+    });
   }
 }
 
+// =======================
 // GET /drivers
+// =======================
 async function getDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -175,7 +189,9 @@ async function getDrivers(req, res) {
   }
 }
 
+// =======================
 // GET /drivers/:id
+// =======================
 async function getDriverById(req, res) {
   try {
     const { id } = req.params;
@@ -189,7 +205,9 @@ async function getDriverById(req, res) {
   }
 }
 
-// ✅ NEW: GET /drivers/:id/financial-summary
+// =======================
+// GET /drivers/:id/financial-summary
+// =======================
 async function getDriverFinancialSummary(req, res) {
   try {
     const { id } = req.params;
@@ -250,9 +268,7 @@ async function getDriverFinancialSummary(req, res) {
       take: 100,
     });
 
-    const tripIds = Array.from(
-      new Set(assignments.map((a) => a.trip_id).filter(Boolean))
-    );
+    const tripIds = Array.from(new Set(assignments.map((a) => a.trip_id).filter(Boolean)));
 
     let expenses = [];
     if (tripIds.length > 0) {
@@ -370,7 +386,9 @@ async function getDriverFinancialSummary(req, res) {
   }
 }
 
+// =======================
 // POST /drivers
+// =======================
 async function createDriver(req, res) {
   try {
     const {
@@ -394,11 +412,15 @@ async function createDriver(req, res) {
     const licIssue = parseDateOrNull(license_issue_date);
     const licExpiry = parseDateOrNull(license_expiry_date);
 
-    if (hire_date !== undefined && hireDate === undefined) return res.status(400).json({ message: "Invalid hire_date" });
-    if (license_issue_date !== undefined && licIssue === undefined)
+    if (hire_date !== undefined && hireDate === undefined) {
+      return res.status(400).json({ message: "Invalid hire_date" });
+    }
+    if (license_issue_date !== undefined && licIssue === undefined) {
       return res.status(400).json({ message: "Invalid license_issue_date" });
-    if (license_expiry_date !== undefined && licExpiry === undefined)
+    }
+    if (license_expiry_date !== undefined && licExpiry === undefined) {
       return res.status(400).json({ message: "Invalid license_expiry_date" });
+    }
 
     const statusUpper = status ? upper(status) : "ACTIVE";
     const reasonUpper = disable_reason ? upper(disable_reason) : null;
@@ -435,12 +457,19 @@ async function createDriver(req, res) {
     return res.status(201).json(driver);
   } catch (e) {
     const mapped = prismaErrorToHttp(e);
-    if (mapped) return res.status(mapped.status).json({ message: mapped.message, details: mapped.details });
+    if (mapped) {
+      return res.status(mapped.status).json({
+        message: mapped.message,
+        details: mapped.details,
+      });
+    }
     return res.status(500).json({ message: "Failed to create driver", error: e.message });
   }
 }
 
+// =======================
 // PATCH /drivers/:id
+// =======================
 async function updateDriver(req, res) {
   try {
     const { id } = req.params;
@@ -525,12 +554,19 @@ async function updateDriver(req, res) {
     return res.json(updated);
   } catch (e) {
     const mapped = prismaErrorToHttp(e);
-    if (mapped) return res.status(mapped.status).json({ message: mapped.message, details: mapped.details });
+    if (mapped) {
+      return res.status(mapped.status).json({
+        message: mapped.message,
+        details: mapped.details,
+      });
+    }
     return res.status(500).json({ message: "Failed to update driver", error: e.message });
   }
 }
 
+// =======================
 // PATCH /drivers/:id/status
+// =======================
 async function setDriverStatus(req, res) {
   try {
     const { id } = req.params;
@@ -543,11 +579,18 @@ async function setDriverStatus(req, res) {
     const reasonUpper = req.body?.disable_reason !== undefined ? upper(req.body?.disable_reason) : undefined;
 
     if (statusUpper !== undefined && !validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
-    if (reasonUpper !== undefined && reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) return;
+    if (
+      reasonUpper !== undefined &&
+      reasonUpper &&
+      !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
+    ) {
+      return;
+    }
 
     const data = {};
 
     if (typeof isActive === "boolean") data.is_active = isActive;
+
     if (statusUpper !== undefined) {
       if (!statusUpper) return res.status(400).json({ message: "status cannot be empty" });
       data.status = statusUpper;
@@ -577,10 +620,7 @@ async function setDriverStatus(req, res) {
   }
 }
 
-const express = require("express");
-const router = express.Router();
-
-const {
+module.exports = {
   getActiveDrivers,
   getDrivers,
   getDriverById,
@@ -588,4 +628,4 @@ const {
   createDriver,
   updateDriver,
   setDriverStatus,
-} = require("./drivers.controller");
+};
