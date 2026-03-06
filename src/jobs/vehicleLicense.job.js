@@ -5,17 +5,6 @@
 const cron = require("node-cron");
 const prisma = require("../prisma");
 
-function isExpired(date) {
-  if (!date) return false;
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return false;
-  return d.getTime() < Date.now();
-}
-
-// =======================
-// Disable expired vehicles
-// =======================
-
 async function runVehicleLicenseSweepOnce() {
   console.log("Checking vehicle license expiry...");
 
@@ -26,6 +15,7 @@ async function runVehicleLicenseSweepOnce() {
       where: {
         is_active: true,
         license_expiry_date: {
+          not: null,
           lt: now,
         },
       },
@@ -66,7 +56,12 @@ async function runVehicleLicenseSweepOnce() {
 function startVehicleLicenseMonitor() {
   console.log("Vehicle license monitor started");
 
-  // كل ساعة
+  // run once on startup
+  runVehicleLicenseSweepOnce().catch((err) => {
+    console.error("Initial vehicle license sweep error:", err);
+  });
+
+  // every hour
   cron.schedule("0 * * * *", async () => {
     await runVehicleLicenseSweepOnce();
   });

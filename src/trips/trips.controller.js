@@ -85,7 +85,11 @@ async function enforceDriverCompliance(tx, driver) {
     try {
       await tx.drivers.update({
         where: { id: driver.id },
-        data: { status: "DISABLED", disable_reason: "LICENSE_EXPIRED" },
+       data: {
+  is_active: false,
+  status: "DISABLED",
+  disable_reason: "LICENSE_EXPIRED",
+},
       });
     } catch (_) {}
     return { ok: false, status: 400, message: "Driver license expired" };
@@ -113,7 +117,11 @@ async function enforceVehicleCompliance(tx, vehicle) {
     try {
       await tx.vehicles.update({
         where: { id: vehicle.id },
-        data: { status: "DISABLED", disable_reason: "LICENSE_EXPIRED" },
+        data: {
+  is_active: false,
+  status: "DISABLED",
+  disable_reason: "LICENSE_EXPIRED",
+},
       });
     } catch (_) {}
 

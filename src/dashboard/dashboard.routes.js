@@ -11,7 +11,7 @@ const {
   getDashboardSummary,
   getDashboardTrends,
   getDashboardTrendsBundle,
-  getComplianceAlerts, // ✅ NEW
+  getComplianceAlerts,
 } = require("./dashboard.controller");
 
 // KPIs summary
@@ -23,7 +23,7 @@ router.get("/trends", getDashboardTrends);
 // Bundle trends
 router.get("/trends/bundle", getDashboardTrendsBundle);
 
-// ✅ Compliance alerts (Drivers/Vehicles license expiry)
+// Compliance alerts
 router.get("/compliance-alerts", requireAdminOrHR, getComplianceAlerts);
 
 module.exports = router;

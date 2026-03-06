@@ -15,6 +15,7 @@ async function runDriverLicenseSweepOnce() {
       where: {
         is_active: true,
         license_expiry_date: {
+          not: null,
           lt: now,
         },
       },
@@ -36,7 +37,8 @@ async function runDriverLicenseSweepOnce() {
       },
       data: {
         is_active: false,
-        status: "SUSPENDED",
+        status: "DISABLED",
+        disable_reason: "LICENSE_EXPIRED",
         updated_at: new Date(),
       },
     });
@@ -54,7 +56,12 @@ async function runDriverLicenseSweepOnce() {
 function startDriverLicenseMonitor() {
   console.log("Driver license monitor started");
 
-  // كل ساعة
+  // run once on startup
+  runDriverLicenseSweepOnce().catch((err) => {
+    console.error("Initial driver license sweep error:", err);
+  });
+
+  // every hour
   cron.schedule("0 * * * *", async () => {
     await runDriverLicenseSweepOnce();
   });
