@@ -14,6 +14,7 @@ const {
   getDriverById,
   updateDriver,
   setDriverStatus,
+  getDriverFinancialSummary, // ✅ FIX: added import
 } = require("./drivers.controller");
 
 const router = Router();
@@ -28,9 +29,12 @@ router.patch("/:id/status", setDriverStatus);
 // CRUD
 router.get("/", getDrivers);
 router.post("/", createDriver);
+
+// financial
 router.get("/:id/financial-summary", getDriverFinancialSummary);
+
+// normal routes
 router.get("/:id", getDriverById);
 router.patch("/:id", updateDriver);
-
 
 module.exports = router;
