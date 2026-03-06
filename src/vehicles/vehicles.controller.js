@@ -56,7 +56,7 @@ function isExpiredDate(d) {
   return dt.getTime() < Date.now();
 }
 
-// ✅ dropdown label: fleet_no - plate_no (fallbacks)
+// dropdown label
 function buildVehicleLabel(v) {
   const fn = v.fleet_no ? String(v.fleet_no).trim() : "";
   const pn = v.plate_no ? String(v.plate_no).trim() : "";
@@ -66,12 +66,7 @@ function buildVehicleLabel(v) {
 }
 
 // =======================
-// ✅ NEW: GET /vehicles/active
-// query: q (optional) => dropdown search
-// returns ONLY compliant vehicles:
-// - is_active=true
-// - status=AVAILABLE
-// - license_expiry_date not expired (or null)
+// GET /vehicles/active
 // =======================
 async function getActiveVehicles(req, res) {
   try {
@@ -92,7 +87,6 @@ async function getActiveVehicles(req, res) {
         : {}),
     };
 
-    // Pull minimal fields first
     const list = await prisma.vehicles.findMany({
       where,
       orderBy: [{ fleet_no: "asc" }, { plate_no: "asc" }],
@@ -108,7 +102,6 @@ async function getActiveVehicles(req, res) {
       },
     });
 
-    // Hard compliance filter (no expired licenses)
     const items = (list || [])
       .filter((v) => !isExpiredDate(v.license_expiry_date))
       .map((v) => ({
@@ -136,14 +129,12 @@ async function getActiveVehicles(req, res) {
  */
 async function getVehicles(req, res) {
   try {
-    const { q, status, is_active, page, limit, unassigned, supervisor_id } = req.query || {};
+    const { q, status, is_active, page, limit, pageSize, unassigned, supervisor_id } = req.query || {};
     const where = {};
 
-    // --------- role awareness (for unassigned + supervisor scope) ----------
     const role = getAuthRole(req);
     const userId = req.user?.sub || null;
 
-    // unassigned=true => supervisor_id IS NULL (Admin/HR فقط)
     if (String(unassigned || "").toLowerCase() === "true") {
       if (role !== "ADMIN" && role !== "HR") {
         return res.status(403).json({ message: "Forbidden" });
@@ -151,9 +142,6 @@ async function getVehicles(req, res) {
       where.supervisor_id = null;
     }
 
-    // supervisor_id filter:
-    // - Field Supervisor: يشوف عربياته فقط (حتى لو لم يرسل supervisor_id)
-    // - Admin/HR: يقدر يفلتر بأي supervisor_id
     if (role === "FIELD_SUPERVISOR") {
       where.supervisor_id = userId;
     } else if (supervisor_id) {
@@ -175,8 +163,9 @@ async function getVehicles(req, res) {
       ];
     }
 
+    const limitInput = limit ?? pageSize;
     const pageNum = Math.max(1, parseIntQuery(page, 1));
-    const limitNum = Math.min(100, Math.max(1, parseIntQuery(limit, 20)));
+    const limitNum = Math.min(100, Math.max(1, parseIntQuery(limitInput, 20)));
     const skip = (pageNum - 1) * limitNum;
 
     const [itemsRaw, total] = await Promise.all([
@@ -193,15 +182,14 @@ async function getVehicles(req, res) {
           status: true,
           is_active: true,
           supervisor_id: true,
-
           current_odometer: true,
           gps_device_id: true,
-
+          model: true,
+          year: true,
           license_no: true,
           license_issue_date: true,
           license_expiry_date: true,
           disable_reason: true,
-
           created_at: true,
           updated_at: true,
         },
@@ -217,7 +205,12 @@ async function getVehicles(req, res) {
 
     return res.json({
       items,
-      meta: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
     });
   } catch (e) {
     console.log("GET VEHICLES ERROR:", e);
@@ -243,8 +236,6 @@ async function getVehicleById(req, res) {
 
 /**
  * POST /vehicles
- * body: { fleet_no, plate_no, status?, display_name?, model?, year?, current_odometer?, gps_device_id?, is_active? }
- * + license fields
  */
 async function createVehicle(req, res) {
   try {
@@ -258,7 +249,6 @@ async function createVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
-
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -291,10 +281,12 @@ async function createVehicle(req, res) {
 
     const licIssue = parseDateOrNull(license_issue_date);
     const licExpiry = parseDateOrNull(license_expiry_date);
-    if (license_issue_date !== undefined && licIssue === undefined)
+    if (license_issue_date !== undefined && licIssue === undefined) {
       return res.status(400).json({ message: "Invalid license_issue_date" });
-    if (license_expiry_date !== undefined && licExpiry === undefined)
+    }
+    if (license_expiry_date !== undefined && licExpiry === undefined) {
       return res.status(400).json({ message: "Invalid license_expiry_date" });
+    }
 
     const now = new Date();
 
@@ -309,12 +301,10 @@ async function createVehicle(req, res) {
         current_odometer: odometerValue,
         gps_device_id: gps_device_id ? String(gps_device_id).trim() : null,
         is_active: typeof is_active === "boolean" ? is_active : true,
-
         license_no: license_no ? String(license_no).trim() : null,
         license_issue_date: licIssue === undefined ? null : licIssue,
         license_expiry_date: licExpiry === undefined ? null : licExpiry,
         disable_reason: disable_reason ? upper(disable_reason) : null,
-
         created_at: now,
         updated_at: now,
       },
@@ -341,8 +331,8 @@ async function updateVehicle(req, res) {
     if (!exists) return res.status(404).json({ message: "Vehicle not found" });
 
     const role = getAuthRole(req);
-
     const body = req.body || {};
+
     const {
       fleet_no,
       plate_no,
@@ -354,7 +344,6 @@ async function updateVehicle(req, res) {
       gps_device_id,
       is_active,
       supervisor_id,
-
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -381,7 +370,9 @@ async function updateVehicle(req, res) {
       if (year === null) data.year = null;
       else {
         const n = Number(year);
-        if (!Number.isFinite(n) || !Number.isInteger(n)) return res.status(400).json({ message: "year must be an integer" });
+        if (!Number.isFinite(n) || !Number.isInteger(n)) {
+          return res.status(400).json({ message: "year must be an integer" });
+        }
         data.year = n;
       }
     }
@@ -400,7 +391,6 @@ async function updateVehicle(req, res) {
     if (gps_device_id !== undefined) data.gps_device_id = gps_device_id ? String(gps_device_id).trim() : null;
     if (typeof is_active === "boolean") data.is_active = is_active;
 
-    // license fields
     if (license_no !== undefined) data.license_no = license_no ? String(license_no).trim() : null;
 
     if (license_issue_date !== undefined) {
@@ -417,7 +407,6 @@ async function updateVehicle(req, res) {
 
     if (disable_reason !== undefined) data.disable_reason = disable_reason ? upper(disable_reason) : null;
 
-    // ✅ allow supervisor_id update (Admin/HR only)
     if (Object.prototype.hasOwnProperty.call(body, "supervisor_id")) {
       if (role !== "ADMIN" && role !== "HR") {
         return res.status(403).json({ message: "Forbidden (supervisor assignment is ADMIN/HR only)" });
@@ -468,7 +457,6 @@ async function toggleVehicle(req, res) {
 
 /**
  * DELETE /vehicles/:id
- * (deactivate بدل حذف فعلي)
  */
 async function deleteVehicle(req, res) {
   try {
@@ -489,7 +477,7 @@ async function deleteVehicle(req, res) {
 }
 
 module.exports = {
-  getActiveVehicles, // ✅ NEW export
+  getActiveVehicles,
   getVehicles,
   getVehicleById,
   createVehicle,

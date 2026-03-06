@@ -1,6 +1,7 @@
 // =======================
 // src/drivers/drivers.controller.js
 // FINAL: driver compliance fields + enum validation + license expiry guard
+// + driver financial summary
 // =======================
 
 const prisma = require("../prisma");
@@ -27,17 +28,16 @@ function pickPagination(req) {
 function prismaErrorToHttp(e) {
   const code = e?.code;
   if (code === "P2002") {
-    // meta.target usually contains violated unique fields
     return { status: 400, message: "Duplicate value (unique field conflict)", details: e?.meta };
   }
   return null;
 }
 
 function parseDateOrNull(v) {
-  if (v === undefined) return undefined; // not provided
+  if (v === undefined) return undefined;
   if (v === null || v === "") return null;
   const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return undefined; // invalid
+  if (Number.isNaN(d.getTime())) return undefined;
   return d;
 }
 
@@ -65,20 +65,10 @@ function isExpired(expiryDate) {
   return exp.getTime() < Date.now();
 }
 
-/**
- * Apply consistency rules:
- * - ACTIVE => is_active true
- * - INACTIVE => is_active false
- * - DISABLED => is_active false
- * - If license expired => force DISABLED + LICENSE_EXPIRED + is_active false
- * - Prevent setting ACTIVE while license expired
- */
 function applyDriverStateRules(res, data, incoming) {
-  // incoming may have: status, disable_reason, is_active, license_expiry_date
   const nextStatus = incoming.status !== undefined ? incoming.status : data.status;
   const nextExpiry = incoming.license_expiry_date !== undefined ? incoming.license_expiry_date : data.license_expiry_date;
 
-  // If expiry is in the past -> force disable
   if (nextExpiry && isExpired(nextExpiry)) {
     data.status = "DISABLED";
     data.disable_reason = "LICENSE_EXPIRED";
@@ -86,18 +76,15 @@ function applyDriverStateRules(res, data, incoming) {
     return true;
   }
 
-  // If user tries to set ACTIVE while expired (extra safety)
   if (nextStatus === "ACTIVE" && nextExpiry && isExpired(nextExpiry)) {
     res.status(400).json({ message: "Cannot set driver ACTIVE: license is expired" });
     return false;
   }
 
-  // Sync status <-> is_active
   if (nextStatus === "ACTIVE") data.is_active = true;
   if (nextStatus === "INACTIVE") data.is_active = false;
   if (nextStatus === "DISABLED") data.is_active = false;
 
-  // If status is not DISABLED => clear reason (unless explicitly provided)
   if (nextStatus && nextStatus !== "DISABLED" && incoming.disable_reason === undefined) {
     data.disable_reason = null;
   }
@@ -105,15 +92,14 @@ function applyDriverStateRules(res, data, incoming) {
   return true;
 }
 
-// ✅ NEW: GET /drivers/active
-// query: q (optional) => used for dropdown search
+// ✅ GET /drivers/active
 async function getActiveDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
 
     const where = {
       is_active: true,
-      status: "ACTIVE", // ✅ only ACTIVE drivers in dropdown
+      status: "ACTIVE",
       ...(q
         ? {
             OR: [
@@ -147,7 +133,6 @@ async function getActiveDrivers(req, res) {
 }
 
 // GET /drivers
-// query: q, is_active, status, page, pageSize
 async function getDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -204,6 +189,187 @@ async function getDriverById(req, res) {
   }
 }
 
+// ✅ NEW: GET /drivers/:id/financial-summary
+async function getDriverFinancialSummary(req, res) {
+  try {
+    const { id } = req.params;
+
+    const driver = await prisma.drivers.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        full_name: true,
+        phone: true,
+        phone2: true,
+        national_id: true,
+        hire_date: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        status: true,
+        disable_reason: true,
+        is_active: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    if (!driver) {
+      return res.status(404).json({ message: "Driver not found" });
+    }
+
+    const assignments = await prisma.trip_assignments.findMany({
+      where: { driver_id: id },
+      orderBy: { assigned_at: "desc" },
+      select: {
+        id: true,
+        trip_id: true,
+        assigned_at: true,
+        is_active: true,
+        unassigned_at: true,
+        trips: {
+          select: {
+            id: true,
+            status: true,
+            scheduled_at: true,
+            created_at: true,
+            financial_status: true,
+            clients: { select: { id: true, name: true } },
+            sites: { select: { id: true, name: true } },
+          },
+        },
+        vehicles: {
+          select: {
+            id: true,
+            fleet_no: true,
+            plate_no: true,
+            display_name: true,
+          },
+        },
+      },
+      take: 100,
+    });
+
+    const tripIds = Array.from(
+      new Set(assignments.map((a) => a.trip_id).filter(Boolean))
+    );
+
+    let expenses = [];
+    if (tripIds.length > 0) {
+      expenses = await prisma.cash_expenses.findMany({
+        where: {
+          trip_id: { in: tripIds },
+        },
+        orderBy: { created_at: "desc" },
+        select: {
+          id: true,
+          trip_id: true,
+          vehicle_id: true,
+          expense_type: true,
+          amount: true,
+          notes: true,
+          approval_status: true,
+          payment_source: true,
+          created_at: true,
+          trips: {
+            select: {
+              id: true,
+              status: true,
+              clients: { select: { name: true } },
+              sites: { select: { name: true } },
+            },
+          },
+          vehicles: {
+            select: {
+              id: true,
+              fleet_no: true,
+              plate_no: true,
+              display_name: true,
+            },
+          },
+        },
+        take: 200,
+      });
+    }
+
+    const totalTrips = tripIds.length;
+    const completedTrips = assignments.filter((a) => a?.trips?.status === "COMPLETED").length;
+    const activeTrips = assignments.filter((a) => a?.is_active === true).length;
+
+    const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const approvedExpenses = expenses
+      .filter((e) => e.approval_status === "APPROVED")
+      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const pendingExpenses = expenses
+      .filter((e) => e.approval_status === "PENDING")
+      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    const recentTrips = assignments.slice(0, 20).map((a) => ({
+      assignment_id: a.id,
+      trip_id: a.trip_id,
+      assigned_at: a.assigned_at,
+      is_active: a.is_active,
+      unassigned_at: a.unassigned_at,
+      trip_status: a.trips?.status || null,
+      scheduled_at: a.trips?.scheduled_at || null,
+      created_at: a.trips?.created_at || null,
+      financial_status: a.trips?.financial_status || null,
+      client: a.trips?.clients?.name || null,
+      site: a.trips?.sites?.name || null,
+      vehicle: a.vehicles
+        ? {
+            id: a.vehicles.id,
+            fleet_no: a.vehicles.fleet_no,
+            plate_no: a.vehicles.plate_no,
+            display_name: a.vehicles.display_name,
+          }
+        : null,
+    }));
+
+    const recentExpenses = expenses.slice(0, 20).map((e) => ({
+      id: e.id,
+      trip_id: e.trip_id,
+      expense_type: e.expense_type,
+      amount: Number(e.amount || 0),
+      notes: e.notes,
+      approval_status: e.approval_status,
+      payment_source: e.payment_source,
+      created_at: e.created_at,
+      trip_status: e.trips?.status || null,
+      client: e.trips?.clients?.name || null,
+      site: e.trips?.sites?.name || null,
+      vehicle: e.vehicles
+        ? {
+            id: e.vehicles.id,
+            fleet_no: e.vehicles.fleet_no,
+            plate_no: e.vehicles.plate_no,
+            display_name: e.vehicles.display_name,
+          }
+        : null,
+    }));
+
+    return res.json({
+      driver,
+      summary: {
+        total_trips: totalTrips,
+        completed_trips: completedTrips,
+        active_trips: activeTrips,
+        expenses_count: expenses.length,
+        total_expenses: totalExpenses,
+        approved_expenses: approvedExpenses,
+        pending_expenses: pendingExpenses,
+      },
+      recent_trips: recentTrips,
+      recent_expenses: recentExpenses,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Failed to fetch driver financial summary",
+      error: e.message,
+    });
+  }
+}
+
 // POST /drivers
 async function createDriver(req, res) {
   try {
@@ -254,8 +420,14 @@ async function createDriver(req, res) {
       is_active: typeof is_active === "boolean" ? is_active : true,
     };
 
-    // enforce rules (auto-disable if expired, sync is_active)
-    if (!applyDriverStateRules(res, data, { status: data.status, disable_reason: data.disable_reason, is_active: data.is_active, license_expiry_date: data.license_expiry_date })) {
+    if (
+      !applyDriverStateRules(res, data, {
+        status: data.status,
+        disable_reason: data.disable_reason,
+        is_active: data.is_active,
+        license_expiry_date: data.license_expiry_date,
+      })
+    ) {
       return;
     }
 
@@ -339,7 +511,6 @@ async function updateDriver(req, res) {
 
     if (typeof is_active === "boolean") data.is_active = is_active;
 
-    // Apply rules using "future" values (merge exists + data)
     const incoming = {
       status: data.status !== undefined ? data.status : exists.status,
       disable_reason: data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
@@ -360,7 +531,6 @@ async function updateDriver(req, res) {
 }
 
 // PATCH /drivers/:id/status
-// body: { is_active: boolean } OR { status, disable_reason? }
 async function setDriverStatus(req, res) {
   try {
     const { id } = req.params;
@@ -378,7 +548,6 @@ async function setDriverStatus(req, res) {
     const data = {};
 
     if (typeof isActive === "boolean") data.is_active = isActive;
-
     if (statusUpper !== undefined) {
       if (!statusUpper) return res.status(400).json({ message: "status cannot be empty" });
       data.status = statusUpper;
@@ -392,12 +561,11 @@ async function setDriverStatus(req, res) {
       return res.status(400).json({ message: "Provide is_active and/or status" });
     }
 
-    // Apply rules (consider existing expiry too)
     const incoming = {
       status: data.status !== undefined ? data.status : exists.status,
       disable_reason: data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
       is_active: data.is_active !== undefined ? data.is_active : exists.is_active,
-      license_expiry_date: exists.license_expiry_date, // status endpoint doesn't change expiry
+      license_expiry_date: exists.license_expiry_date,
     };
 
     if (!applyDriverStateRules(res, data, incoming)) return;
@@ -413,6 +581,7 @@ module.exports = {
   getActiveDrivers,
   getDrivers,
   getDriverById,
+  getDriverFinancialSummary,
   createDriver,
   updateDriver,
   setDriverStatus,

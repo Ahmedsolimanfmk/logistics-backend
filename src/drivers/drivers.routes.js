@@ -30,5 +30,6 @@ router.get("/", getDrivers);
 router.post("/", createDriver);
 router.get("/:id", getDriverById);
 router.patch("/:id", updateDriver);
+router.get("/:id/financial-summary", getDriverFinancialSummary);
 
 module.exports = router;
