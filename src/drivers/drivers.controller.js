@@ -577,7 +577,10 @@ async function setDriverStatus(req, res) {
   }
 }
 
-module.exports = {
+const express = require("express");
+const router = express.Router();
+
+const {
   getActiveDrivers,
   getDrivers,
   getDriverById,
@@ -585,4 +588,4 @@ module.exports = {
   createDriver,
   updateDriver,
   setDriverStatus,
-};
+} = require("./drivers.controller");
