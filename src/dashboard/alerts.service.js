@@ -505,15 +505,15 @@ async function getMaintenanceAlerts() {
     )
     SELECT
       d.work_order_id AS id,
-      MAX(wo.updated_at) AS updated_at,
-      MAX(wo.vehicle_id) AS vehicle_id,
+      wo.updated_at,
+      wo.vehicle_id,
       COUNT(*)::int AS mismatch_lines
     FROM diff d
     JOIN maintenance_work_orders wo ON wo.id = d.work_order_id
     WHERE wo.status = 'COMPLETED'
       AND (d.issued_qty <> d.installed_qty)
-    GROUP BY d.work_order_id
-    ORDER BY MAX(wo.updated_at) ASC
+    GROUP BY d.work_order_id, wo.updated_at, wo.vehicle_id
+    ORDER BY wo.updated_at ASC
     LIMIT 50;
   `;
 
