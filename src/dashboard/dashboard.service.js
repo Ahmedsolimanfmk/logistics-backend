@@ -90,6 +90,157 @@ function isSupervisorRole(role) {
   return roleUpper(role) === "FIELD_SUPERVISOR";
 }
 
+function toMoneyNumber(v) {
+  return Number(Number(v ?? 0).toFixed(2));
+}
+
+function daysBetweenCairo(fromDate, toDate) {
+  const from = DateTime.fromJSDate(
+    fromDate instanceof Date ? fromDate : new Date(fromDate),
+    { zone: CAIRO_TZ }
+  ).startOf("day");
+
+  const to = DateTime.fromJSDate(
+    toDate instanceof Date ? toDate : new Date(toDate),
+    { zone: CAIRO_TZ }
+  ).startOf("day");
+
+  return Math.round(to.diff(from, "days").days);
+}
+
+/**
+ * ===============================
+ * AR Due Alerts Helper
+ * ===============================
+ * Rules:
+ * - status in APPROVED / PARTIALLY_PAID
+ * - due_date exists
+ * - outstanding = total_amount - allocated payments
+ * - overdue   => due_date < today (Cairo day start)
+ * - due soon  => today <= due_date < today + 8 days
+ *                (اليوم + 7 أيام قادمة)
+ *
+ * ملاحظة:
+ * ar_invoices لا تحتوي على site_id في الـ schema الحالي
+ * لذلك الفلترة هنا ستكون على clientId فقط.
+ */
+async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
+  const todayStartCairo = DateTime.now().setZone(CAIRO_TZ).startOf("day");
+  const dueSoonEndExclusiveCairo = todayStartCairo.plus({ days: 8 });
+
+  const todayStartUtc = todayStartCairo.toUTC().toJSDate();
+
+  const rows = await prisma.$queryRaw`
+    SELECT
+      i.id,
+      i.invoice_no,
+      i.client_id,
+      i.issue_date,
+      i.due_date,
+      i.total_amount::numeric AS total_amount,
+      i.status,
+      c.name AS client_name,
+      COALESCE(SUM(a.amount_allocated), 0)::numeric AS allocated_amount
+    FROM ar_invoices i
+    LEFT JOIN ar_payment_allocations a
+      ON a.invoice_id = i.id
+    LEFT JOIN clients c
+      ON c.id = i.client_id
+    WHERE i.status IN ('APPROVED', 'PARTIALLY_PAID')
+      AND i.due_date IS NOT NULL
+      AND (${clientId}::uuid IS NULL OR i.client_id = ${clientId}::uuid)
+    GROUP BY
+      i.id,
+      i.invoice_no,
+      i.client_id,
+      i.issue_date,
+      i.due_date,
+      i.total_amount,
+      i.status,
+      c.name
+  `;
+
+  const overdueInvoices = [];
+  const dueSoonInvoices = [];
+
+  for (const r of rows || []) {
+    const totalAmount = Number(r.total_amount ?? 0);
+    const allocatedAmount = Number(r.allocated_amount ?? 0);
+    const outstandingAmount = totalAmount - allocatedAmount;
+
+    if (!(outstandingAmount > 0)) continue;
+
+    const dueDateJs = r.due_date instanceof Date ? r.due_date : new Date(r.due_date);
+    const dueDateCairo = DateTime.fromJSDate(dueDateJs, { zone: CAIRO_TZ }).startOf("day");
+
+    const baseRow = {
+      id: r.id,
+      invoice_no: r.invoice_no,
+      client_id: r.client_id,
+      client_name: r.client_name || null,
+      issue_date: r.issue_date,
+      due_date: r.due_date,
+      total_amount: toMoneyNumber(totalAmount),
+      allocated_amount: toMoneyNumber(allocatedAmount),
+      outstanding_amount: toMoneyNumber(outstandingAmount),
+      status: r.status,
+    };
+
+    if (dueDateCairo < todayStartCairo) {
+      overdueInvoices.push({
+        ...baseRow,
+        days_overdue: daysBetweenCairo(dueDateJs, todayStartUtc),
+      });
+      continue;
+    }
+
+    if (
+      dueDateCairo >= todayStartCairo &&
+      dueDateCairo < dueSoonEndExclusiveCairo
+    ) {
+      dueSoonInvoices.push({
+        ...baseRow,
+        days_to_due: daysBetweenCairo(todayStartUtc, dueDateJs),
+      });
+    }
+  }
+
+  overdueInvoices.sort((a, b) => {
+    const aDue = new Date(a.due_date).getTime();
+    const bDue = new Date(b.due_date).getTime();
+
+    if (aDue !== bDue) return aDue - bDue;
+    return b.outstanding_amount - a.outstanding_amount;
+  });
+
+  dueSoonInvoices.sort((a, b) => {
+    const aDue = new Date(a.due_date).getTime();
+    const bDue = new Date(b.due_date).getTime();
+
+    if (aDue !== bDue) return aDue - bDue;
+    return b.outstanding_amount - a.outstanding_amount;
+  });
+
+  const ar_overdue_count = overdueInvoices.length;
+  const ar_due_soon_count = dueSoonInvoices.length;
+
+  const ar_overdue_total = toMoneyNumber(
+    overdueInvoices.reduce((sum, x) => sum + Number(x.outstanding_amount ?? 0), 0)
+  );
+  const ar_due_soon_total = toMoneyNumber(
+    dueSoonInvoices.reduce((sum, x) => sum + Number(x.outstanding_amount ?? 0), 0)
+  );
+
+  return {
+    ar_due_soon_count,
+    ar_overdue_count,
+    ar_due_soon_total,
+    ar_overdue_total,
+    top_ar_overdue_invoices: overdueInvoices.slice(0, top),
+    top_ar_due_soon_invoices: dueSoonInvoices.slice(0, top),
+  };
+}
+
 /**
  * ===============================
  * ✅ Dashboard Summary (TAB-BASED)
@@ -106,12 +257,10 @@ exports.getSummary = async (user, filters = {}) => {
   const month = getCairoMonthRange();
   const isSupervisor = isSupervisorRole(user?.role);
 
-  // ✅ cache for summary
   const key = cacheKey(user, { ...filters, tab });
   const cached = cacheGet(key);
   if (cached) return cached;
 
-  // response shell
   const out = {
     range: {
       today: { from: today.from, to: today.to },
@@ -122,9 +271,6 @@ exports.getSummary = async (user, filters = {}) => {
     alerts: {},
   };
 
-  // =========================
-  // Helpers for conditions
-  // =========================
   const tripWhereTodayBase = {
     created_at: { gte: today.from, lte: today.to },
     ...(clientId ? { client_id: clientId } : {}),
@@ -141,7 +287,6 @@ exports.getSummary = async (user, filters = {}) => {
   // OPERATIONS TAB
   // =========================
   const loadOperations = async () => {
-    // Trips today by status
     let tripsTodayByStatus = [];
     if (!isSupervisor) {
       tripsTodayByStatus = await prisma.trips.groupBy({
@@ -173,7 +318,6 @@ exports.getSummary = async (user, filters = {}) => {
       tripsToday.total += Number(c);
     }
 
-    // Trips month count
     let tripsMonthCount = 0;
     if (!isSupervisor) {
       tripsMonthCount = await prisma.trips.count({ where: tripWhereMonthBase });
@@ -191,7 +335,6 @@ exports.getSummary = async (user, filters = {}) => {
       tripsMonthCount = Number(rows?.[0]?.count ?? 0);
     }
 
-    // Vehicles snapshot
     const vehiclesAgg = await prisma.vehicles.groupBy({
       by: ["status"],
       _count: { status: true },
@@ -205,7 +348,6 @@ exports.getSummary = async (user, filters = {}) => {
     }
     vehicles.total = vehiclesTotal;
 
-    // Active trips now
     const activeTripsNowRows = await prisma.$queryRaw`
       SELECT
         t.id AS trip_id,
@@ -243,7 +385,6 @@ exports.getSummary = async (user, filters = {}) => {
       driver_name: r.driver_name,
     }));
 
-    // Trips needing finance close
     const needingClose = await prisma.trips.findMany({
       where: {
         status: "COMPLETED",
@@ -287,7 +428,6 @@ exports.getSummary = async (user, filters = {}) => {
   // FINANCE TAB
   // =========================
   const loadFinance = async () => {
-    // Expenses today (sum by status)
     const expensesAgg = await prisma.cash_expenses.groupBy({
       by: ["approval_status"],
       where: {
@@ -305,7 +445,6 @@ exports.getSummary = async (user, filters = {}) => {
       expensesToday.total += v;
     }
 
-    // ✅ Top expense types today (APPROVED only)
     const topTypes = await prisma.cash_expenses.groupBy({
       by: ["expense_type"],
       where: {
@@ -323,7 +462,6 @@ exports.getSummary = async (user, filters = {}) => {
       amount: Number(x._sum.amount ?? 0),
     }));
 
-    // Outstanding advances
     const advancesRows = await prisma.$queryRaw`
       SELECT
         a.id,
@@ -347,7 +485,6 @@ exports.getSummary = async (user, filters = {}) => {
       advancesRemainingTotal += adv - exp;
     }
 
-    // alerts engine
     const nowCairo = DateTime.now().setZone(CAIRO_TZ);
     const pending48h = nowCairo.minus({ hours: 48 }).toJSDate();
     const advance7d = nowCairo.minus({ days: 7 }).toJSDate();
@@ -368,7 +505,6 @@ exports.getSummary = async (user, filters = {}) => {
       },
     });
 
-    // pending expenses top10
     const pendingExpenses = await prisma.cash_expenses.findMany({
       where: {
         approval_status: "PENDING",
@@ -408,7 +544,6 @@ exports.getSummary = async (user, filters = {}) => {
       site: e.trips?.sites?.name,
     }));
 
-    // open advances top10
     const openAdvancesList = await prisma.$queryRaw`
       SELECT
         a.id,
@@ -440,6 +575,43 @@ exports.getSummary = async (user, filters = {}) => {
       };
     });
 
+    // =========================
+    // ✅ NEW: AR DUE ALERTS
+    // =========================
+    const arDue = await getArDueAlerts({
+      clientId,
+      top: 10,
+    });
+
+    out.tables.top_ar_overdue_invoices = arDue.top_ar_overdue_invoices;
+    out.tables.top_ar_due_soon_invoices = arDue.top_ar_due_soon_invoices;
+
+    out.cards.ar_due_soon = {
+      count: arDue.ar_due_soon_count,
+      total: arDue.ar_due_soon_total,
+    };
+
+    out.cards.ar_overdue = {
+      count: arDue.ar_overdue_count,
+      total: arDue.ar_overdue_total,
+    };
+
+    // Placeholder AP
+    out.cards.ap_due_soon = {
+      enabled: false,
+      count: 0,
+      total: 0,
+    };
+
+    out.cards.ap_overdue = {
+      enabled: false,
+      count: 0,
+      total: 0,
+    };
+
+    out.tables.top_ap_overdue_payables = [];
+    out.tables.top_ap_due_soon_payables = [];
+
     out.cards.expenses_today = expensesToday;
     out.cards.advances_outstanding = {
       count: advancesOutstandingCount,
@@ -449,6 +621,17 @@ exports.getSummary = async (user, filters = {}) => {
     out.alerts.expenses_pending_too_long = pendingExpensesTooLong;
     out.alerts.advances_open = advancesOutstandingCount;
     out.alerts.advances_open_too_long = advancesOpenTooLong;
+
+    out.alerts.ar_due_soon_count = arDue.ar_due_soon_count;
+    out.alerts.ar_overdue_count = arDue.ar_overdue_count;
+    out.alerts.ar_due_soon_total = arDue.ar_due_soon_total;
+    out.alerts.ar_overdue_total = arDue.ar_overdue_total;
+
+    out.alerts.ap_enabled = false;
+    out.alerts.ap_due_soon_count = 0;
+    out.alerts.ap_overdue_count = 0;
+    out.alerts.ap_due_soon_total = 0;
+    out.alerts.ap_overdue_total = 0;
   };
 
   // =========================
@@ -458,12 +641,10 @@ exports.getSummary = async (user, filters = {}) => {
     const dayFrom = today.from;
     const dayTo = today.to;
 
-    // ✅ Open WOs
     const open_work_orders = await prisma.maintenance_work_orders.count({
       where: { status: { in: ["OPEN", "IN_PROGRESS"] } },
     });
 
-    // ✅ Completed today
     const completedTodayRows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS count
       FROM maintenance_work_orders wo
@@ -473,7 +654,6 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const completed_today = Number(completedTodayRows?.[0]?.count ?? 0);
 
-    // ✅ Parts cost today
     const partsCostTodayRows = await prisma.$queryRaw`
       SELECT COALESCE(SUM(l.total_cost), 0)::numeric AS value
       FROM inventory_issue_lines l
@@ -483,7 +663,6 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const maintenance_parts_cost_today = Number(partsCostTodayRows?.[0]?.value ?? 0);
 
-    // ✅ Cash cost today (WO-linked)
     const cashTodayRows = await prisma.$queryRaw`
       SELECT COALESCE(SUM(e.amount), 0)::numeric AS value
       FROM cash_expenses e
@@ -493,9 +672,9 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const maintenance_cash_cost_today = Number(cashTodayRows?.[0]?.value ?? 0);
 
-    const maintenance_cost_today = maintenance_parts_cost_today + maintenance_cash_cost_today;
+    const maintenance_cost_today =
+      maintenance_parts_cost_today + maintenance_cash_cost_today;
 
-    // ✅ QA needs (completed without post report)
     const qaNeedsRows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS count
       FROM maintenance_work_orders wo
@@ -506,7 +685,6 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const qa_needs = Number(qaNeedsRows?.[0]?.count ?? 0);
 
-    // ✅ QA failed
     const qaFailedRows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS count
       FROM post_maintenance_reports pr
@@ -514,7 +692,6 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const qa_failed = Number(qaFailedRows?.[0]?.count ?? 0);
 
-    // ✅ Parts mismatch (issued != installed)
     const mismatchRows = await prisma.$queryRaw`
       WITH issued AS (
         SELECT i.work_order_id, l.part_id, COALESCE(SUM(l.qty), 0)::numeric AS issued_qty
@@ -546,7 +723,6 @@ exports.getSummary = async (user, filters = {}) => {
     `;
     const parts_mismatch = Number(mismatchRows?.[0]?.count ?? 0);
 
-    // ✅ IMPORTANT: keys match frontend (cards.maintenance.*)
     out.cards.maintenance = {
       open_work_orders,
       completed_today,
@@ -577,9 +753,6 @@ exports.getSummary = async (user, filters = {}) => {
     out.alerts.maintenance_qa_needs = qa_needs;
   };
 
-  // =========================
-  // ✅ Execute per tab
-  // =========================
   if (tab === "finance") await loadFinance();
   else if (tab === "maintenance") await loadMaintenance();
   else await loadOperations();
