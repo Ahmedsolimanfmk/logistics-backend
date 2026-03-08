@@ -31,8 +31,11 @@ router.get("/trends/bundle", getDashboardTrendsBundle);
 // Central alerts
 router.get("/alerts", getDashboardAlerts);
 router.get("/alerts/summary", getDashboardAlertsSummary);
+router.patch("/dashboard/alerts/read", auth, alertsController.markAlertRead);
+router.patch("/dashboard/alerts/read-all", auth, alertsController.markAllDashboardAlertsRead);
 
 // Compliance alerts
 router.get("/compliance-alerts", requireAdminOrHR, getComplianceAlerts);
+
 
 module.exports = router;
