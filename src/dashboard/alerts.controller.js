@@ -9,6 +9,12 @@ function parseIntSafe(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseReadStatus(v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "read" || s === "unread") return s;
+  return "all";
+}
+
 exports.getDashboardAlerts = async (req, res, next) => {
   try {
     const user = req.user;
@@ -18,6 +24,7 @@ exports.getDashboardAlerts = async (req, res, next) => {
       area: req.query.area,
       clientId: req.query.clientId,
       siteId: req.query.siteId,
+      readStatus: parseReadStatus(req.query.read_status),
     };
 
     const data = await alertsService.getAlerts(user, filters);
@@ -39,6 +46,49 @@ exports.getDashboardAlertsSummary = async (req, res, next) => {
 
     const data = await alertsService.getAlertsSummary(user, filters);
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.markAlertRead = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const alertKey = String(req.body?.alert_key || "").trim();
+
+    if (!alertKey) {
+      return res.status(400).json({
+        message: "alert_key is required",
+      });
+    }
+
+    const data = await alertsService.markAlertRead(user, alertKey);
+    res.json({
+      ok: true,
+      item: data,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.markAllDashboardAlertsRead = async (req, res, next) => {
+  try {
+    const user = req.user;
+
+    const filters = {
+      area: req.body?.area ?? req.query.area,
+      clientId: req.body?.clientId ?? req.query.clientId,
+      siteId: req.body?.siteId ?? req.query.siteId,
+      readStatus: "unread",
+    };
+
+    const data = await alertsService.markAllAlertsRead(user, filters);
+
+    res.json({
+      ok: true,
+      updated: Number(data.updated || 0),
+    });
   } catch (err) {
     next(err);
   }

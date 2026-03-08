@@ -62,6 +62,7 @@ function buildAlert({
 }) {
   return {
     id,
+    alert_key: id,
     type,
     severity,
     area,
@@ -72,6 +73,8 @@ function buildAlert({
     href,
     created_at,
     meta: meta || {},
+    is_read: false,
+    read_at: null,
     _sort_order: Number(sort_order || 0),
   };
 }
@@ -638,7 +641,10 @@ async function getComplianceAlerts() {
 
   for (const v of vehiclesExpired || []) {
     const daysOverdue = daysBetweenCairo(v.license_expiry_date, now);
-    const label = [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") || v.display_name || String(v.id).slice(0, 8);
+    const label =
+      [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
+      v.display_name ||
+      String(v.id).slice(0, 8);
 
     alerts.push(
       buildAlert({
@@ -668,7 +674,10 @@ async function getComplianceAlerts() {
 
   for (const v of vehiclesExpiring || []) {
     const daysToDue = daysBetweenCairo(now, v.license_expiry_date);
-    const label = [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") || v.display_name || String(v.id).slice(0, 8);
+    const label =
+      [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
+      v.display_name ||
+      String(v.id).slice(0, 8);
 
     alerts.push(
       buildAlert({
@@ -757,10 +766,49 @@ async function getComplianceAlerts() {
   return alerts;
 }
 
-exports.getAlerts = async (user, filters = {}) => {
-  const limit = Math.min(200, Math.max(1, Number(filters.limit || 50)));
-  const area = filters.area ? String(filters.area).toLowerCase() : null;
+async function applyReadState(user, items) {
+  const userId = user?.id || user?.sub || user?.userId || null;
+  if (!userId || !Array.isArray(items) || !items.length) {
+    return items || [];
+  }
 
+  const keys = items.map((x) => String(x.alert_key || x.id)).filter(Boolean);
+  if (!keys.length) return items;
+
+  const reads = await prisma.alert_reads.findMany({
+    where: {
+      user_id: userId,
+      alert_key: { in: keys },
+    },
+    select: {
+      alert_key: true,
+      read_at: true,
+    },
+  });
+
+  const readsMap = new Map(
+    (reads || []).map((r) => [String(r.alert_key), r])
+  );
+
+  return items.map((item) => {
+    const found = readsMap.get(String(item.alert_key || item.id));
+    return {
+      ...item,
+      is_read: Boolean(found),
+      read_at: found?.read_at || null,
+    };
+  });
+}
+
+function applyReadStatusFilter(items, readStatus) {
+  const status = String(readStatus || "all").toLowerCase();
+  if (status === "read") return items.filter((x) => x.is_read);
+  if (status === "unread") return items.filter((x) => !x.is_read);
+  return items;
+}
+
+async function getBaseAlerts(user, filters = {}) {
+  const area = filters.area ? String(filters.area).toLowerCase() : null;
   const clientId = normalizeUuidOrNull(filters.clientId);
   const siteId = normalizeUuidOrNull(filters.siteId);
 
@@ -797,6 +845,17 @@ exports.getAlerts = async (user, filters = {}) => {
     return bd - ad;
   });
 
+  return items;
+}
+
+exports.getAlerts = async (user, filters = {}) => {
+  const limit = Math.min(500, Math.max(1, Number(filters.limit || 50)));
+  const readStatus = String(filters.readStatus || "all").toLowerCase();
+
+  let items = await getBaseAlerts(user, filters);
+  items = await applyReadState(user, items);
+  items = applyReadStatusFilter(items, readStatus);
+
   const finalItems = items.slice(0, limit).map((x) => {
     const { _sort_order, ...rest } = x;
     return rest;
@@ -811,11 +870,14 @@ exports.getAlerts = async (user, filters = {}) => {
 exports.getAlertsSummary = async (user, filters = {}) => {
   const data = await exports.getAlerts(user, {
     ...filters,
-    limit: 500,
+    limit: 1000,
+    readStatus: "all",
   });
 
   const out = {
     total: Number(data.total || 0),
+    unread: 0,
+    read: 0,
     by_severity: {
       danger: 0,
       warn: 0,
@@ -832,7 +894,89 @@ exports.getAlertsSummary = async (user, filters = {}) => {
   for (const a of data.items || []) {
     if (out.by_severity[a.severity] != null) out.by_severity[a.severity] += 1;
     if (out.by_area[a.area] != null) out.by_area[a.area] += 1;
+    if (a.is_read) out.read += 1;
+    else out.unread += 1;
   }
 
   return out;
+};
+
+exports.markAlertRead = async (user, alertKey) => {
+  const userId = user?.id || user?.sub || user?.userId || null;
+  if (!userId) {
+    const err = new Error("Unauthorized");
+    err.status = 401;
+    throw err;
+  }
+
+  const key = String(alertKey || "").trim();
+  if (!key) {
+    const err = new Error("alert_key is required");
+    err.status = 400;
+    throw err;
+  }
+
+  return prisma.alert_reads.upsert({
+    where: {
+      alert_key_user_id: {
+        alert_key: key,
+        user_id: userId,
+      },
+    },
+    update: {
+      read_at: new Date(),
+    },
+    create: {
+      alert_key: key,
+      user_id: userId,
+      read_at: new Date(),
+    },
+  });
+};
+
+exports.markAllAlertsRead = async (user, filters = {}) => {
+  const userId = user?.id || user?.sub || user?.userId || null;
+  if (!userId) {
+    const err = new Error("Unauthorized");
+    err.status = 401;
+    throw err;
+  }
+
+  const data = await exports.getAlerts(user, {
+    ...filters,
+    limit: 1000,
+    readStatus: "unread",
+  });
+
+  const unreadItems = Array.isArray(data?.items) ? data.items : [];
+  if (!unreadItems.length) {
+    return { updated: 0 };
+  }
+
+  const now = new Date();
+
+  const writes = unreadItems.map((item) =>
+    prisma.alert_reads.upsert({
+      where: {
+        alert_key_user_id: {
+          alert_key: String(item.alert_key || item.id),
+          user_id: userId,
+        },
+      },
+      update: {
+        read_at: now,
+      },
+      create: {
+        alert_key: String(item.alert_key || item.id),
+        user_id: userId,
+        read_at: now,
+      },
+    })
+  );
+
+  await prisma.$transaction(writes);
+
+  return {
+    updated: unreadItems.length,
+  };
 };

@@ -1062,3 +1062,15 @@ model drivers {
 
   @@map("drivers")
 }
+model alert_reads {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  alert_key  String   @db.VarChar(191)
+  user_id    String   @db.Uuid
+  read_at    DateTime @default(now()) @db.Timestamptz(6)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([alert_key, user_id], map: "uq_alert_reads_alert_key_user_id")
+  @@index([user_id], map: "idx_alert_reads_user_id")
+  @@index([alert_key], map: "idx_alert_reads_alert_key")
+  @@map("alert_reads")
+}
