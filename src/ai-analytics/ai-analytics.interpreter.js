@@ -39,6 +39,7 @@ function interpretQuestion(question) {
   const range = detectRange(text);
   const limit = detectLimit(text);
 
+  // Finance - expense summary
   if (
     hasAny(text, ["اجمالي المصروفات", "كم المصروفات", "مصروفات هذا الشهر"]) ||
     (text.includes("مصروفات") && hasAny(text, ["اجمالي", "كم"]))
@@ -51,6 +52,7 @@ function interpretQuestion(question) {
     };
   }
 
+  // Finance - expense by type
   if (
     hasAny(text, ["وزع المصروفات", "توزيع المصروفات", "المصروفات حسب النوع"]) ||
     (text.includes("مصروفات") && text.includes("النوع")) ||
@@ -64,9 +66,10 @@ function interpretQuestion(question) {
     };
   }
 
+  // AR - outstanding summary
   if (
     hasAny(text, ["اجمالي المستحقات", "مستحقات العملاء", "مديونيات العملاء"]) ||
-    (text.includes("مستحقات") && text.includes("العملاء"))
+    (text.includes("مستحقات") && (text.includes("العملاء") || text.includes("عملاء")))
   ) {
     return {
       domain: "ar",
@@ -76,10 +79,13 @@ function interpretQuestion(question) {
     };
   }
 
+  // AR - top debtors
   if (
-    (text.includes("عميل") || text.includes("العملاء")) &&
-    hasAny(text, ["مديونيه", "مديونيه"]) &&
-    hasAny(text, ["اعلى", "اعلي", "اكثر"])
+    (text.includes("عميل") ||
+      text.includes("العملاء") ||
+      text.includes("عملاء")) &&
+    hasAny(text, ["مديونيه", "المديونيه", "المديونيات"]) &&
+    hasAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top"])
   ) {
     return {
       domain: "ar",
@@ -90,6 +96,7 @@ function interpretQuestion(question) {
     };
   }
 
+  // Maintenance - open work orders
   if (
     hasAny(text, ["اوامر العمل المفتوحه", "اوامر العمل المفتوحة", "عدد اوامر العمل المفتوحه"]) ||
     ((text.includes("امر") || text.includes("اوامر")) &&
@@ -104,10 +111,14 @@ function interpretQuestion(question) {
     };
   }
 
+  // Inventory - top issued parts
   if (
-    ((text.includes("قطع") || text.includes("القطع") || text.includes("اصناف") || text.includes("الاصناف")) &&
-      hasAny(text, ["صرفا", "صرف", "صرفا من المخزن", "الصرف"]) &&
-      hasAny(text, ["اكثر", "اعلى", "اعلي"])) ||
+    ((text.includes("قطع") ||
+      text.includes("القطع") ||
+      text.includes("اصناف") ||
+      text.includes("الاصناف")) &&
+      hasAny(text, ["صرفا", "صرف", "الصرف", "صرفت"]) &&
+      hasAny(text, ["اكثر", "اعلى", "اعلي", "اكبر", "top"])) ||
     text.includes("top issued parts")
   ) {
     return {
@@ -119,6 +130,7 @@ function interpretQuestion(question) {
     };
   }
 
+  // Inventory - low stock
   if (
     hasAny(text, [
       "القطع القريبه من النفاد",
@@ -129,7 +141,10 @@ function interpretQuestion(question) {
       "low stock",
     ]) ||
     ((text.includes("نفاد") || text.includes("مخزون")) &&
-      (text.includes("قطع") || text.includes("اصناف") || text.includes("الاصناف")))
+      (text.includes("قطع") ||
+        text.includes("القطع") ||
+        text.includes("اصناف") ||
+        text.includes("الاصناف")))
   ) {
     return {
       domain: "inventory",
