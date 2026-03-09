@@ -51,9 +51,22 @@ async function getArTopDebtors(req, res, next) {
     next(err);
   }
 }
+async function getMaintenanceOpenWorkOrders(req, res, next) {
+  try {
+    const result = await analyticsService.getMaintenanceOpenWorkOrders({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
   getArOutstandingSummary,
   getArTopDebtors,
+  getMaintenanceOpenWorkOrders,
 };

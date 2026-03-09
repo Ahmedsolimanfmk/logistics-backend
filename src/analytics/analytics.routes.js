@@ -24,5 +24,10 @@ router.get(
   authRequired,
   controller.getArTopDebtors
 );
+router.get(
+  "/maintenance/open-work-orders",
+  authRequired,
+  controller.getMaintenanceOpenWorkOrders
+);
 
 module.exports = router;
