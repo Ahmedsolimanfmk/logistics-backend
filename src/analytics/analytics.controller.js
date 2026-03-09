@@ -13,6 +13,7 @@ async function getFinanceExpenseSummary(req, res, next) {
     next(err);
   }
 }
+
 async function getFinanceExpenseByType(req, res, next) {
   try {
     const result = await analyticsService.getFinanceExpenseByType({
@@ -25,6 +26,20 @@ async function getFinanceExpenseByType(req, res, next) {
     next(err);
   }
 }
+
+async function getArOutstandingSummary(req, res, next) {
+  try {
+    const result = await analyticsService.getArOutstandingSummary({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
