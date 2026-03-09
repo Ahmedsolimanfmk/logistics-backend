@@ -18,11 +18,23 @@ function detectRange(q) {
   return "this_month";
 }
 
+function detectLimit(q) {
+  const text = normalizeArabic(q);
+
+  const m = text.match(/\b(\d+)\b/);
+  if (!m) return undefined;
+
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return undefined;
+
+  return Math.max(1, Math.min(50, n));
+}
+
 function interpretQuestion(question) {
   const text = normalizeArabic(question);
   const range = detectRange(text);
+  const limit = detectLimit(text);
 
-  // Finance - expense summary
   if (
     text.includes("اجمالي المصروفات") ||
     text.includes("كم المصروفات") ||
@@ -36,12 +48,12 @@ function interpretQuestion(question) {
     };
   }
 
-  // Finance - expense by type
   if (
     text.includes("وزع المصروفات") ||
     text.includes("توزيع المصروفات") ||
     text.includes("المصروفات حسب النوع") ||
-    text.includes("اكثر بند مصروف")
+    text.includes("اكثر بند مصروف") ||
+    text.includes("اعلى بند مصروف")
   ) {
     return {
       domain: "finance",
@@ -51,7 +63,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // AR outstanding summary
   if (
     text.includes("اجمالي المستحقات") ||
     text.includes("مستحقات العملاء") ||
@@ -65,23 +76,23 @@ function interpretQuestion(question) {
     };
   }
 
-  // AR top debtors
   if (
     text.includes("اعلى العملاء مديونيه") ||
     text.includes("اعلي العملاء مديونيه") ||
     text.includes("اكثر العملاء مديونيه") ||
-    text.includes("العملاء الاعلى مديونيه")
+    text.includes("العملاء الاعلى مديونيه") ||
+    text.includes("اعلى المدينين") ||
+    text.includes("اعلي المدينين")
   ) {
     return {
       domain: "ar",
       intent: "top_debtors",
       range,
       confidence: 0.88,
-      limit: 5,
+      limit: limit || 5,
     };
   }
 
-  // Maintenance open work orders
   if (
     text.includes("اوامر العمل المفتوحه") ||
     text.includes("اوامر العمل المفتوحة") ||
@@ -93,6 +104,39 @@ function interpretQuestion(question) {
       intent: "open_work_orders",
       range,
       confidence: 0.87,
+    };
+  }
+
+  if (
+    text.includes("اكثر القطع صرفا") ||
+    text.includes("اعلى القطع صرفا") ||
+    text.includes("اعلي القطع صرفا") ||
+    text.includes("الاكثر صرفا من المخزن") ||
+    text.includes("top issued parts")
+  ) {
+    return {
+      domain: "inventory",
+      intent: "top_issued_parts",
+      range,
+      confidence: 0.87,
+      limit: limit || 5,
+    };
+  }
+
+  if (
+    text.includes("القطع القريبه من النفاد") ||
+    text.includes("القطع القريبة من النفاد") ||
+    text.includes("الاصناف القريبه من النفاد") ||
+    text.includes("الاصناف القريبة من النفاد") ||
+    text.includes("الحد الادنى للمخزون") ||
+    text.includes("low stock")
+  ) {
+    return {
+      domain: "inventory",
+      intent: "low_stock_items",
+      range: null,
+      confidence: 0.87,
+      limit: limit || 10,
     };
   }
 

@@ -52,10 +52,24 @@ async function queryAiAnalytics({ user, body }) {
       user,
       query: { range: interpreted.range },
     });
+  } else if (interpreted.intent === "top_issued_parts") {
+    result = await analyticsService.getInventoryTopIssuedParts({
+      user,
+      query: {
+        range: interpreted.range,
+        limit: interpreted.limit || 5,
+      },
+    });
+  } else if (interpreted.intent === "low_stock_items") {
+    result = await analyticsService.getInventoryLowStockItems({
+      user,
+      query: {
+        limit: interpreted.limit || 10,
+      },
+    });
   }
 
   const answer = buildArabicAnswer({
-    question,
     interpreted,
     result,
   });
