@@ -25,6 +25,7 @@ const usersRoutes = require("./users/users.routes");
 const supervisorsRoutes = require("./supervisors/supervisors.routes");
 const inventoryRoutes = require("./inventory/inventory.routes");
 const arRoutes = require("./finance/ar.routes");
+const analyticsRoutes = require("./src/analytics/analytics.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -100,6 +101,7 @@ app.use("/dashboard", authRequired, dashboardRoutes);
 app.use("/maintenance", authRequired, maintenanceRoutes);
 app.use("/inventory", authRequired, inventoryRoutes);
 app.use("/finance/ar", authRequired, arRoutes);
+app.use("/analytics", analyticsRoutes);
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);
