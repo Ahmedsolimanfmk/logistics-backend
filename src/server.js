@@ -25,7 +25,7 @@ const usersRoutes = require("./users/users.routes");
 const supervisorsRoutes = require("./supervisors/supervisors.routes");
 const inventoryRoutes = require("./inventory/inventory.routes");
 const arRoutes = require("./finance/ar.routes");
-const analyticsRoutes = require("./src/analytics/analytics.routes");
+const analyticsRoutes = require("./analytics/analytics.routes");
 
 const app = express();
 app.set("trust proxy", 1);
