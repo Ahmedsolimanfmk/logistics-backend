@@ -28,4 +28,5 @@ async function getFinanceExpenseByType(req, res, next) {
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
+  getArOutstandingSummary,
 };
