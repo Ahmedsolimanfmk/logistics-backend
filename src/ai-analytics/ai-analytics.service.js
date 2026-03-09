@@ -1,6 +1,7 @@
 const analyticsService = require("../analytics/analytics.service");
 const { interpretQuestion } = require("./ai-analytics.interpreter");
 const { buildArabicAnswer } = require("./ai-analytics.answer");
+const { getSuggestedQuestions } = require("./ai-analytics.suggestions");
 
 async function queryAiAnalytics({ user, body }) {
   const question = String(body?.question || "").trim();
@@ -81,7 +82,21 @@ async function queryAiAnalytics({ user, body }) {
     answer,
   };
 }
+async function getAiSuggestedQuestions({ user, query }) {
+  const context = String(query?.context || "").trim().toLowerCase() || null;
 
+  const questions = getSuggestedQuestions({
+    user,
+    context,
+  });
+
+  return {
+    ok: true,
+    context,
+    questions,
+  };
+}
 module.exports = {
   queryAiAnalytics,
+  getAiSuggestedQuestions,
 };
