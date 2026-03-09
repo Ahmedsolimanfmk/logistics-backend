@@ -75,6 +75,18 @@ async function getInventoryTopIssuedParts(req, res, next) {
     next(err);
   }
 }
+async function getInventoryLowStockItems(req, res, next) {
+  try {
+    const result = await analyticsService.getInventoryLowStockItems({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -82,4 +94,5 @@ module.exports = {
   getArTopDebtors,
   getMaintenanceOpenWorkOrders,
   getInventoryTopIssuedParts,
+  getInventoryLowStockItems,
 };

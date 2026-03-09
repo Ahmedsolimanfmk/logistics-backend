@@ -79,7 +79,73 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
     },
   };
 }
+async function getLowStockItems({ scope, limit = 10 }) {
+  const rows = await prisma.warehouse_parts.findMany({
+    where: {
+      parts: {
+        is_active: true,
+      },
+    },
+    select: {
+      id: true,
+      qty_on_hand: true,
+      warehouse_id: true,
+      part_id: true,
+      parts: {
+        select: {
+          id: true,
+          name: true,
+          part_number: true,
+          category: true,
+          min_stock: true,
+        },
+      },
+      warehouses: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+    orderBy: {
+      qty_on_hand: "asc",
+    },
+  });
 
+  const filtered = rows
+    .filter((row) => {
+      const minStock = Number(row.parts?.min_stock || 0);
+      return minStock > 0 && Number(row.qty_on_hand || 0) <= minStock;
+    })
+    .slice(0, limit);
+
+  const items = filtered.map((row) => ({
+    warehouse_id: row.warehouses?.id || row.warehouse_id,
+    warehouse_name: row.warehouses?.name || "مخزن غير معروف",
+    part_id: row.parts?.id || row.part_id,
+    part_name: row.parts?.name || "صنف غير معروف",
+    part_number: row.parts?.part_number || null,
+    category: row.parts?.category || null,
+    qty_on_hand: Number(row.qty_on_hand || 0),
+    min_stock: Number(row.parts?.min_stock || 0),
+    shortage: Math.max(0, Number(row.parts?.min_stock || 0) - Number(row.qty_on_hand || 0)),
+  }));
+
+  return {
+    metric: "inventory_low_stock_items",
+    filters: {
+      role: scope?.role || null,
+      limit,
+    },
+    data: {
+      items,
+    },
+    summary: {
+      items_count: items.length,
+    },
+  };
+}
 module.exports = {
   getTopIssuedParts,
+  getLowStockItems,
 };

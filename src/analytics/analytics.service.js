@@ -63,6 +63,15 @@ async function getInventoryTopIssuedParts({ user, query }) {
     limit,
   });
 }
+async function getInventoryLowStockItems({ user, query }) {
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return inventoryAnalytics.getLowStockItems({
+    scope,
+    limit,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -70,4 +79,5 @@ module.exports = {
   getArTopDebtors,
   getMaintenanceOpenWorkOrders,
   getInventoryTopIssuedParts,
+  getInventoryLowStockItems,
 };

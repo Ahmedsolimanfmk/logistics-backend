@@ -34,5 +34,10 @@ router.get(
   authRequired,
   controller.getInventoryTopIssuedParts
 );
+router.get(
+  "/inventory/low-stock-items",
+  authRequired,
+  controller.getInventoryLowStockItems
+);
 
 module.exports = router;
