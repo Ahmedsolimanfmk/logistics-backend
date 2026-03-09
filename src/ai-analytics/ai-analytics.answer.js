@@ -51,6 +51,42 @@ function buildArabicAnswer({ question, interpreted, result }) {
     )} هو ${Number(result?.data?.total_open_work_orders || 0)}.`;
   }
 
+  if (intent === "maintenance_cost_by_vehicle") {
+    const items = result?.data?.items || [];
+    if (!items.length) {
+      return `لا توجد بيانات تكلفة صيانة للمركبات خلال ${labelRange(interpreted.range)}.`;
+    }
+
+    const top = items[0];
+    return `أعلى مركبة من حيث تكلفة الصيانة خلال ${labelRange(interpreted.range)} هي "${
+      top.vehicle_name || top.display_name || top.plate_no || "غير محددة"
+    }" بإجمالي ${money(top.total_cost || top.total_amount || 0)} جنيه.`;
+  }
+
+  if (intent === "top_issued_parts") {
+    const items = result?.data?.items || [];
+    if (!items.length) {
+      return `لا توجد بيانات صرف أصناف خلال ${labelRange(interpreted.range)}.`;
+    }
+
+    const top = items[0];
+    return `أكثر صنف تم صرفه خلال ${labelRange(interpreted.range)} هو "${
+      top.part_name || top.item_name || top.name || "غير محدد"
+    }" بعدد ${Number(top.total_issued_qty || top.issued_qty || top.qty || 0)}.`;
+  }
+
+  if (intent === "low_stock_items") {
+    const items = result?.data?.items || [];
+    if (!items.length) {
+      return "لا توجد أصناف منخفضة المخزون حاليًا.";
+    }
+
+    const top = items[0];
+    return `يوجد ${items.length} أصناف منخفضة المخزون حاليًا. أقربها للنفاد هو "${
+      top.part_name || top.item_name || top.name || "غير محدد"
+    }".`;
+  }
+
   return "لم أتمكن من فهم السؤال بشكل كافٍ في النسخة الحالية.";
 }
 

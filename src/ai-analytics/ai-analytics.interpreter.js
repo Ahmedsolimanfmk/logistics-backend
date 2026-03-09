@@ -98,7 +98,11 @@ function interpretQuestion(question) {
 
   // Maintenance - open work orders
   if (
-    hasAny(text, ["اوامر العمل المفتوحه", "اوامر العمل المفتوحة", "عدد اوامر العمل المفتوحه"]) ||
+    hasAny(text, [
+      "اوامر العمل المفتوحه",
+      "اوامر العمل المفتوحة",
+      "عدد اوامر العمل المفتوحه",
+    ]) ||
     ((text.includes("امر") || text.includes("اوامر")) &&
       text.includes("عمل") &&
       hasAny(text, ["مفتوح", "مفتوحه", "مفتوحة"]))
@@ -108,6 +112,30 @@ function interpretQuestion(question) {
       intent: "open_work_orders",
       range,
       confidence: 0.87,
+    };
+  }
+
+  // Maintenance - cost by vehicle
+  if (
+    (
+      hasAny(text, ["تكلفه صيانه", "تكلفة صيانة", "صيانه"]) &&
+      hasAny(text, ["مركبه", "مركبات", "العربيات", "السيارات"]) &&
+      hasAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top"])
+    ) ||
+    hasAny(text, [
+      "اعلى مركبه تكلفه صيانه",
+      "اعلى مركبة تكلفة صيانة",
+      "اعلى المركبات تكلفة صيانة",
+      "اكثر مركبه تكلفة صيانه",
+      "اكثر مركبة تكلفة صيانة",
+    ])
+  ) {
+    return {
+      domain: "maintenance",
+      intent: "maintenance_cost_by_vehicle",
+      range,
+      confidence: 0.88,
+      limit: limit || 5,
     };
   }
 
