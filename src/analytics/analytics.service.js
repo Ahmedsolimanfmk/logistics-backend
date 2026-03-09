@@ -3,6 +3,7 @@ const { buildScopeFilters } = require("./analytics.filters");
 const financeAnalytics = require("./finance.analytics");
 const arAnalytics = require("./ar.analytics");
 const maintenanceAnalytics = require("./maintenance.analytics");
+const inventoryAnalytics = require("./inventory.analytics");
 
 async function getFinanceExpenseSummary({ user, query }) {
   const range = resolveTimeRange(query);
@@ -51,10 +52,22 @@ async function getMaintenanceOpenWorkOrders({ user, query }) {
     scope,
   });
 }
+async function getInventoryTopIssuedParts({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return inventoryAnalytics.getTopIssuedParts({
+    range,
+    scope,
+    limit,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
   getArOutstandingSummary,
   getArTopDebtors,
   getMaintenanceOpenWorkOrders,
+  getInventoryTopIssuedParts,
 };

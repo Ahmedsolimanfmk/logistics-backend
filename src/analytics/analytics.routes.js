@@ -29,5 +29,10 @@ router.get(
   authRequired,
   controller.getMaintenanceOpenWorkOrders
 );
+router.get(
+  "/inventory/top-issued-parts",
+  authRequired,
+  controller.getInventoryTopIssuedParts
+);
 
 module.exports = router;
