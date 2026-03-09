@@ -71,7 +71,59 @@ async function getExpenseSummary({ range, scope }) {
     },
   };
 }
+async function getExpenseByType({ range, scope }) {
+  const where = {
+    created_at: {
+      gte: range.from,
+      lte: range.to,
+    },
+  };
 
+  const rows = await prisma.cash_expenses.groupBy({
+    by: ["expense_type"],
+    where,
+    _sum: {
+      amount: true,
+    },
+    _count: {
+      _all: true,
+    },
+    orderBy: {
+      _sum: {
+        amount: "desc",
+      },
+    },
+  });
+
+  const items = rows.map((row) => ({
+    expense_type: row.expense_type || "UNKNOWN",
+    total_amount: Number(row._sum.amount || 0),
+    count: row._count._all || 0,
+  }));
+
+  const grandTotal = items.reduce((sum, item) => sum + item.total_amount, 0);
+
+  return {
+    metric: "expense_by_type",
+    range: {
+      from: range.from,
+      to: range.to,
+      key: range.key,
+    },
+    filters: {
+      role: scope?.role || null,
+    },
+    data: {
+      items,
+    },
+    summary: {
+      currency: "EGP",
+      types_count: items.length,
+      total_expense: grandTotal,
+    },
+  };
+}
 module.exports = {
   getExpenseSummary,
+  getExpenseByType,
 };

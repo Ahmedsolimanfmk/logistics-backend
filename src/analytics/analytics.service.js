@@ -11,7 +11,16 @@ async function getFinanceExpenseSummary({ user, query }) {
     scope,
   });
 }
+async function getFinanceExpenseByType({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
 
+  return financeAnalytics.getExpenseByType({
+    range,
+    scope,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
+  getFinanceExpenseByType,
 };

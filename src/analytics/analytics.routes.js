@@ -9,5 +9,10 @@ router.get(
   authRequired,
   controller.getFinanceExpenseSummary
 );
+router.get(
+  "/finance/expense-by-type",
+  authRequired,
+  controller.getFinanceExpenseByType
+);
 
 module.exports = router;
