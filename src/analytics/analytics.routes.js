@@ -14,5 +14,10 @@ router.get(
   authRequired,
   controller.getFinanceExpenseByType
 );
+router.get(
+  "/ar/outstanding-summary",
+  authRequired,
+  controller.getArOutstandingSummary
+);
 
 module.exports = router;
