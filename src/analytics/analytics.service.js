@@ -72,6 +72,17 @@ async function getInventoryLowStockItems({ user, query }) {
     limit,
   });
 }
+async function getMaintenanceCostByVehicle({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return maintenanceAnalytics.getCostByVehicle({
+    range,
+    scope,
+    limit,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -80,4 +91,5 @@ module.exports = {
   getMaintenanceOpenWorkOrders,
   getInventoryTopIssuedParts,
   getInventoryLowStockItems,
+  getMaintenanceCostByVehicle,
 };

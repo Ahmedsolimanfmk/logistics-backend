@@ -39,5 +39,10 @@ router.get(
   authRequired,
   controller.getInventoryLowStockItems
 );
+router.get(
+  "/maintenance/cost-by-vehicle",
+  authRequired,
+  controller.getMaintenanceCostByVehicle
+);
 
 module.exports = router;
