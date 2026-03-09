@@ -39,9 +39,21 @@ async function getArOutstandingSummary(req, res, next) {
     next(err);
   }
 }
+async function getArTopDebtors(req, res, next) {
+  try {
+    const result = await analyticsService.getArTopDebtors({
+      user: req.user,
+      query: req.query,
+    });
 
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
   getArOutstandingSummary,
+  getArTopDebtors,
 };

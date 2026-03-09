@@ -30,8 +30,20 @@ async function getArOutstandingSummary({ user, query }) {
     scope,
   });
 }
+async function getArTopDebtors({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return arAnalytics.getTopDebtors({
+    range,
+    scope,
+    limit,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
   getArOutstandingSummary,
+  getArTopDebtors,
 };

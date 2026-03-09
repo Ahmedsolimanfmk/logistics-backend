@@ -19,5 +19,10 @@ router.get(
   authRequired,
   controller.getArOutstandingSummary
 );
+router.get(
+  "/ar/top-debtors",
+  authRequired,
+  controller.getArTopDebtors
+);
 
 module.exports = router;
