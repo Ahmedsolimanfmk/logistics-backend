@@ -7,6 +7,10 @@ function normalizeArabic(text) {
     .replace(/ى/g, "ي");
 }
 
+function hasAny(text, words = []) {
+  return words.some((w) => text.includes(normalizeArabic(w)));
+}
+
 function detectRange(q) {
   const text = normalizeArabic(q);
 
@@ -20,8 +24,8 @@ function detectRange(q) {
 
 function detectLimit(q) {
   const text = normalizeArabic(q);
-
   const m = text.match(/\b(\d+)\b/);
+
   if (!m) return undefined;
 
   const n = Number(m[1]);
@@ -36,9 +40,8 @@ function interpretQuestion(question) {
   const limit = detectLimit(text);
 
   if (
-    text.includes("اجمالي المصروفات") ||
-    text.includes("كم المصروفات") ||
-    text.includes("مصروفات هذا الشهر")
+    hasAny(text, ["اجمالي المصروفات", "كم المصروفات", "مصروفات هذا الشهر"]) ||
+    (text.includes("مصروفات") && hasAny(text, ["اجمالي", "كم"]))
   ) {
     return {
       domain: "finance",
@@ -49,11 +52,9 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("وزع المصروفات") ||
-    text.includes("توزيع المصروفات") ||
-    text.includes("المصروفات حسب النوع") ||
-    text.includes("اكثر بند مصروف") ||
-    text.includes("اعلى بند مصروف")
+    hasAny(text, ["وزع المصروفات", "توزيع المصروفات", "المصروفات حسب النوع"]) ||
+    (text.includes("مصروفات") && text.includes("النوع")) ||
+    (text.includes("بند") && text.includes("مصروف"))
   ) {
     return {
       domain: "finance",
@@ -64,9 +65,8 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("اجمالي المستحقات") ||
-    text.includes("مستحقات العملاء") ||
-    text.includes("مديونيات العملاء")
+    hasAny(text, ["اجمالي المستحقات", "مستحقات العملاء", "مديونيات العملاء"]) ||
+    (text.includes("مستحقات") && text.includes("العملاء"))
   ) {
     return {
       domain: "ar",
@@ -77,12 +77,9 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("اعلى العملاء مديونيه") ||
-    text.includes("اعلي العملاء مديونيه") ||
-    text.includes("اكثر العملاء مديونيه") ||
-    text.includes("العملاء الاعلى مديونيه") ||
-    text.includes("اعلى المدينين") ||
-    text.includes("اعلي المدينين")
+    (text.includes("عميل") || text.includes("العملاء")) &&
+    hasAny(text, ["مديونيه", "مديونيه"]) &&
+    hasAny(text, ["اعلى", "اعلي", "اكثر"])
   ) {
     return {
       domain: "ar",
@@ -94,10 +91,10 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("اوامر العمل المفتوحه") ||
-    text.includes("اوامر العمل المفتوحة") ||
-    text.includes("عدد اوامر العمل المفتوحه") ||
-    text.includes("كم امر عمل مفتوح")
+    hasAny(text, ["اوامر العمل المفتوحه", "اوامر العمل المفتوحة", "عدد اوامر العمل المفتوحه"]) ||
+    ((text.includes("امر") || text.includes("اوامر")) &&
+      text.includes("عمل") &&
+      hasAny(text, ["مفتوح", "مفتوحه", "مفتوحة"]))
   ) {
     return {
       domain: "maintenance",
@@ -108,10 +105,9 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("اكثر القطع صرفا") ||
-    text.includes("اعلى القطع صرفا") ||
-    text.includes("اعلي القطع صرفا") ||
-    text.includes("الاكثر صرفا من المخزن") ||
+    ((text.includes("قطع") || text.includes("القطع") || text.includes("اصناف") || text.includes("الاصناف")) &&
+      hasAny(text, ["صرفا", "صرف", "صرفا من المخزن", "الصرف"]) &&
+      hasAny(text, ["اكثر", "اعلى", "اعلي"])) ||
     text.includes("top issued parts")
   ) {
     return {
@@ -124,12 +120,16 @@ function interpretQuestion(question) {
   }
 
   if (
-    text.includes("القطع القريبه من النفاد") ||
-    text.includes("القطع القريبة من النفاد") ||
-    text.includes("الاصناف القريبه من النفاد") ||
-    text.includes("الاصناف القريبة من النفاد") ||
-    text.includes("الحد الادنى للمخزون") ||
-    text.includes("low stock")
+    hasAny(text, [
+      "القطع القريبه من النفاد",
+      "القطع القريبة من النفاد",
+      "الاصناف القريبه من النفاد",
+      "الاصناف القريبة من النفاد",
+      "الحد الادنى للمخزون",
+      "low stock",
+    ]) ||
+    ((text.includes("نفاد") || text.includes("مخزون")) &&
+      (text.includes("قطع") || text.includes("اصناف") || text.includes("الاصناف")))
   ) {
     return {
       domain: "inventory",
