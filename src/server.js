@@ -26,6 +26,7 @@ const supervisorsRoutes = require("./supervisors/supervisors.routes");
 const inventoryRoutes = require("./inventory/inventory.routes");
 const arRoutes = require("./finance/ar.routes");
 const analyticsRoutes = require("./analytics/analytics.routes");
+const aiAnalyticsRoutes = require("./ai-analytics/ai-analytics.routes");
 
 
 const app = express();
@@ -103,6 +104,7 @@ app.use("/maintenance", authRequired, maintenanceRoutes);
 app.use("/inventory", authRequired, inventoryRoutes);
 app.use("/finance/ar", authRequired, arRoutes);
 app.use("/analytics", authRequired, analyticsRoutes);
+app.use("/ai-analytics", authRequired, aiAnalyticsRoutes);
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);
