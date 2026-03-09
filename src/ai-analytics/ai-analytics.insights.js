@@ -4,17 +4,71 @@ function money(n) {
   }).format(Number(n || 0));
 }
 
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function asNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pickItems(obj) {
+  if (!obj) return [];
+  if (Array.isArray(obj?.data?.items)) return obj.data.items;
+  if (Array.isArray(obj?.items)) return obj.items;
+  if (Array.isArray(obj?.data)) return obj.data;
+  return [];
+}
+
+function pickValue(obj, paths = []) {
+  for (const path of paths) {
+    let cur = obj;
+    let ok = true;
+
+    for (const key of path) {
+      if (cur == null || !(key in cur)) {
+        ok = false;
+        break;
+      }
+      cur = cur[key];
+    }
+
+    if (ok && cur != null) return cur;
+  }
+
+  return undefined;
+}
+
 function buildFinanceInsights(data) {
   const insights = [];
 
-  const totalExpense = Number(data?.expenseSummary?.data?.total_expense || 0);
-  const expenseTypes = data?.expenseByType?.data?.items || [];
+  const totalExpense = asNumber(
+    pickValue(data?.expenseSummary, [
+      ["data", "total_expense"],
+      ["total_expense"],
+      ["data", "summary", "total_expense"],
+      ["summary", "total_expense"],
+      ["data", "total"],
+      ["total"],
+    ])
+  );
+
+  const expenseTypes = asArray(
+    pickItems(data?.expenseByType)
+  );
 
   if (totalExpense > 0) {
     insights.push({
       type: "finance_total_expense",
       level: "info",
       text: `إجمالي المصروفات خلال هذا الشهر هو ${money(totalExpense)} جنيه.`,
+    });
+  } else {
+    insights.push({
+      type: "finance_total_expense",
+      level: "info",
+      text: "لا توجد مصروفات مسجلة خلال هذا الشهر حتى الآن.",
     });
   }
 
@@ -23,9 +77,15 @@ function buildFinanceInsights(data) {
     insights.push({
       type: "finance_top_expense_type",
       level: "info",
-      text: `أعلى نوع مصروف خلال هذا الشهر هو "${top.expense_type}" بإجمالي ${money(
-        top.total_amount
-      )} جنيه.`,
+      text: `أعلى نوع مصروف خلال هذا الشهر هو "${
+        top.expense_type || top.type_name || top.name || "غير محدد"
+      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`,
+    });
+  } else {
+    insights.push({
+      type: "finance_top_expense_type",
+      level: "info",
+      text: "لا توجد بيانات توزيع مصروفات حسب النوع خلال هذا الشهر.",
     });
   }
 
@@ -35,17 +95,41 @@ function buildFinanceInsights(data) {
 function buildArInsights(data) {
   const insights = [];
 
-  const totalOutstanding = Number(
-    data?.outstandingSummary?.data?.total_outstanding || 0
+  const totalOutstanding = asNumber(
+    pickValue(data?.outstandingSummary, [
+      ["data", "total_outstanding"],
+      ["total_outstanding"],
+      ["data", "summary", "total_outstanding"],
+      ["summary", "total_outstanding"],
+      ["data", "total"],
+      ["total"],
+    ])
   );
-  const overdueAmount = Number(data?.outstandingSummary?.data?.overdue_amount || 0);
-  const topDebtors = data?.topDebtors?.data?.items || [];
+
+  const overdueAmount = asNumber(
+    pickValue(data?.outstandingSummary, [
+      ["data", "overdue_amount"],
+      ["overdue_amount"],
+      ["data", "summary", "overdue_amount"],
+      ["summary", "overdue_amount"],
+    ])
+  );
+
+  const topDebtors = asArray(
+    pickItems(data?.topDebtors)
+  );
 
   if (totalOutstanding > 0) {
     insights.push({
       type: "ar_total_outstanding",
       level: overdueAmount > 0 ? "warning" : "info",
       text: `إجمالي مستحقات العملاء الحالية هو ${money(totalOutstanding)} جنيه.`,
+    });
+  } else {
+    insights.push({
+      type: "ar_total_outstanding",
+      level: "info",
+      text: "لا توجد مستحقات عملاء قائمة حاليًا.",
     });
   }
 
@@ -62,9 +146,15 @@ function buildArInsights(data) {
     insights.push({
       type: "ar_top_debtor",
       level: "info",
-      text: `أعلى عميل مديونية حاليًا هو "${top.client_name}" بإجمالي ${money(
-        top.total_outstanding
-      )} جنيه.`,
+      text: `أعلى عميل مديونية حاليًا هو "${
+        top.client_name || top.name || "غير محدد"
+      }" بإجمالي ${money(top.total_outstanding || top.amount || 0)} جنيه.`,
+    });
+  } else {
+    insights.push({
+      type: "ar_top_debtor",
+      level: "info",
+      text: "لا توجد بيانات عملاء مديونية للعرض حاليًا.",
     });
   }
 
@@ -74,10 +164,20 @@ function buildArInsights(data) {
 function buildMaintenanceInsights(data) {
   const insights = [];
 
-  const openCount = Number(
-    data?.openWorkOrders?.data?.total_open_work_orders || 0
+  const openCount = asNumber(
+    pickValue(data?.openWorkOrders, [
+      ["data", "total_open_work_orders"],
+      ["total_open_work_orders"],
+      ["data", "count"],
+      ["count"],
+      ["data", "total"],
+      ["total"],
+    ])
   );
-  const costByVehicle = data?.costByVehicle?.data?.items || [];
+
+  const costByVehicle = asArray(
+    pickItems(data?.costByVehicle)
+  );
 
   if (openCount > 0) {
     insights.push({
@@ -99,8 +199,14 @@ function buildMaintenanceInsights(data) {
       type: "maintenance_top_cost_vehicle",
       level: "info",
       text: `أعلى مركبة من حيث تكلفة الصيانة هي "${
-        top.vehicle_name || top.display_name || top.plate_no || "غير محددة"
-      }" بإجمالي ${money(top.total_cost || top.total_amount || 0)} جنيه.`,
+        top.vehicle_name || top.display_name || top.plate_no || top.name || "غير محددة"
+      }" بإجمالي ${money(top.total_cost || top.total_amount || top.amount || 0)} جنيه.`,
+    });
+  } else {
+    insights.push({
+      type: "maintenance_top_cost_vehicle",
+      level: "info",
+      text: "لا توجد بيانات تكلفة صيانة للمركبات خلال هذا الشهر.",
     });
   }
 
@@ -110,8 +216,13 @@ function buildMaintenanceInsights(data) {
 function buildInventoryInsights(data) {
   const insights = [];
 
-  const topIssuedParts = data?.topIssuedParts?.data?.items || [];
-  const lowStockItems = data?.lowStockItems?.data?.items || [];
+  const topIssuedParts = asArray(
+    pickItems(data?.topIssuedParts)
+  );
+
+  const lowStockItems = asArray(
+    pickItems(data?.lowStockItems)
+  );
 
   if (topIssuedParts.length > 0) {
     const top = topIssuedParts[0];
@@ -121,6 +232,12 @@ function buildInventoryInsights(data) {
       text: `أكثر صنف تم صرفه هو "${
         top.part_name || top.item_name || top.name || "غير محدد"
       }" بعدد ${Number(top.total_issued_qty || top.issued_qty || top.qty || 0)}.`,
+    });
+  } else {
+    insights.push({
+      type: "inventory_top_issued_part",
+      level: "info",
+      text: "لا توجد بيانات أصناف مصروفة خلال هذا الشهر.",
     });
   }
 

@@ -3,6 +3,44 @@ const { interpretQuestion } = require("./ai-analytics.interpreter");
 const { buildArabicAnswer } = require("./ai-analytics.answer");
 const { getSuggestedQuestions } = require("./ai-analytics.suggestions");
 const { buildInsightsByContext } = require("./ai-analytics.insights");
+const { getFollowUpQuestions } = require("./ai-analytics.followups");
+
+async function buildExpenseCompareResult({ user }) {
+  const [thisMonth, lastMonth] = await Promise.all([
+    analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "this_month" },
+    }),
+    analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "last_month" },
+    }),
+  ]);
+
+  const thisMonthTotal = Number(
+    thisMonth?.data?.total_expense ??
+      thisMonth?.total_expense ??
+      thisMonth?.data?.total ??
+      thisMonth?.total ??
+      0
+  );
+
+  const lastMonthTotal = Number(
+    lastMonth?.data?.total_expense ??
+      lastMonth?.total_expense ??
+      lastMonth?.data?.total ??
+      lastMonth?.total ??
+      0
+  );
+
+  return {
+    data: {
+      this_month_total: thisMonthTotal,
+      last_month_total: lastMonthTotal,
+      difference: thisMonthTotal - lastMonthTotal,
+    },
+  };
+}
 
 async function queryAiAnalytics({ user, body }) {
   const question = String(body?.question || "").trim();
@@ -15,18 +53,26 @@ async function queryAiAnalytics({ user, body }) {
 
   const interpreted = interpretQuestion(question);
 
-  if (!interpreted || interpreted.intent === "unknown") {
+  if (!interpreted || interpreted.mode === "unknown" || interpreted.intent === "unknown") {
     return {
       ok: true,
       intent: interpreted,
       result: null,
-      answer: "السؤال غير مدعوم حاليًا في النسخة الأولى من المساعد الذكي.",
+      answer: "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
+      followUps: [
+        "كم إجمالي المصروفات هذا الشهر؟",
+        "من أعلى عميل مديونية؟",
+        "كم عدد أوامر العمل المفتوحة؟",
+        "ما الأصناف القريبة من النفاد؟",
+      ],
     };
   }
 
   let result = null;
 
-  if (interpreted.intent === "expense_summary") {
+  if (interpreted.intent === "expense_summary_compare") {
+    result = await buildExpenseCompareResult({ user });
+  } else if (interpreted.intent === "expense_summary") {
     result = await analyticsService.getFinanceExpenseSummary({
       user,
       query: { range: interpreted.range },
@@ -34,7 +80,7 @@ async function queryAiAnalytics({ user, body }) {
   } else if (interpreted.intent === "expense_by_type") {
     result = await analyticsService.getFinanceExpenseByType({
       user,
-      query: { range: interpreted.range },
+      query: { range: interpreted.range, limit: interpreted.limit || 5 },
     });
   } else if (interpreted.intent === "outstanding_summary") {
     result = await analyticsService.getArOutstandingSummary({
@@ -80,7 +126,11 @@ async function queryAiAnalytics({ user, body }) {
   }
 
   const answer = buildArabicAnswer({
-    question,
+    interpreted,
+    result,
+  });
+
+  const followUps = getFollowUpQuestions({
     interpreted,
     result,
   });
@@ -90,6 +140,7 @@ async function queryAiAnalytics({ user, body }) {
     intent: interpreted,
     result,
     answer,
+    followUps,
   };
 }
 
