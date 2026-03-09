@@ -5,7 +5,7 @@
 const express = require("express");
 const router = express.Router();
 
-const auth = require("../middleware/auth");
+const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
 
 const {
@@ -34,8 +34,8 @@ router.get("/trends/bundle", getDashboardTrendsBundle);
 // Central alerts
 router.get("/alerts", getDashboardAlerts);
 router.get("/alerts/summary", getDashboardAlertsSummary);
-router.patch("/alerts/read", auth, markAlertRead);
-router.patch("/alerts/read-all", auth, markAllDashboardAlertsRead);
+router.patch("/alerts/read", authRequired, markAlertRead);
+router.patch("/alerts/read-all", authRequired, markAllDashboardAlertsRead);
 
 // Compliance alerts
 router.get("/compliance-alerts", requireAdminOrHR, getComplianceAlerts);
