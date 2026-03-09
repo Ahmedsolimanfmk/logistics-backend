@@ -79,6 +79,80 @@ async function getOutstandingSummary({ range, scope }) {
   };
 }
 
+async function getTopDebtors({ range, scope, limit = 10 }) {
+  const rows = await prisma.ar_invoices.groupBy({
+    by: ["client_id"],
+    where: {
+      issue_date: {
+        gte: range.from,
+        lte: range.to,
+      },
+      status: {
+        notIn: ["CANCELLED", "REJECTED", "DRAFT", "PAID"],
+      },
+    },
+    _sum: {
+      total_amount: true,
+    },
+    _count: {
+      _all: true,
+    },
+    orderBy: {
+      _sum: {
+        total_amount: "desc",
+      },
+    },
+    take: limit,
+  });
+
+  const clientIds = rows.map((r) => r.client_id);
+
+  const clients = clientIds.length
+    ? await prisma.clients.findMany({
+        where: {
+          id: { in: clientIds },
+        },
+        select: {
+          id: true,
+          name: true,
+        },
+      })
+    : [];
+
+  const clientMap = new Map(clients.map((c) => [c.id, c.name]));
+
+  const items = rows.map((row) => ({
+    client_id: row.client_id,
+    client_name: clientMap.get(row.client_id) || "عميل غير معروف",
+    total_outstanding: Number(row._sum.total_amount || 0),
+    invoice_count: row._count._all || 0,
+  }));
+
+  const grandTotal = items.reduce((sum, item) => sum + item.total_outstanding, 0);
+
+  return {
+    metric: "ar_top_debtors",
+    range: {
+      from: range.from,
+      to: range.to,
+      key: range.key,
+    },
+    filters: {
+      role: scope?.role || null,
+      limit,
+    },
+    data: {
+      items,
+    },
+    summary: {
+      currency: "EGP",
+      clients_count: items.length,
+      total_outstanding: grandTotal,
+    },
+  };
+}
+
 module.exports = {
   getOutstandingSummary,
+  getTopDebtors,
 };
