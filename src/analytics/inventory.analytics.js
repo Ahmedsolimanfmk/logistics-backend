@@ -9,9 +9,7 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
           gte: range.from,
           lte: range.to,
         },
-        status: {
-          in: ["POSTED", "DRAFT", "ISSUED"],
-        },
+        status: "POSTED",
       },
     },
     _sum: {
