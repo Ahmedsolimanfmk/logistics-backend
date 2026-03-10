@@ -4,6 +4,7 @@ const { buildArabicAnswer } = require("./ai-analytics.answer");
 const { getSuggestedQuestions } = require("./ai-analytics.suggestions");
 const { buildInsightsByContext } = require("./ai-analytics.insights");
 const { getFollowUpQuestions } = require("./ai-analytics.followups");
+const { executeAiAction } = require("./ai-analytics.actions");
 
 async function buildExpenseCompareResult({ user }) {
   const [thisMonth, lastMonth] = await Promise.all([
@@ -58,7 +59,8 @@ async function queryAiAnalytics({ user, body }) {
       ok: true,
       intent: interpreted,
       result: null,
-      answer: "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
+      answer:
+        "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
       followUps: [
         "كم إجمالي المصروفات هذا الشهر؟",
         "من أعلى عميل مديونية؟",
@@ -66,6 +68,10 @@ async function queryAiAnalytics({ user, body }) {
         "ما الأصناف القريبة من النفاد؟",
       ],
     };
+  }
+
+  if (interpreted.mode === "action") {
+    return executeAiAction({ interpreted, user });
   }
 
   let result = null;

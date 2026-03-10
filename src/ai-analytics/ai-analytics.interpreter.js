@@ -1,3 +1,14 @@
+const {
+  extractVehicleHint,
+  extractTripHint,
+  extractWorkOrderHint,
+  extractAmount,
+  extractExpenseType,
+  extractTitle,
+  extractVendorName,
+  extractPaidMethod,
+} = require("./ai-analytics.actions");
+
 function normalizeArabic(text) {
   return String(text || "")
     .trim()
@@ -77,15 +88,111 @@ function detectQuestionType(text) {
   return "general";
 }
 
-function interpretQuestion(question) {
+function detectAction(question, body = {}) {
+  const text = normalizeArabic(question);
+
+  if (
+    hasAny(text, [
+      "انشئ امر عمل",
+      "أنشئ أمر عمل",
+      "افتح امر عمل",
+      "اعمل امر عمل",
+      "اعمل أمر عمل",
+      "create work order",
+    ])
+  ) {
+    return {
+      mode: "action",
+      domain: "maintenance",
+      action: "create_work_order",
+      confidence: 0.95,
+      auto_execute: Boolean(body?.auto_execute),
+      payload: {
+        vehicle_hint: extractVehicleHint(question),
+        title: extractTitle(question),
+        notes: String(question || "").trim(),
+      },
+    };
+  }
+
+  if (
+    hasAny(text, [
+      "افتح طلب صيانه",
+      "افتح طلب صيانة",
+      "انشئ طلب صيانه",
+      "أنشئ طلب صيانة",
+      "اعمل طلب صيانه",
+      "اعمل طلب صيانة",
+      "create maintenance request",
+    ])
+  ) {
+    return {
+      mode: "action",
+      domain: "maintenance",
+      action: "create_maintenance_request",
+      confidence: 0.95,
+      auto_execute: Boolean(body?.auto_execute),
+      payload: {
+        vehicle_hint: extractVehicleHint(question),
+        description: extractTitle(question) || String(question || "").trim(),
+        title: extractTitle(question),
+      },
+    };
+  }
+
+  if (
+    hasAny(text, [
+      "سجل مصروف",
+      "اضف مصروف",
+      "أضف مصروف",
+      "انشئ مصروف",
+      "أنشئ مصروف",
+      "اعمل مصروف",
+      "create expense",
+    ]) ||
+    (hasAny(text, ["مصروف"]) &&
+      hasAny(text, ["وقود", "صيانة", "زيت", "كاوتش", "شراء", "نثرية"]))
+  ) {
+    return {
+      mode: "action",
+      domain: "finance",
+      action: "create_expense",
+      confidence: 0.94,
+      auto_execute: Boolean(body?.auto_execute),
+      payload: {
+        amount: extractAmount(question),
+        expense_type: extractExpenseType(question),
+        vehicle_hint: extractVehicleHint(question),
+        trip_hint: extractTripHint(question),
+        work_order_hint: extractWorkOrderHint(question),
+        vendor_name: extractVendorName(question),
+        paid_method: extractPaidMethod(question),
+        payment_source: body?.payment_source || null,
+        cash_advance_id: body?.cash_advance_id || null,
+        trip_id: body?.trip_id || null,
+        maintenance_work_order_id: body?.maintenance_work_order_id || null,
+        receipt_url: body?.receipt_url || null,
+        invoice_no: body?.invoice_no || null,
+        invoice_date: body?.invoice_date || null,
+        vat_amount: body?.vat_amount || null,
+        invoice_total: body?.invoice_total || null,
+        notes: String(question || "").trim(),
+      },
+    };
+  }
+
+  return null;
+}
+
+function interpretQuestion(question, body = {}) {
+  const actionDetected = detectAction(question, body);
+  if (actionDetected) return actionDetected;
+
   const text = normalizeArabic(question);
   const range = detectRange(text);
   const limit = detectLimit(text);
   const qType = detectQuestionType(text);
 
-  // =========================
-  // Finance - compare this month vs last month
-  // =========================
   if (
     (
       hasAny(text, ["مصروفات", "الصرف", "مصروف"]) &&
@@ -109,9 +216,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Finance - expense summary
-  // =========================
   if (
     hasAny(text, [
       "اجمالي المصروفات",
@@ -139,9 +243,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Finance - expense by type
-  // =========================
   if (
     hasAny(text, [
       "وزع المصروفات",
@@ -174,9 +275,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // AR - outstanding summary
-  // =========================
   if (
     hasAny(text, [
       "اجمالي المستحقات",
@@ -203,9 +301,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // AR - overdue only
-  // =========================
   if (
     hasAny(text, [
       "متاخرات العملاء",
@@ -230,9 +325,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // AR - top debtors
-  // =========================
   if (
     (
       hasAny(text, ["عميل", "العملاء", "عملاء"]) &&
@@ -262,9 +354,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Maintenance - open work orders
-  // =========================
   if (
     hasAny(text, [
       "اوامر العمل المفتوحه",
@@ -293,9 +382,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Maintenance - cost by vehicle
-  // =========================
   if (
     (
       hasAny(text, ["تكلفه", "تكلفة", "صيانه", "صيانة"]) &&
@@ -326,9 +412,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Inventory - top issued parts
-  // =========================
   if (
     (
       hasAny(text, [
@@ -362,9 +445,6 @@ function interpretQuestion(question) {
     };
   }
 
-  // =========================
-  // Inventory - low stock
-  // =========================
   if (
     hasAny(text, [
       "القطع القريبه من النفاد",
