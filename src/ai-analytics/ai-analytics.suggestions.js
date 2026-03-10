@@ -2,6 +2,18 @@ function roleUpper(role) {
   return String(role || "").trim().toUpperCase();
 }
 
+function normalizeContext(context) {
+  const c = String(context || "").trim().toLowerCase();
+  if (!c) return null;
+
+  if (c === "finance") return "finance";
+  if (c === "ar") return "ar";
+  if (c === "maintenance") return "maintenance";
+  if (c === "inventory") return "inventory";
+
+  return null;
+}
+
 function dedupe(items = []) {
   return Array.from(
     new Set(
@@ -14,6 +26,7 @@ function dedupe(items = []) {
 
 function getSuggestedQuestions({ user, context = null }) {
   const role = roleUpper(user?.role);
+  const normalizedContext = normalizeContext(context);
 
   const financeQuestions = [
     "كم إجمالي المصروفات هذا الشهر؟",
@@ -57,11 +70,12 @@ function getSuggestedQuestions({ user, context = null }) {
     inventory: inventoryQuestions,
   };
 
-  if (context && byContext[context]) {
-    return dedupe(byContext[context]).slice(0, 8);
+  // IMPORTANT: context must win immediately
+  if (normalizedContext && byContext[normalizedContext]) {
+    return dedupe(byContext[normalizedContext]).slice(0, 8);
   }
 
-  if (["ADMIN"].includes(role)) {
+  if (role === "ADMIN") {
     return dedupe([
       ...financeQuestions,
       ...arQuestions,
@@ -70,25 +84,25 @@ function getSuggestedQuestions({ user, context = null }) {
     ]).slice(0, 12);
   }
 
-  if (["ACCOUNTANT"].includes(role)) {
+  if (role === "ACCOUNTANT") {
     return dedupe([
       ...financeQuestions,
       ...arQuestions,
     ]).slice(0, 10);
   }
 
-  if (["STOREKEEPER"].includes(role)) {
+  if (role === "STOREKEEPER") {
     return dedupe(inventoryQuestions).slice(0, 8);
   }
 
-  if (["FIELD_SUPERVISOR"].includes(role)) {
+  if (role === "FIELD_SUPERVISOR") {
     return dedupe([
       ...financeQuestions,
       ...maintenanceQuestions,
     ]).slice(0, 10);
   }
 
-  if (["HR"].includes(role)) {
+  if (role === "HR") {
     return dedupe(maintenanceQuestions).slice(0, 8);
   }
 
