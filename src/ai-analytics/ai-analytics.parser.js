@@ -14,7 +14,7 @@ const {
   extractTitle,
   extractVendorName,
   extractPaidMethod,
-} = require("./ai-analytics.actions");
+} = require("./ai-analytics.extractors");
 
 function roleUpper(role) {
   return String(role || "").trim().toUpperCase();
