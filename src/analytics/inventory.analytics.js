@@ -1,5 +1,9 @@
 const prisma = require("../prisma");
 
+function toMoney(v) {
+  return Math.round(Number(v || 0) * 100) / 100;
+}
+
 async function getTopIssuedParts({ range, scope, limit = 10 }) {
   const rows = await prisma.inventory_issue_lines.groupBy({
     by: ["part_id"],
@@ -52,8 +56,8 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
       part_name: part?.name || "صنف غير معروف",
       part_number: part?.part_number || null,
       category: part?.category || null,
-      total_qty: Number(row._sum.qty || 0),
-      total_cost: Number(row._sum.total_cost || 0),
+      total_issued_qty: Number(row._sum.qty || 0),
+      total_cost: toMoney(row._sum.total_cost || 0),
       issue_lines_count: row._count._all || 0,
     };
   });
@@ -74,11 +78,15 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
     },
     summary: {
       parts_count: items.length,
-      total_qty: items.reduce((sum, x) => sum + x.total_qty, 0),
-      total_cost: items.reduce((sum, x) => sum + x.total_cost, 0),
+      total_issued_qty: items.reduce(
+        (sum, x) => sum + Number(x.total_issued_qty || 0),
+        0
+      ),
+      total_cost: toMoney(items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)),
     },
   };
 }
+
 async function getLowStockItems({ scope, limit = 10 }) {
   const rows = await prisma.warehouse_parts.findMany({
     where: {
@@ -128,7 +136,10 @@ async function getLowStockItems({ scope, limit = 10 }) {
     category: row.parts?.category || null,
     qty_on_hand: Number(row.qty_on_hand || 0),
     min_stock: Number(row.parts?.min_stock || 0),
-    shortage: Math.max(0, Number(row.parts?.min_stock || 0) - Number(row.qty_on_hand || 0)),
+    shortage: Math.max(
+      0,
+      Number(row.parts?.min_stock || 0) - Number(row.qty_on_hand || 0)
+    ),
   }));
 
   return {
@@ -145,6 +156,7 @@ async function getLowStockItems({ scope, limit = 10 }) {
     },
   };
 }
+
 module.exports = {
   getTopIssuedParts,
   getLowStockItems,

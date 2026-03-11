@@ -304,6 +304,134 @@ function parseFinance(question, base) {
     };
   }
 
+  if (
+    (
+      includesAny(text, ["مركبه", "مركبات", "العربيه", "العربية", "سياره", "سيارات"]) &&
+      includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
+      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "انهي", "أي"])
+    ) ||
+    includesAny(text, [
+      "اعلى مركبه صرفا",
+      "اعلى مركبة صرفا",
+      "اكثر مركبه صرفا",
+      "اكثر مركبة صرفا",
+      "اكبر مركبه صرفا",
+      "اكبر مركبة صرفا",
+      "اعرض اعلى 5 مركبات صرفا",
+      "اعرض اعلى 5 مركبات مصروفات",
+      "اعلى المركبات صرفا",
+      "المصروفات حسب المركبه",
+      "المصروفات حسب المركبة",
+    ])
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+    return {
+      ...base,
+      mode: "query",
+      intent: "expense_by_vehicle",
+      confidence: 0.93,
+      metric: "expense_amount",
+      group_by: "vehicle",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    (
+      includesAny(text, ["مصدر", "مصادر", "طريقه", "طريقة", "وسيله", "وسيلة"]) &&
+      includesAny(text, ["الدفع", "سداد"]) &&
+      includesAny(text, ["مصروف", "مصروفات", "صرف"])
+    ) ||
+    includesAny(text, [
+      "المصروفات حسب مصدر الدفع",
+      "المصروفات حسب طريقة الدفع",
+      "الصرف حسب مصدر الدفع",
+      "الصرف من العهده ولا الشركه",
+      "الصرف من العهده ولا الشركة",
+      "كم من العهده وكم من الشركه",
+      "كم من العهدة وكم من الشركة",
+    ])
+  ) {
+    return {
+      ...base,
+      mode: "query",
+      intent: "expense_by_payment_source",
+      confidence: 0.92,
+      metric: "expense_amount",
+      group_by: "payment_source",
+      options: {
+        ...base.options,
+        response_type: "table",
+      },
+    };
+  }
+
+  if (
+    (
+      includesAny(text, ["مورد", "المورد", "موردين", "الموردين", "vendor", "supplier"]) &&
+      includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
+      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
+    ) ||
+    includesAny(text, [
+      "اعلى مورد مصروفات",
+      "اكبر مورد مصروفات",
+      "اكثر مورد مصروفات",
+      "اعرض اعلى 5 موردين مصروفات",
+      "اعرض اعلى 5 موردين",
+      "اعلى الموردين مصروفات",
+    ])
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+    return {
+      ...base,
+      mode: "query",
+      intent: "top_vendors",
+      confidence: 0.91,
+      metric: "expense_amount",
+      group_by: "vendor",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    (
+      includesAny(text, ["مصروف", "مصروفات"]) &&
+      includesAny(text, ["معلق", "معلقه", "معلقة", "بانتظار", "pending"])
+    ) ||
+    includesAny(text, [
+      "كم المصروفات المعلقه",
+      "كم المصروفات المعلقة",
+      "كام المصروفات المعلقه",
+      "كام المصروفات المعلقة",
+      "اعرض حالات اعتماد المصروفات",
+      "المصروفات حسب حالة الاعتماد",
+      "حالات المصروفات",
+    ])
+  ) {
+    return {
+      ...base,
+      mode: "query",
+      intent: "expense_approval_breakdown",
+      confidence: 0.9,
+      metric: "expense_amount",
+      group_by: "approval_status",
+      options: {
+        ...base.options,
+        response_type: "table",
+      },
+    };
+  }
+
   return null;
 }
 

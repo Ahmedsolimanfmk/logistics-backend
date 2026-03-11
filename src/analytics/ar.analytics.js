@@ -1,28 +1,86 @@
 const prisma = require("../prisma");
 
-async function getOutstandingSummary({ range, scope }) {
-  const now = new Date();
+function toMoney(v) {
+  return Math.round(Number(v || 0) * 100) / 100;
+}
 
-  const rows = await prisma.ar_invoices.findMany({
+function isOverdue(dueDate, now = new Date()) {
+  if (!dueDate) return false;
+  const d = new Date(dueDate);
+  if (Number.isNaN(d.getTime())) return false;
+  return d < now;
+}
+
+async function getOutstandingInvoicesBase({ range }) {
+  return prisma.ar_invoices.findMany({
     where: {
       issue_date: {
         gte: range.from,
         lte: range.to,
       },
       status: {
-        notIn: ["CANCELLED", "REJECTED", "DRAFT"],
+        in: ["APPROVED", "PARTIALLY_PAID", "PAID"],
       },
     },
     select: {
       id: true,
+      client_id: true,
       total_amount: true,
       due_date: true,
       status: true,
+      issue_date: true,
+      clients: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      payments: {
+        select: {
+          amount_allocated: true,
+          ar_payments: {
+            select: {
+              status: true,
+            },
+          },
+        },
+      },
     },
     orderBy: {
       issue_date: "desc",
     },
   });
+}
+
+function buildInvoiceOutstandingRow(row, now = new Date()) {
+  const totalAmount = toMoney(row?.total_amount || 0);
+
+  const paidAmount = toMoney(
+    (row?.payments || [])
+      .filter((p) => String(p?.ar_payments?.status || "").toUpperCase() === "POSTED")
+      .reduce((sum, p) => sum + Number(p?.amount_allocated || 0), 0)
+  );
+
+  const remainingAmount = Math.max(0, toMoney(totalAmount - paidAmount));
+  const overdue = remainingAmount > 0 && isOverdue(row?.due_date, now);
+
+  return {
+    invoice_id: row.id,
+    client_id: row.client_id,
+    client_name: row?.clients?.name || "عميل غير معروف",
+    issue_date: row.issue_date || null,
+    due_date: row.due_date || null,
+    status: row.status || null,
+    total_amount: totalAmount,
+    paid_amount: paidAmount,
+    remaining_amount: remainingAmount,
+    is_overdue: overdue,
+  };
+}
+
+async function getOutstandingSummary({ range, scope }) {
+  const now = new Date();
+  const rows = await getOutstandingInvoicesBase({ range });
 
   let total_outstanding = 0;
   let overdue_amount = 0;
@@ -31,27 +89,28 @@ async function getOutstandingSummary({ range, scope }) {
   let approved_count = 0;
   let partially_paid_count = 0;
   let paid_count = 0;
-  let submitted_count = 0;
+  let open_invoice_count = 0;
 
   for (const row of rows) {
-    const amount = Number(row.total_amount || 0);
-    const status = String(row.status || "").toUpperCase();
-
-    total_outstanding += amount;
+    const item = buildInvoiceOutstandingRow(row, now);
+    const status = String(item.status || "").toUpperCase();
 
     if (status === "APPROVED") approved_count += 1;
     else if (status === "PARTIALLY_PAID") partially_paid_count += 1;
     else if (status === "PAID") paid_count += 1;
-    else if (status === "SUBMITTED") submitted_count += 1;
 
-    const dueDate = row.due_date ? new Date(row.due_date) : null;
+    if (item.remaining_amount > 0) {
+      open_invoice_count += 1;
+      total_outstanding += item.remaining_amount;
 
-    if (dueDate && dueDate < now && status !== "PAID") {
-      overdue_amount += amount;
-    } else if (status !== "PAID") {
-      current_amount += amount;
+      if (item.is_overdue) overdue_amount += item.remaining_amount;
+      else current_amount += item.remaining_amount;
     }
   }
+
+  total_outstanding = toMoney(total_outstanding);
+  overdue_amount = toMoney(overdue_amount);
+  current_amount = toMoney(current_amount);
 
   return {
     metric: "ar_outstanding_summary",
@@ -67,11 +126,10 @@ async function getOutstandingSummary({ range, scope }) {
       total_outstanding,
       overdue_amount,
       current_amount,
-      invoice_count: rows.length,
+      invoice_count: open_invoice_count,
       approved_count,
       partially_paid_count,
       paid_count,
-      submitted_count,
     },
     summary: {
       currency: "EGP",
@@ -80,55 +138,49 @@ async function getOutstandingSummary({ range, scope }) {
 }
 
 async function getTopDebtors({ range, scope, limit = 10 }) {
-  const rows = await prisma.ar_invoices.groupBy({
-    by: ["client_id"],
-    where: {
-      issue_date: {
-        gte: range.from,
-        lte: range.to,
-      },
-      status: {
-        notIn: ["CANCELLED", "REJECTED", "DRAFT", "PAID"],
-      },
-    },
-    _sum: {
-      total_amount: true,
-    },
-    _count: {
-      _all: true,
-    },
-    orderBy: {
-      _sum: {
-        total_amount: "desc",
-      },
-    },
-    take: limit,
-  });
+  const now = new Date();
+  const rows = await getOutstandingInvoicesBase({ range });
 
-  const clientIds = rows.map((r) => r.client_id);
+  const map = new Map();
 
-  const clients = clientIds.length
-    ? await prisma.clients.findMany({
-        where: {
-          id: { in: clientIds },
-        },
-        select: {
-          id: true,
-          name: true,
-        },
-      })
-    : [];
+  for (const row of rows) {
+    const item = buildInvoiceOutstandingRow(row, now);
+    if (item.remaining_amount <= 0) continue;
 
-  const clientMap = new Map(clients.map((c) => [c.id, c.name]));
+    const prev = map.get(item.client_id) || {
+      client_id: item.client_id,
+      client_name: item.client_name,
+      total_outstanding: 0,
+      overdue_amount: 0,
+      current_amount: 0,
+      invoice_count: 0,
+    };
 
-  const items = rows.map((row) => ({
-    client_id: row.client_id,
-    client_name: clientMap.get(row.client_id) || "عميل غير معروف",
-    total_outstanding: Number(row._sum.total_amount || 0),
-    invoice_count: row._count._all || 0,
-  }));
+    prev.total_outstanding += item.remaining_amount;
+    prev.invoice_count += 1;
 
-  const grandTotal = items.reduce((sum, item) => sum + item.total_outstanding, 0);
+    if (item.is_overdue) prev.overdue_amount += item.remaining_amount;
+    else prev.current_amount += item.remaining_amount;
+
+    map.set(item.client_id, prev);
+  }
+
+  const items = Array.from(map.values())
+    .map((item) => ({
+      client_id: item.client_id,
+      client_name: item.client_name,
+      total_outstanding: toMoney(item.total_outstanding),
+      overdue_amount: toMoney(item.overdue_amount),
+      current_amount: toMoney(item.current_amount),
+      invoice_count: item.invoice_count,
+    }))
+    .filter((item) => item.total_outstanding > 0)
+    .sort((a, b) => b.total_outstanding - a.total_outstanding)
+    .slice(0, limit);
+
+  const grandTotal = toMoney(
+    items.reduce((sum, item) => sum + Number(item.total_outstanding || 0), 0)
+  );
 
   return {
     metric: "ar_top_debtors",

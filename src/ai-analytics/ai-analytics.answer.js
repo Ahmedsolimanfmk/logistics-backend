@@ -1,3 +1,5 @@
+const { labelRange } = require("./ai-analytics.time-labels");
+
 function money(n) {
   return new Intl.NumberFormat("ar-EG", {
     maximumFractionDigits: 2,
@@ -30,21 +32,6 @@ function pickValue(obj, paths = []) {
   return undefined;
 }
 
-function labelRange(range) {
-  if (range === "today") return "اليوم";
-  if (range === "this_week") return "هذا الأسبوع";
-  if (range === "last_week") return "الأسبوع الماضي";
-  if (range === "this_month") return "هذا الشهر";
-  if (range === "last_month") return "الشهر الماضي";
-  if (range === "this_year") return "هذه السنة";
-  if (range === "last_7_days") return "آخر 7 أيام";
-  if (range === "last_30_days") return "آخر 30 يوم";
-  if (range === "last_90_days") return "آخر 90 يوم";
-  if (range === "compare_this_vs_last_month") return "هذا الشهر مقارنة بالشهر الماضي";
-  if (range === "custom") return "الفترة المحددة";
-  return "الفترة المطلوبة";
-}
-
 function renderTopList(items, getLabel, getValue, unit = "جنيه") {
   return items
     .map((item, idx) => {
@@ -69,10 +56,28 @@ function renderEntityLabel(item) {
     item.item_name ||
     item.expense_type ||
     item.type_name ||
+    item.vendor_name ||
+    item.payment_source ||
+    item.approval_status ||
     item.plate_no ||
     item.fleet_no ||
     "العنصر المطلوب"
   );
+}
+
+function paymentSourceLabel(v) {
+  const s = String(v || "").toUpperCase();
+  if (s === "ADVANCE") return "عهدة";
+  if (s === "COMPANY") return "شركة";
+  return v || "غير محدد";
+}
+
+function approvalStatusLabel(v) {
+  const s = String(v || "").toUpperCase();
+  if (s === "APPROVED") return "معتمد";
+  if (s === "PENDING") return "معلق";
+  if (s === "REJECTED") return "مرفوض";
+  return v || "غير محدد";
 }
 
 function buildExpenseCompareAnswer(result) {
@@ -187,6 +192,10 @@ function buildUiMeta({ parsed, result, answer }) {
   if (intent === "expense_summary") title = "إجمالي المصروفات";
   else if (intent === "expense_summary_compare") title = "مقارنة المصروفات";
   else if (intent === "expense_by_type") title = limit > 1 ? "أعلى أنواع المصروف" : "أعلى نوع مصروف";
+  else if (intent === "expense_by_vehicle") title = limit > 1 ? "أعلى المركبات صرفًا" : "أعلى مركبة صرفًا";
+  else if (intent === "expense_by_payment_source") title = "المصروفات حسب مصدر الدفع";
+  else if (intent === "top_vendors") title = limit > 1 ? "أعلى الموردين مصروفات" : "أعلى مورد مصروفات";
+  else if (intent === "expense_approval_breakdown") title = "حالات اعتماد المصروفات";
   else if (intent === "outstanding_summary") title = "مستحقات العملاء";
   else if (intent === "top_debtors") title = limit > 1 ? "أعلى العملاء مديونية" : "أعلى عميل مديونية";
   else if (intent === "open_work_orders") title = "أوامر العمل المفتوحة";
@@ -290,6 +299,114 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       )} هو "${top.expense_type || top.type_name || top.name || "غير محدد"}" بإجمالي ${money(
         top.total_amount || top.amount || 0
       )} جنيه.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "expense_by_vehicle") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات مصروفات حسب المركبة خلال ${labelRange(
+        parsed?.filters?.range
+      )}.`;
+    } else if (limit > 1) {
+      answer = `أعلى ${Math.min(limit, items.length)} مركبات من حيث المصروفات خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
+        (x) => x.total_amount || x.amount || 0
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `أعلى مركبة من حيث المصروفات خلال ${labelRange(
+        parsed?.filters?.range
+      )} هي "${
+        top.display_name || top.fleet_no || top.plate_no || "غير محددة"
+      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "expense_by_payment_source") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات مصروفات حسب مصدر الدفع خلال ${labelRange(
+        parsed?.filters?.range
+      )}.`;
+    } else {
+      answer = `توزيع المصروفات حسب مصدر الدفع خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items,
+        (x) => paymentSourceLabel(x.payment_source),
+        (x) => x.total_amount || 0
+      )}`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "top_vendors") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات موردين خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else if (limit > 1) {
+      answer = `أعلى ${Math.min(limit, items.length)} موردين من حيث المصروفات خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => x.vendor_name || "مورد غير معروف",
+        (x) => x.total_amount || 0
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `أعلى مورد من حيث المصروفات خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو "${top.vendor_name || "مورد غير معروف"}" بإجمالي ${money(
+        top.total_amount || 0
+      )} جنيه.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "expense_approval_breakdown") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات لحالات اعتماد المصروفات خلال ${labelRange(
+        parsed?.filters?.range
+      )}.`;
+    } else {
+      answer = `توزيع المصروفات حسب حالة الاعتماد خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items,
+        (x) => approvalStatusLabel(x.approval_status),
+        (x) => x.total_amount || 0
+      )}`;
     }
 
     return {

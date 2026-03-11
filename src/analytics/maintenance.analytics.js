@@ -1,12 +1,42 @@
 const prisma = require("../prisma");
 
+function toMoney(v) {
+  return Math.round(Number(v || 0) * 100) / 100;
+}
+
+function buildRangeFilter(range, preferredField = "opened_at") {
+  if (preferredField === "opened_at") {
+    return {
+      OR: [
+        {
+          opened_at: {
+            gte: range.from,
+            lte: range.to,
+          },
+        },
+        {
+          opened_at: null,
+          created_at: {
+            gte: range.from,
+            lte: range.to,
+          },
+        },
+      ],
+    };
+  }
+
+  return {
+    created_at: {
+      gte: range.from,
+      lte: range.to,
+    },
+  };
+}
+
 async function getOpenWorkOrders({ range, scope }) {
   const rows = await prisma.maintenance_work_orders.findMany({
     where: {
-      created_at: {
-        gte: range.from,
-        lte: range.to,
-      },
+      ...buildRangeFilter(range, "opened_at"),
       status: {
         notIn: ["COMPLETED", "CANCELLED"],
       },
@@ -18,10 +48,19 @@ async function getOpenWorkOrders({ range, scope }) {
       opened_at: true,
       created_at: true,
       vehicle_id: true,
+      vehicles: {
+        select: {
+          id: true,
+          fleet_no: true,
+          plate_no: true,
+          display_name: true,
+        },
+      },
     },
-    orderBy: {
-      created_at: "desc",
-    },
+    orderBy: [
+      { opened_at: "desc" },
+      { created_at: "desc" },
+    ],
   });
 
   const byStatusMap = new Map();
@@ -56,6 +95,9 @@ async function getOpenWorkOrders({ range, scope }) {
         opened_at: row.opened_at,
         created_at: row.created_at,
         vehicle_id: row.vehicle_id,
+        fleet_no: row.vehicles?.fleet_no || null,
+        plate_no: row.vehicles?.plate_no || null,
+        display_name: row.vehicles?.display_name || null,
       })),
     },
     summary: {
@@ -116,12 +158,13 @@ async function getCostByVehicle({ range, scope, limit = 10 }) {
 
   const items = rows.map((row) => {
     const vehicle = vehicleMap.get(row.vehicle_id);
+
     return {
       vehicle_id: row.vehicle_id,
       fleet_no: vehicle?.fleet_no || null,
       plate_no: vehicle?.plate_no || null,
       display_name: vehicle?.display_name || null,
-      total_cost: Number(row._sum.amount || 0),
+      total_cost: toMoney(row._sum.amount || 0),
       expense_count: row._count._all || 0,
     };
   });
@@ -143,7 +186,7 @@ async function getCostByVehicle({ range, scope, limit = 10 }) {
     summary: {
       currency: "EGP",
       vehicles_count: items.length,
-      total_cost: items.reduce((sum, x) => sum + x.total_cost, 0),
+      total_cost: toMoney(items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)),
     },
   };
 }

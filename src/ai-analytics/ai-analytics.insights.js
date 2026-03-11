@@ -53,18 +53,62 @@ function levelByMagnitude(deltaAbs) {
   return "info";
 }
 
+function paymentSourceLabel(v) {
+  const s = String(v || "").toUpperCase();
+  if (s === "ADVANCE") return "العهدة";
+  if (s === "COMPANY") return "الشركة";
+  return v || "غير محدد";
+}
+
+function approvalStatusLabel(v) {
+  const s = String(v || "").toUpperCase();
+  if (s === "APPROVED") return "معتمد";
+  if (s === "PENDING") return "معلق";
+  if (s === "REJECTED") return "مرفوض";
+  return v || "غير محدد";
+}
+
 function buildFinanceInsights(data = {}) {
   const items = [];
 
   const expenseSummary = data?.expenseSummary;
   const expenseByType = data?.expenseByType;
   const expenseSummaryLastMonth = data?.expenseSummaryLastMonth;
+  const expenseByVehicle = data?.expenseByVehicle;
+  const expenseByPaymentSource = data?.expenseByPaymentSource;
+  const topVendors = data?.topVendors;
+  const expenseApprovalBreakdown = data?.expenseApprovalBreakdown;
 
   const currentTotal = pickNumber(expenseSummary, [
     ["data", "total_expense"],
     ["total_expense"],
     ["data", "total"],
     ["total"],
+  ]);
+
+  const approvedExpense = pickNumber(expenseSummary, [
+    ["data", "approved_expense"],
+    ["approved_expense"],
+  ]);
+
+  const pendingExpense = pickNumber(expenseSummary, [
+    ["data", "pending_expense"],
+    ["pending_expense"],
+  ]);
+
+  const rejectedExpense = pickNumber(expenseSummary, [
+    ["data", "rejected_expense"],
+    ["rejected_expense"],
+  ]);
+
+  const advanceExpense = pickNumber(expenseSummary, [
+    ["data", "advance_expense"],
+    ["advance_expense"],
+  ]);
+
+  const companyExpense = pickNumber(expenseSummary, [
+    ["data", "company_expense"],
+    ["company_expense"],
   ]);
 
   const lastTotal = pickNumber(expenseSummaryLastMonth, [
@@ -98,6 +142,30 @@ function buildFinanceInsights(data = {}) {
     }
   }
 
+  if (approvedExpense > 0) {
+    items.push({
+      type: "finance_approved_expense",
+      level: "info",
+      text: `إجمالي المصروفات المعتمدة هذا الشهر هو ${money(approvedExpense)} جنيه.`,
+    });
+  }
+
+  if (pendingExpense > 0) {
+    items.push({
+      type: "finance_pending_expense",
+      level: pendingExpense >= currentTotal * 0.25 ? "warning" : "info",
+      text: `يوجد مصروفات معلقة بقيمة ${money(pendingExpense)} جنيه تحتاج متابعة.`,
+    });
+  }
+
+  if (rejectedExpense > 0) {
+    items.push({
+      type: "finance_rejected_expense",
+      level: "warning",
+      text: `تم رفض مصروفات بقيمة ${money(rejectedExpense)} جنيه خلال الفترة الحالية.`,
+    });
+  }
+
   const expenseTypes = pickItems(expenseByType);
   if (expenseTypes.length > 0) {
     const top = expenseTypes[0];
@@ -109,6 +177,79 @@ function buildFinanceInsights(data = {}) {
       level: "info",
       text: `أعلى نوع مصروف هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`,
     });
+  }
+
+  const vehicles = pickItems(expenseByVehicle);
+  if (vehicles.length > 0) {
+    const top = vehicles[0];
+    const vehicleName =
+      top?.display_name || top?.fleet_no || top?.plate_no || "مركبة غير محددة";
+    const value = Number(top?.total_amount || top?.amount || 0);
+
+    items.push({
+      type: "finance_top_vehicle_expense",
+      level: value > 0 ? "info" : "info",
+      text: `أعلى مركبة من حيث المصروفات هذا الشهر هي "${vehicleName}" بإجمالي ${money(value)} جنيه.`,
+    });
+  }
+
+  const paymentSources = pickItems(expenseByPaymentSource);
+  if (paymentSources.length > 0) {
+    const top = paymentSources[0];
+    const label = paymentSourceLabel(top?.payment_source);
+    const value = Number(top?.total_amount || 0);
+
+    items.push({
+      type: "finance_top_payment_source",
+      level: "info",
+      text: `أكبر مصدر دفع للمصروفات هذا الشهر هو "${label}" بإجمالي ${money(value)} جنيه.`,
+    });
+  }
+
+  if (advanceExpense > 0 || companyExpense > 0) {
+    if (advanceExpense > companyExpense) {
+      items.push({
+        type: "finance_advance_dominates",
+        level: advanceExpense >= currentTotal * 0.5 ? "warning" : "info",
+        text: `المصروفات من العهدة أعلى من مصروفات الشركة خلال هذا الشهر.`,
+      });
+    } else if (companyExpense > advanceExpense) {
+      items.push({
+        type: "finance_company_dominates",
+        level: "info",
+        text: `مصروفات الشركة أعلى من مصروفات العهدة خلال هذا الشهر.`,
+      });
+    }
+  }
+
+  const vendorItems = pickItems(topVendors);
+  if (vendorItems.length > 0) {
+    const top = vendorItems[0];
+    const name = top?.vendor_name || "مورد غير معروف";
+    const value = Number(top?.total_amount || 0);
+
+    items.push({
+      type: "finance_top_vendor",
+      level: "info",
+      text: `أعلى مورد من حيث المصروفات هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`,
+    });
+  }
+
+  const approvalItems = pickItems(expenseApprovalBreakdown);
+  if (approvalItems.length > 0) {
+    const pendingRow = approvalItems.find(
+      (x) => String(x?.approval_status || "").toUpperCase() === "PENDING"
+    );
+
+    if (pendingRow && Number(pendingRow?.total_amount || 0) > 0) {
+      items.push({
+        type: "finance_pending_breakdown",
+        level: "warning",
+        text: `حالة "معلق" تمثل ${money(
+          pendingRow.total_amount || 0
+        )} جنيه من إجمالي المصروفات المسجلة.`,
+      });
+    }
   }
 
   return items;

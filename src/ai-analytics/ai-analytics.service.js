@@ -102,6 +102,22 @@ async function executeParsedQuery({ user, parsed }) {
     return analyticsService.getFinanceExpenseByType({ user, query });
   }
 
+  if (intent === "expense_by_vehicle") {
+    return analyticsService.getFinanceExpenseByVehicle({ user, query });
+  }
+
+  if (intent === "expense_by_payment_source") {
+    return analyticsService.getFinanceExpenseByPaymentSource({ user, query });
+  }
+
+  if (intent === "top_vendors") {
+    return analyticsService.getFinanceTopVendors({ user, query });
+  }
+
+  if (intent === "expense_approval_breakdown") {
+    return analyticsService.getFinanceExpenseApprovalBreakdown({ user, query });
+  }
+
   if (intent === "outstanding_summary") {
     return analyticsService.getArOutstandingSummary({ user, query });
   }
@@ -149,6 +165,38 @@ async function buildInlineInsights({ user, parsed, result }) {
             query: { range: "this_month", limit: 5 },
           });
 
+    const expenseByVehicle =
+      parsed?.intent === "expense_by_vehicle"
+        ? result
+        : await analyticsService.getFinanceExpenseByVehicle({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const expenseByPaymentSource =
+      parsed?.intent === "expense_by_payment_source"
+        ? result
+        : await analyticsService.getFinanceExpenseByPaymentSource({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const topVendors =
+      parsed?.intent === "top_vendors"
+        ? result
+        : await analyticsService.getFinanceTopVendors({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const expenseApprovalBreakdown =
+      parsed?.intent === "expense_approval_breakdown"
+        ? result
+        : await analyticsService.getFinanceExpenseApprovalBreakdown({
+            user,
+            query: { range: "this_month" },
+          });
+
     const expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
       user,
       query: { range: "last_month" },
@@ -159,9 +207,13 @@ async function buildInlineInsights({ user, parsed, result }) {
       data: {
         expenseSummary,
         expenseByType,
+        expenseByVehicle,
+        expenseByPaymentSource,
+        topVendors,
+        expenseApprovalBreakdown,
         expenseSummaryLastMonth,
       },
-    }).slice(0, 3);
+    }).slice(0, 5);
   }
 
   if (moduleName === "ar") {
@@ -577,6 +629,28 @@ async function getAiInsights({ user, query }) {
       user,
       query: { range: "this_month", limit: 5 },
     });
+
+    data.expenseByVehicle = await analyticsService.getFinanceExpenseByVehicle({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.expenseByPaymentSource =
+      await analyticsService.getFinanceExpenseByPaymentSource({
+        user,
+        query: { range: "this_month" },
+      });
+
+    data.topVendors = await analyticsService.getFinanceTopVendors({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.expenseApprovalBreakdown =
+      await analyticsService.getFinanceExpenseApprovalBreakdown({
+        user,
+        query: { range: "this_month" },
+      });
 
     data.expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
       user,

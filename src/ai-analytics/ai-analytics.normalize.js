@@ -44,11 +44,28 @@ function tokenizeArabic(input) {
   return normalized.split(" ").filter(Boolean);
 }
 
+function normalizeList(items = []) {
+  return items
+    .map((x) => normalizeArabicText(x))
+    .filter(Boolean);
+}
+
 function includesAny(text, candidates = []) {
   const normalized = normalizeArabicText(text);
-  return candidates.some((candidate) =>
-    normalized.includes(normalizeArabicText(candidate))
-  );
+  if (!normalized) return false;
+
+  const normalizedCandidates = normalizeList(candidates);
+  return normalizedCandidates.some((candidate) => normalized.includes(candidate));
+}
+
+function includesAll(text, candidates = []) {
+  const normalized = normalizeArabicText(text);
+  if (!normalized) return false;
+
+  const normalizedCandidates = normalizeList(candidates);
+  if (!normalizedCandidates.length) return false;
+
+  return normalizedCandidates.every((candidate) => normalized.includes(candidate));
 }
 
 module.exports = {
@@ -59,5 +76,7 @@ module.exports = {
   normalizeWhitespace,
   normalizeArabicText,
   tokenizeArabic,
+  normalizeList,
   includesAny,
+  includesAll,
 };
