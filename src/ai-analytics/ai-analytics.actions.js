@@ -668,42 +668,56 @@ async function createExpenseExecutor({ user, payload }) {
   }
 
   const created = await prisma.cash_expenses.create({
-    data: {
-      payment_source: "ADVANCE",
-      cash_advances: { connect: { id: cashAdvanceId } },
+  data: {
+    payment_source: "COMPANY",
 
-      trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
+    trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
 
-      vehicles: finalVehicleId
-        ? { connect: { id: finalVehicleId } }
-        : undefined,
+    vehicles: finalVehicleId
+      ? { connect: { id: finalVehicleId } }
+      : undefined,
 
-      maintenance_work_orders: finalWorkOrderId
-        ? { connect: { id: finalWorkOrderId } }
-        : undefined,
+    maintenance_work_orders: finalWorkOrderId
+      ? { connect: { id: finalWorkOrderId } }
+      : undefined,
 
-      expense_type: expenseType,
-      amount,
-      notes: notes || null,
-      receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
+    expense_type: expenseType,
+    amount,
+    notes: notes || null,
+    receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
 
-      approval_status: "PENDING",
-      users_cash_expenses_created_byTousers: { connect: { id: userId } },
-    },
-    select: {
-      id: true,
-      payment_source: true,
-      cash_advance_id: true,
-      expense_type: true,
-      amount: true,
-      notes: true,
-      approval_status: true,
-      vehicle_id: true,
-      trip_id: true,
-      maintenance_work_order_id: true,
-      created_at: true,
-    },
-  });
+    vendor_name: vendorName,
+    invoice_no: payload?.invoice_no ? String(payload.invoice_no) : null,
+    invoice_date: payload?.invoice_date ? new Date(payload.invoice_date) : null,
+    paid_method: payload?.paid_method ? String(payload.paid_method).toUpperCase() : null,
+    payment_ref: payload?.payment_ref ? String(payload.payment_ref) : null,
+    vat_amount:
+      payload?.vat_amount !== undefined && payload?.vat_amount !== null
+        ? Number(payload.vat_amount)
+        : null,
+    invoice_total:
+      payload?.invoice_total !== undefined && payload?.invoice_total !== null
+        ? Number(payload.invoice_total)
+        : null,
+
+    approval_status: "PENDING",
+    users_cash_expenses_created_byTousers: { connect: { id: userId } },
+  },
+  select: {
+    id: true,
+    payment_source: true,
+    expense_type: true,
+    amount: true,
+    notes: true,
+    approval_status: true,
+    vehicle_id: true,
+    trip_id: true,
+    maintenance_work_order_id: true,
+    vendor_name: true,
+    paid_method: true,
+    created_at: true,
+  },
+});
 
   return {
     ok: true,
