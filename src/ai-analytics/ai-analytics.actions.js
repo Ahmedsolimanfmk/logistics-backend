@@ -749,7 +749,16 @@ async function runAiExecutor({ action, user, payload }) {
   };
 }
 
+async function executeAiAction({ interpreted, user }) {
+  return runAiExecutor({
+    action: interpreted?.action,
+    user,
+    payload: interpreted?.payload || {},
+  });
+}
+
 module.exports = {
+  executeAiAction,
   runAiExecutor,
   createMaintenanceRequestExecutor,
   createWorkOrderExecutor,
