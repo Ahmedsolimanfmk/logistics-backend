@@ -1,27 +1,19 @@
+const { labelRange } = require("./ai-analytics.time-labels");
+
 function money(n) {
   return new Intl.NumberFormat("ar-EG", {
     maximumFractionDigits: 2,
   }).format(Number(n || 0));
 }
 
-function asArray(v) {
-  return Array.isArray(v) ? v : [];
-}
-
-function asNumber(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function pickItems(obj) {
-  if (!obj) return [];
-  if (Array.isArray(obj?.data?.items)) return obj.data.items;
-  if (Array.isArray(obj?.items)) return obj.items;
-  if (Array.isArray(obj?.data)) return obj.data;
+function pickItems(result) {
+  if (Array.isArray(result?.data?.items)) return result.data.items;
+  if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result?.data)) return result.data;
   return [];
 }
 
-function pickValue(obj, paths = []) {
+function pickNumber(obj, paths = []) {
   for (const path of paths) {
     let cur = obj;
     let ok = true;
@@ -34,247 +26,249 @@ function pickValue(obj, paths = []) {
       cur = cur[key];
     }
 
-    if (ok && cur != null) return cur;
+    if (ok && cur != null) {
+      const n = Number(cur);
+      if (Number.isFinite(n)) return n;
+    }
   }
 
-  return undefined;
+  return 0;
 }
 
-function buildFinanceInsights(data) {
-  const insights = [];
+function percentDelta(current, previous) {
+  const c = Number(current || 0);
+  const p = Number(previous || 0);
 
-  const totalExpense = asNumber(
-    pickValue(data?.expenseSummary, [
-      ["data", "total_expense"],
-      ["total_expense"],
-      ["data", "summary", "total_expense"],
-      ["summary", "total_expense"],
-      ["data", "total"],
-      ["total"],
-    ])
-  );
+  if (p === 0) {
+    if (c === 0) return 0;
+    return 100;
+  }
 
-  const expenseTypes = asArray(
-    pickItems(data?.expenseByType)
-  );
+  return ((c - p) / p) * 100;
+}
 
-  if (totalExpense > 0) {
-    insights.push({
+function levelByMagnitude(deltaAbs) {
+  if (deltaAbs >= 40) return "warning";
+  if (deltaAbs >= 20) return "info";
+  return "info";
+}
+
+function buildFinanceInsights(data = {}) {
+  const items = [];
+
+  const expenseSummary = data?.expenseSummary;
+  const expenseByType = data?.expenseByType;
+  const expenseSummaryLastMonth = data?.expenseSummaryLastMonth;
+
+  const currentTotal = pickNumber(expenseSummary, [
+    ["data", "total_expense"],
+    ["total_expense"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  const lastTotal = pickNumber(expenseSummaryLastMonth, [
+    ["data", "total_expense"],
+    ["total_expense"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  if (currentTotal > 0) {
+    items.push({
       type: "finance_total_expense",
       level: "info",
-      text: `إجمالي المصروفات خلال هذا الشهر هو ${money(totalExpense)} جنيه.`,
-    });
-  } else {
-    insights.push({
-      type: "finance_total_expense",
-      level: "info",
-      text: "لا توجد مصروفات مسجلة خلال هذا الشهر حتى الآن.",
+      text: `إجمالي المصروفات في ${labelRange("this_month")} هو ${money(currentTotal)} جنيه.`,
     });
   }
 
+  if (currentTotal > 0 || lastTotal > 0) {
+    const delta = percentDelta(currentTotal, lastTotal);
+    const absDelta = Math.abs(delta);
+
+    if (absDelta >= 10) {
+      items.push({
+        type: "finance_vs_last_month",
+        level: levelByMagnitude(absDelta),
+        text:
+          delta >= 0
+            ? `المصروفات ارتفعت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`
+            : `المصروفات انخفضت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`,
+      });
+    }
+  }
+
+  const expenseTypes = pickItems(expenseByType);
   if (expenseTypes.length > 0) {
     const top = expenseTypes[0];
-    insights.push({
+    const name = top?.expense_type || top?.type_name || top?.name || "غير محدد";
+    const value = Number(top?.total_amount || top?.amount || 0);
+
+    items.push({
       type: "finance_top_expense_type",
       level: "info",
-      text: `أعلى نوع مصروف خلال هذا الشهر هو "${
-        top.expense_type || top.type_name || top.name || "غير محدد"
-      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`,
-    });
-  } else {
-    insights.push({
-      type: "finance_top_expense_type",
-      level: "info",
-      text: "لا توجد بيانات توزيع مصروفات حسب النوع خلال هذا الشهر.",
+      text: `أعلى نوع مصروف هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`,
     });
   }
 
-  return insights;
+  return items;
 }
 
-function buildArInsights(data) {
-  const insights = [];
+function buildArInsights(data = {}) {
+  const items = [];
 
-  const totalOutstanding = asNumber(
-    pickValue(data?.outstandingSummary, [
-      ["data", "total_outstanding"],
-      ["total_outstanding"],
-      ["data", "summary", "total_outstanding"],
-      ["summary", "total_outstanding"],
-      ["data", "total"],
-      ["total"],
-    ])
-  );
+  const outstandingSummary = data?.outstandingSummary;
+  const topDebtors = data?.topDebtors;
 
-  const overdueAmount = asNumber(
-    pickValue(data?.outstandingSummary, [
-      ["data", "overdue_amount"],
-      ["overdue_amount"],
-      ["data", "summary", "overdue_amount"],
-      ["summary", "overdue_amount"],
-    ])
-  );
+  const totalOutstanding = pickNumber(outstandingSummary, [
+    ["data", "total_outstanding"],
+    ["total_outstanding"],
+    ["data", "total"],
+    ["total"],
+  ]);
 
-  const topDebtors = asArray(
-    pickItems(data?.topDebtors)
-  );
+  const overdueAmount = pickNumber(outstandingSummary, [
+    ["data", "overdue_amount"],
+    ["overdue_amount"],
+  ]);
 
   if (totalOutstanding > 0) {
-    insights.push({
+    items.push({
       type: "ar_total_outstanding",
       level: overdueAmount > 0 ? "warning" : "info",
-      text: `إجمالي مستحقات العملاء الحالية هو ${money(totalOutstanding)} جنيه.`,
-    });
-  } else {
-    insights.push({
-      type: "ar_total_outstanding",
-      level: "info",
-      text: "لا توجد مستحقات عملاء قائمة حاليًا.",
+      text: `إجمالي مستحقات العملاء حاليًا هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`,
     });
   }
 
-  if (overdueAmount > 0) {
-    insights.push({
-      type: "ar_overdue_amount",
-      level: "warning",
-      text: `من إجمالي المستحقات توجد متأخرات بقيمة ${money(overdueAmount)} جنيه تحتاج متابعة.`,
-    });
-  }
+  const debtors = pickItems(topDebtors);
+  if (debtors.length > 0) {
+    const top = debtors[0];
+    const name = top?.client_name || top?.name || "غير محدد";
+    const value = Number(top?.total_outstanding || top?.amount || 0);
 
-  if (topDebtors.length > 0) {
-    const top = topDebtors[0];
-    insights.push({
+    items.push({
       type: "ar_top_debtor",
-      level: "info",
-      text: `أعلى عميل مديونية حاليًا هو "${
-        top.client_name || top.name || "غير محدد"
-      }" بإجمالي ${money(top.total_outstanding || top.amount || 0)} جنيه.`,
-    });
-  } else {
-    insights.push({
-      type: "ar_top_debtor",
-      level: "info",
-      text: "لا توجد بيانات عملاء مديونية للعرض حاليًا.",
+      level: value > 0 ? "warning" : "info",
+      text: `أعلى عميل مديونية حاليًا هو "${name}" بإجمالي ${money(value)} جنيه.`,
     });
   }
 
-  return insights;
+  return items;
 }
 
-function buildMaintenanceInsights(data) {
-  const insights = [];
+function buildMaintenanceInsights(data = {}) {
+  const items = [];
 
-  const openCount = asNumber(
-    pickValue(data?.openWorkOrders, [
-      ["data", "total_open_work_orders"],
-      ["total_open_work_orders"],
-      ["data", "count"],
-      ["count"],
-      ["data", "total"],
-      ["total"],
-    ])
-  );
+  const openWorkOrders = data?.openWorkOrders;
+  const costByVehicle = data?.costByVehicle;
 
-  const costByVehicle = asArray(
-    pickItems(data?.costByVehicle)
-  );
+  const totalOpen = pickNumber(openWorkOrders, [
+    ["data", "total_open_work_orders"],
+    ["total_open_work_orders"],
+    ["data", "count"],
+    ["count"],
+    ["data", "total"],
+    ["total"],
+  ]);
 
-  if (openCount > 0) {
-    insights.push({
-      type: "maintenance_open_work_orders",
-      level: openCount >= 5 ? "warning" : "info",
-      text: `يوجد ${openCount} أوامر عمل مفتوحة حاليًا وتحتاج متابعة.`,
-    });
-  } else {
-    insights.push({
-      type: "maintenance_open_work_orders",
-      level: "info",
-      text: "لا توجد أوامر عمل مفتوحة حاليًا.",
-    });
-  }
+  items.push({
+    type: "maintenance_open_work_orders",
+    level: totalOpen > 0 ? "warning" : "info",
+    text:
+      totalOpen > 0
+        ? `يوجد ${Number(totalOpen)} أوامر عمل مفتوحة حاليًا.`
+        : "لا توجد أوامر عمل مفتوحة حاليًا.",
+  });
 
-  if (costByVehicle.length > 0) {
-    const top = costByVehicle[0];
-    insights.push({
-      type: "maintenance_top_cost_vehicle",
-      level: "info",
-      text: `أعلى مركبة من حيث تكلفة الصيانة هي "${
-        top.vehicle_name || top.display_name || top.plate_no || top.name || "غير محددة"
-      }" بإجمالي ${money(top.total_cost || top.total_amount || top.amount || 0)} جنيه.`,
-    });
-  } else {
-    insights.push({
-      type: "maintenance_top_cost_vehicle",
-      level: "info",
-      text: "لا توجد بيانات تكلفة صيانة للمركبات خلال هذا الشهر.",
+  const vehicles = pickItems(costByVehicle);
+  if (vehicles.length > 0) {
+    const top = vehicles[0];
+    const vehicleName =
+      top?.vehicle_name || top?.display_name || top?.plate_no || top?.name || "غير محددة";
+    const totalCost = Number(top?.total_cost || top?.total_amount || top?.amount || 0);
+
+    items.push({
+      type: "maintenance_top_vehicle_cost",
+      level: totalCost > 0 ? "info" : "info",
+      text: `أعلى مركبة تكلفة صيانة هذا الشهر هي "${vehicleName}" بإجمالي ${money(totalCost)} جنيه.`,
     });
   }
 
-  return insights;
+  return items;
 }
 
-function buildInventoryInsights(data) {
-  const insights = [];
+function buildInventoryInsights(data = {}) {
+  const items = [];
 
-  const topIssuedParts = asArray(
-    pickItems(data?.topIssuedParts)
-  );
+  const topIssuedParts = data?.topIssuedParts;
+  const lowStockItems = data?.lowStockItems;
 
-  const lowStockItems = asArray(
-    pickItems(data?.lowStockItems)
-  );
+  const issued = pickItems(topIssuedParts);
+  if (issued.length > 0) {
+    const top = issued[0];
+    const name = top?.part_name || top?.item_name || top?.name || "غير محدد";
+    const qty = Number(top?.total_issued_qty || top?.issued_qty || top?.qty || 0);
 
-  if (topIssuedParts.length > 0) {
-    const top = topIssuedParts[0];
-    insights.push({
+    items.push({
       type: "inventory_top_issued_part",
       level: "info",
-      text: `أكثر صنف تم صرفه هو "${
-        top.part_name || top.item_name || top.name || "غير محدد"
-      }" بعدد ${Number(top.total_issued_qty || top.issued_qty || top.qty || 0)}.`,
-    });
-  } else {
-    insights.push({
-      type: "inventory_top_issued_part",
-      level: "info",
-      text: "لا توجد بيانات أصناف مصروفة خلال هذا الشهر.",
+      text: `أكثر صنف صرفًا هذا الشهر هو "${name}" بعدد ${qty}.`,
     });
   }
 
-  if (lowStockItems.length > 0) {
-    const top = lowStockItems[0];
-    insights.push({
-      type: "inventory_low_stock_items",
+  const lowStock = pickItems(lowStockItems);
+  if (lowStock.length > 0) {
+    items.push({
+      type: "inventory_low_stock_count",
+      level: lowStock.length >= 5 ? "warning" : "info",
+      text: `يوجد ${lowStock.length} أصناف منخفضة المخزون حاليًا.`,
+    });
+
+    const first = lowStock[0];
+    const firstName =
+      first?.part_name || first?.item_name || first?.name || "غير محدد";
+
+    items.push({
+      type: "inventory_low_stock_top",
       level: "warning",
-      text: `يوجد ${lowStockItems.length} أصناف منخفضة المخزون. أقربها للنفاد هو "${
-        top.part_name || top.item_name || top.name || "غير محدد"
-      }".`,
+      text: `أقرب صنف للنفاد حاليًا هو "${firstName}".`,
     });
   } else {
-    insights.push({
-      type: "inventory_low_stock_items",
+    items.push({
+      type: "inventory_low_stock_none",
       level: "info",
       text: "لا توجد أصناف منخفضة المخزون حاليًا.",
     });
   }
 
-  return insights;
+  return items;
 }
 
 function buildInsightsByContext({ context, data }) {
   const c = String(context || "").trim().toLowerCase();
 
-  if (c === "finance") return buildFinanceInsights(data);
-  if (c === "ar") return buildArInsights(data);
-  if (c === "maintenance") return buildMaintenanceInsights(data);
-  if (c === "inventory") return buildInventoryInsights(data);
+  if (c === "finance") {
+    return buildFinanceInsights(data);
+  }
+
+  if (c === "ar") {
+    return buildArInsights(data);
+  }
+
+  if (c === "maintenance") {
+    return buildMaintenanceInsights(data);
+  }
+
+  if (c === "inventory") {
+    return buildInventoryInsights(data);
+  }
 
   return [
     ...buildFinanceInsights(data),
     ...buildArInsights(data),
     ...buildMaintenanceInsights(data),
     ...buildInventoryInsights(data),
-  ];
+  ].slice(0, 10);
 }
 
 module.exports = {

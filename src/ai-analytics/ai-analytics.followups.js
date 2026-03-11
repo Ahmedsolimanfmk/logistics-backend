@@ -8,9 +8,111 @@ function uniqueQuestions(items = []) {
   );
 }
 
-function getFollowUpQuestions({ interpreted }) {
-  const intent = interpreted?.intent;
-  const limit = Number(interpreted?.limit || 0);
+function buildActionFollowUps(parsed, execution) {
+  if (execution?.ok && execution?.executed) {
+    if (parsed?.intent === "create_work_order") {
+      return uniqueQuestions([
+        "كم عدد أوامر العمل المفتوحة؟",
+        "ما أعلى مركبة تكلفة صيانة؟",
+        "اعرض أعلى 5 مركبات تكلفة صيانة",
+      ]);
+    }
+
+    if (parsed?.intent === "create_maintenance_request") {
+      return uniqueQuestions([
+        "كم عدد أوامر العمل المفتوحة؟",
+        "ما أعلى مركبة تكلفة صيانة؟",
+      ]);
+    }
+
+    if (parsed?.intent === "create_expense") {
+      return uniqueQuestions([
+        "كم إجمالي المصروفات هذا الشهر؟",
+        "ما أعلى نوع مصروف هذا الشهر؟",
+        "اعرض أعلى 5 أنواع مصروف هذا الشهر",
+      ]);
+    }
+  }
+
+  if (parsed?.intent === "create_work_order") {
+    return uniqueQuestions([
+      "نفذ الآن",
+      "عدّل اسم المركبة",
+      "اكتب الأمر بشكل أوضح",
+    ]);
+  }
+
+  if (parsed?.intent === "create_maintenance_request") {
+    return uniqueQuestions([
+      "نفذ الآن",
+      "اكتب وصف العطل بشكل أوضح",
+      "عدّل اسم المركبة",
+    ]);
+  }
+
+  if (parsed?.intent === "create_expense") {
+    return uniqueQuestions([
+      "نفذ الآن",
+      "أضف قيمة المصروف بوضوح",
+      "حدّد نوع المصروف",
+    ]);
+  }
+
+  return uniqueQuestions([
+    "كم إجمالي المصروفات هذا الشهر؟",
+    "من أعلى عميل مديونية؟",
+    "كم عدد أوامر العمل المفتوحة؟",
+    "ما الأصناف القريبة من النفاد؟",
+  ]);
+}
+
+function buildReferenceFollowUps(parsed) {
+  if (parsed?.intent === "reference_previous_expand_limit") {
+    return uniqueQuestions([
+      "الأول",
+      "الثاني",
+      "اعرض أعلى 5 عملاء مديونية",
+      "اعرض أعلى 5 مركبات تكلفة صيانة",
+    ]);
+  }
+
+  if (parsed?.intent === "reference_previous_item") {
+    return uniqueQuestions([
+      "نفس العميل",
+      "اعرض 10",
+      "اعرض أعلى 5 عملاء مديونية",
+      "اعرض أعلى 5 مركبات تكلفة صيانة",
+    ]);
+  }
+
+  if (parsed?.intent === "reference_previous_entity") {
+    return uniqueQuestions([
+      "اعرض 10",
+      "الأول",
+      "اعرض أعلى 5 عملاء مديونية",
+      "كم إجمالي المصروفات هذا الشهر؟",
+    ]);
+  }
+
+  return uniqueQuestions([
+    "اعرض أعلى 5 عملاء مديونية",
+    "اعرض أعلى 5 مركبات تكلفة صيانة",
+    "اعرض أعلى 5 أصناف صرفًا",
+    "كم إجمالي المصروفات هذا الشهر؟",
+  ]);
+}
+
+function getFollowUpQuestions({ parsed, result, execution = null }) {
+  const intent = parsed?.intent;
+  const limit = Number(parsed?.options?.limit || 0);
+
+  if (parsed?.mode === "action") {
+    return buildActionFollowUps(parsed, execution);
+  }
+
+  if (parsed?.mode === "reference_followup") {
+    return buildReferenceFollowUps(parsed);
+  }
 
   if (intent === "expense_summary_compare") {
     return uniqueQuestions([
@@ -36,6 +138,7 @@ function getFollowUpQuestions({ interpreted }) {
       "صرفنا كام هذا الشهر؟",
       "قارن مصروفات هذا الشهر بالشهر الماضي",
       limit > 1 ? "ما أعلى نوع مصروف هذا الشهر؟" : "اعرض أعلى 5 أنواع مصروف هذا الشهر",
+      limit <= 10 ? "اعرض 10" : null,
     ]);
   }
 
@@ -54,6 +157,8 @@ function getFollowUpQuestions({ interpreted }) {
       "فلوسنا عند العملاء كام؟",
       "قيمة متأخرات العملاء كام؟",
       limit > 1 ? "من أعلى عميل مديونية؟" : "اعرض أعلى 5 عملاء مديونية",
+      "الأول",
+      limit <= 10 ? "اعرض 10" : null,
     ]);
   }
 
@@ -72,6 +177,8 @@ function getFollowUpQuestions({ interpreted }) {
       "كام أمر عمل مفتوح؟",
       limit > 1 ? "ما أعلى مركبة تكلفة صيانة؟" : "اعرض أعلى 5 مركبات تكلفة صيانة",
       "ما أكثر قطع الغيار صرفاً؟",
+      "الأول",
+      limit <= 10 ? "اعرض 10" : null,
     ]);
   }
 
@@ -81,6 +188,8 @@ function getFollowUpQuestions({ interpreted }) {
       "إيه الأصناف اللي قربت تخلص؟",
       "كام عدد الأصناف منخفضة المخزون؟",
       limit > 1 ? "ما أكثر قطع الغيار صرفاً؟" : "اعرض أعلى 5 أصناف صرفًا",
+      "الأول",
+      limit <= 10 ? "اعرض 10" : null,
     ]);
   }
 
