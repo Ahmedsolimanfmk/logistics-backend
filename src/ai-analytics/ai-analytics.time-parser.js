@@ -1,553 +1,229 @@
-const SYNONYMS = {
-  modules: {
-    finance: [
-      "ماليه",
-      "مالية",
-      "مصروف",
-      "مصروفات",
-      "الصرف",
-      "تكلفه",
-      "تكلفة",
-      "نفقات",
-      "عهده",
-      "عهدة",
-      "مورد",
-      "موردين",
-      "اعتماد مصروف",
-      "حالة الاعتماد",
-    ],
-    ar: [
-      "عملاء",
-      "العملاء",
-      "حسابات العملاء",
-      "مستحقات",
-      "مديونيه",
-      "مديونية",
-      "متاخرات",
-      "متأخرات",
-      "تحصيل",
-      "فواتير",
-      "دفعات العملاء",
-      "فلوسنا عند العملاء",
-    ],
-    maintenance: [
-      "صيانه",
-      "صيانة",
-      "امر عمل",
-      "أمر عمل",
-      "اوامر العمل",
-      "أوامر العمل",
-      "ورشة",
-      "بلاغ صيانه",
-      "طلب صيانه",
-      "طلب صيانة",
-      "تكلفة صيانة",
-    ],
-    inventory: [
-      "مخزن",
-      "المخزن",
-      "المخازن",
-      "قطع",
-      "قطع غيار",
-      "قطع الغيار",
-      "اصناف",
-      "أصناف",
-      "الصنف",
-      "صرف مخزني",
-      "جرد",
-      "نفاد",
-      "منخفض المخزون",
-    ],
-    trips: [
-      "رحله",
-      "رحلة",
-      "رحلات",
-      "الرحلات",
-      "trip",
-      "trips",
-      "مشاوير",
-      "مأموريات",
-      "تنقلات",
-      "عمليات النقل",
-      "العمليات",
-      "رحلات نشطه",
-      "رحلات نشطة",
-      "اغلاق مالي للرحلات",
-      "إغلاق مالي للرحلات",
-    ],
-  },
+const { normalizeArabicText, includesAny } = require("./ai-analytics.normalize");
+const { SYNONYMS } = require("./ai-analytics.synonyms");
 
-  actions: {
-    createExpense: [
-      "سجل مصروف",
-      "اضف مصروف",
-      "أضف مصروف",
-      "انشئ مصروف",
-      "أنشئ مصروف",
-      "اعمل مصروف",
-      "create expense",
-      "سجل صرف",
-      "اضف صرف",
-    ],
-    createMaintenanceRequest: [
-      "افتح طلب صيانه",
-      "افتح طلب صيانة",
-      "انشئ طلب صيانه",
-      "أنشئ طلب صيانة",
-      "اعمل طلب صيانه",
-      "اعمل طلب صيانة",
-      "create maintenance request",
-      "بلغ عن عطل",
-      "افتح بلاغ صيانه",
-      "افتح بلاغ صيانة",
-    ],
-    createWorkOrder: [
-      "انشئ امر عمل",
-      "أنشئ أمر عمل",
-      "افتح امر عمل",
-      "افتح أمر عمل",
-      "اعمل امر عمل",
-      "اعمل أمر عمل",
-      "create work order",
-      "افتح شغل صيانه",
-      "ابدأ امر عمل",
-      "ابدأ أمر عمل",
-    ],
-  },
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
 
-  finance: {
-    expense: [
-      "مصروف",
-      "مصروفات",
-      "الصرف",
-      "تكلفه",
-      "تكلفة",
-      "نفقات",
-      "expense",
-      "expenses",
-      "spend",
-      "spending",
-    ],
+function formatDateLocal(date) {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
 
-    compare: [
-      "قارن",
-      "مقارنه",
-      "مقارنة",
-      "فرق",
-      "مقارنة بين",
-      "compare",
-      "comparison",
-      "vs",
-    ],
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
 
-    byType: [
-      "المصروفات حسب النوع",
-      "المصروفات حسب البند",
-      "توزيع المصروفات",
-      "وزع المصروفات",
-      "اعلى نوع مصروف",
-      "أعلى نوع مصروف",
-      "اعلى بند مصروف",
-      "أعلى بند مصروف",
-      "اكبر بند مصروف",
-      "أكبر بند مصروف",
-      "اكثر نوع مصروف",
-      "أكثر نوع مصروف",
-      "اكثر بند مصروف",
-      "أكثر بند مصروف",
-      "اعرض اعلى انواع المصروف",
-      "اعرض أعلى أنواع المصروف",
-      "اعرض اعلى 5 انواع مصروف",
-      "اعرض أعلى 5 أنواع مصروف",
-      "expense by type",
-      "expense by category",
-      "top expense type",
-    ],
+function startOfWeek(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-    byVehicle: [
-      "اعلى مركبه صرفا",
-      "أعلى مركبة صرفا",
-      "اعلى مركبة صرفا",
-      "أعلى مركبة صرفًا",
-      "اكثر مركبه صرفا",
-      "أكثر مركبة صرفًا",
-      "اكبر مركبه صرفا",
-      "أكبر مركبة صرفًا",
-      "اعلى المركبات صرفا",
-      "أعلى المركبات صرفًا",
-      "المصروفات حسب المركبه",
-      "المصروفات حسب المركبة",
-      "الصرف حسب المركبه",
-      "الصرف حسب المركبة",
-      "اعرض اعلى 5 مركبات صرفا",
-      "اعرض أعلى 5 مركبات صرفًا",
-      "vehicle expenses",
-      "expense by vehicle",
-      "top vehicle expense",
-    ],
+function endOfWeek(date) {
+  const d = startOfWeek(date);
+  d.setDate(d.getDate() + 6);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
 
-    byPaymentSource: [
-      "المصروفات حسب مصدر الدفع",
-      "المصروفات حسب طريقة الدفع",
-      "الصرف حسب مصدر الدفع",
-      "الصرف حسب طريقة الدفع",
-      "مصدر الدفع",
-      "طريقة الدفع",
-      "وسيلة الدفع",
-      "كم من العهده وكم من الشركه",
-      "كم من العهدة وكم من الشركة",
-      "الصرف من العهده ولا الشركه",
-      "الصرف من العهدة ولا الشركة",
-      "advance vs company",
-      "payment source",
-      "expense by payment source",
-    ],
+function startOfMonth(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-    topVendors: [
-      "اعلى مورد مصروفات",
-      "أعلى مورد مصروفات",
-      "اكبر مورد مصروفات",
-      "أكبر مورد مصروفات",
-      "اكثر مورد مصروفات",
-      "أكثر مورد مصروفات",
-      "اعرض اعلى 5 موردين",
-      "اعرض أعلى 5 موردين",
-      "اعرض اعلى 5 موردين مصروفات",
-      "اعرض أعلى 5 موردين مصروفات",
-      "اعلى الموردين مصروفات",
-      "أعلى الموردين مصروفات",
-      "top vendors",
-      "top suppliers",
-      "expense by vendor",
-      "top vendor expense",
-    ],
+function endOfMonth(date) {
+  const d = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
 
-    approval: [
-      "كم المصروفات المعلقه",
-      "كم المصروفات المعلقة",
-      "كام المصروفات المعلقه",
-      "كام المصروفات المعلقة",
-      "المصروفات حسب حالة الاعتماد",
-      "حالات اعتماد المصروفات",
-      "حالة اعتماد المصروف",
-      "اعرض حالات اعتماد المصروفات",
-      "مصروفات معلقة",
-      "مصروفات معتمده",
-      "مصروفات مرفوضه",
-      "مصروفات مرفوضة",
-      "approval breakdown",
-      "expense approval status",
-      "pending expenses",
-    ],
-  },
+function startOfYear(date) {
+  const d = new Date(date.getFullYear(), 0, 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-  ar: {
-    outstanding: [
-      "اجمالي المستحقات",
-      "إجمالي المستحقات",
-      "مستحقات العملاء",
-      "العملاء عليهم كام",
-      "كم مستحقات العملاء",
-      "كام مستحقات العملاء",
-      "مديونيات العملاء",
-      "اجمالي مديونيه العملاء",
-      "إجمالي مديونية العملاء",
-      "فلوسنا عند العملاء",
-      "حقنا عند العملاء",
-      "outstanding",
-      "accounts receivable",
-      "receivables",
-    ],
+function endOfYear(date) {
+  const d = new Date(date.getFullYear(), 11, 31);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
 
-    overdue: [
-      "متاخرات العملاء",
-      "متأخرات العملاء",
-      "قيمة المتاخرات",
-      "قيمة المتأخرات",
-      "كم المتاخرات",
-      "كم المتأخرات",
-      "كام المتاخرات",
-      "كام المتأخرات",
-      "المبالغ المتاخره",
-      "المبالغ المتأخرة",
-      "المديونيات المتاخره",
-      "المديونيات المتأخرة",
-      "overdue",
-      "overdue receivables",
-      "late payments",
-    ],
+function parseIsoDate(s) {
+  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
 
-    topDebtors: [
-      "اعلى عميل مديونيه",
-      "أعلى عميل مديونية",
-      "اكبر عميل مديونيه",
-      "أكبر عميل مديونية",
-      "اكثر عميل مديونيه",
-      "أكثر عميل مديونية",
-      "مين اكبر عميل مديونيه",
-      "مين أكبر عميل مديونية",
-      "من اعلى عميل مديونيه",
-      "من أعلى عميل مديونية",
-      "اعرض اعلى 5 عملاء مديونيه",
-      "اعرض أعلى 5 عملاء مديونية",
-      "top debtors",
-      "highest debtor",
-      "largest debtor",
-    ],
-  },
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
 
-  maintenance: {
-    openWorkOrders: [
-      "اوامر العمل المفتوحه",
-      "أوامر العمل المفتوحة",
-      "عدد اوامر العمل المفتوحه",
-      "عدد أوامر العمل المفتوحة",
-      "كام امر عمل مفتوح",
-      "كم امر عمل مفتوح",
-      "كام اوامر صيانه مفتوحه",
-      "كم اوامر صيانه مفتوحه",
-      "كام امر صيانه مفتوح",
-      "كم امر صيانه مفتوح",
-      "open work orders",
-      "open maintenance orders",
-    ],
+  return d;
+}
 
-    costByVehicle: [
-      "اعلى مركبه تكلفة صيانه",
-      "أعلى مركبة تكلفة صيانة",
-      "اكثر مركبه تكلفة صيانه",
-      "أكثر مركبة تكلفة صيانة",
-      "اكبر مركبه تكلفة صيانه",
-      "أكبر مركبة تكلفة صيانة",
-      "اعلى المركبات تكلفة صيانه",
-      "أعلى المركبات تكلفة صيانة",
-      "انهي عربيه صيانتها اعلى",
-      "إيه العربية صيانتها أعلى",
-      "مين اعلى عربيه صيانه",
-      "مين أعلى عربية صيانة",
-      "maintenance cost by vehicle",
-      "top maintenance vehicle",
-      "highest maintenance cost",
-    ],
-  },
+function extractExplicitDateRange(question) {
+  const text = normalizeArabicText(question);
 
-  inventory: {
-    topIssuedParts: [
-      "اكثر قطع الغيار صرفا",
-      "أكثر قطع الغيار صرفًا",
-      "اكثر صنف صرفا",
-      "أكثر صنف صرفًا",
-      "اكثر صنف بيتصرف",
-      "أكثر صنف بيتصرف",
-      "اعلى صنف صرفا",
-      "أعلى صنف صرفًا",
-      "اكبر صنف صرفا",
-      "أكبر صنف صرفًا",
-      "اعرض اعلى 5 اصناف صرفا",
-      "اعرض أعلى 5 أصناف صرفًا",
-      "top issued parts",
-      "most issued parts",
-      "top consumed parts",
-    ],
+  const isoDates = [...text.matchAll(/\b(\d{4}-\d{2}-\d{2})\b/g)].map((m) => m[1]);
+  if (isoDates.length >= 2) {
+    const from = parseIsoDate(isoDates[0]);
+    const to = parseIsoDate(isoDates[1]);
 
-    lowStock: [
-      "القطع القريبه من النفاد",
-      "القطع القريبة من النفاد",
-      "الاصناف القريبه من النفاد",
-      "الأصناف القريبة من النفاد",
-      "الحد الادنى للمخزون",
-      "الحد الأدنى للمخزون",
-      "تحت الحد الادنى",
-      "تحت الحد الأدنى",
-      "الاصناف اللي قربت تخلص",
-      "الأصناف اللي قربت تخلص",
-      "القطع اللي قربت تخلص",
-      "الأصناف الناقصه",
-      "الأصناف الناقصة",
-      "الاصناف منخفضه المخزون",
-      "الأصناف منخفضة المخزون",
-      "low stock",
-      "near out of stock",
-      "below min stock",
-    ],
-  },
+    if (from && to) {
+      return {
+        range: "custom",
+        date_from: formatDateLocal(from),
+        date_to: formatDateLocal(to),
+      };
+    }
+  }
 
-  trips: {
-    summary: [
-      "ملخص الرحلات",
-      "اجمالي الرحلات",
-      "إجمالي الرحلات",
-      "عدد الرحلات",
-      "كم عدد الرحلات",
-      "كام عدد الرحلات",
-      "trips summary",
-      "total trips",
-    ],
+  const slashDates = [...text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)].map((m) => ({
+    day: Number(m[1]),
+    month: Number(m[2]),
+    year: Number(m[3]),
+  }));
 
-    active: [
-      "الرحلات النشطه",
-      "الرحلات النشطة",
-      "رحلات نشطه",
-      "رحلات نشطة",
-      "الرحلات الجاريه",
-      "الرحلات الجارية",
-      "رحلات جاريه",
-      "رحلات جارية",
-      "الرحلات الفعاله",
-      "الرحلات الفعالة",
-      "active trips",
-      "running trips",
-    ],
+  if (slashDates.length >= 2) {
+    const d1 = new Date(slashDates[0].year, slashDates[0].month - 1, slashDates[0].day);
+    const d2 = new Date(slashDates[1].year, slashDates[1].month - 1, slashDates[1].day);
 
-    needFinancialClosure: [
-      "رحلات تحتاج اغلاق مالي",
-      "رحلات تحتاج إغلاق مالي",
-      "رحلات محتاجه اغلاق مالي",
-      "رحلات محتاجة إغلاق مالي",
-      "الرحلات التي تحتاج اغلاق مالي",
-      "الرحلات التي تحتاج إغلاق مالي",
-      "رحلات غير مغلقه ماليا",
-      "رحلات غير مغلقة ماليًا",
-      "trips need financial closure",
-      "financial closure pending trips",
-    ],
+    if (!Number.isNaN(d1.getTime()) && !Number.isNaN(d2.getTime())) {
+      return {
+        range: "custom",
+        date_from: formatDateLocal(d1),
+        date_to: formatDateLocal(d2),
+      };
+    }
+  }
 
-    topClients: [
-      "اعلى العملاء من حيث الرحلات",
-      "أعلى العملاء من حيث الرحلات",
-      "اكثر العملاء رحلات",
-      "أكثر العملاء رحلات",
-      "اكبر العملاء رحلات",
-      "أكبر العملاء رحلات",
-      "اعرض اعلى 5 عملاء رحلات",
-      "اعرض أعلى 5 عملاء رحلات",
-      "top clients by trips",
-    ],
+  return null;
+}
 
-    topSites: [
-      "اعلى المواقع من حيث الرحلات",
-      "أعلى المواقع من حيث الرحلات",
-      "اكثر المواقع رحلات",
-      "أكثر المواقع رحلات",
-      "اعرض اعلى 5 مواقع رحلات",
-      "اعرض أعلى 5 مواقع رحلات",
-      "top sites by trips",
-    ],
+function extractLastNDays(question) {
+  const text = normalizeArabicText(question);
+  const m = text.match(/(?:اخر|آخر|خلال)\s+(\d+)\s+يوم/);
+  if (!m) return null;
 
-    topVehicles: [
-      "اعلى المركبات من حيث الرحلات",
-      "أعلى المركبات من حيث الرحلات",
-      "اكثر المركبات رحلات",
-      "أكثر المركبات رحلات",
-      "اعرض اعلى 5 مركبات رحلات",
-      "اعرض أعلى 5 مركبات رحلات",
-      "top vehicles by trips",
-    ],
-  },
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
 
-  time: {
-    today: [
-      "اليوم",
-      "النهارده",
-      "النهاردة",
-      "today",
-    ],
+  const today = new Date();
+  const from = addDays(today, -n + 1);
 
-    thisWeek: [
-      "هذا الاسبوع",
-      "هذا الأسبوع",
-      "الاسبوع الحالي",
-      "الأسبوع الحالي",
-      "الاسبوع ده",
-      "الأسبوع ده",
-      "this week",
-    ],
+  return {
+    range: `last_${n}_days`,
+    date_from: formatDateLocal(from),
+    date_to: formatDateLocal(today),
+  };
+}
 
-    lastWeek: [
-      "الاسبوع الماضي",
-      "الأسبوع الماضي",
-      "الاسبوع اللي فات",
-      "الأسبوع اللي فات",
-      "الاسبوع السابق",
-      "الأسبوع السابق",
-      "last week",
-    ],
+function resolveTimeFilters(question) {
+  const explicit = extractExplicitDateRange(question);
+  if (explicit) return explicit;
 
-    thisMonth: [
-      "هذا الشهر",
-      "الشهر الحالي",
-      "الشهر ده",
-      "الشهر دا",
-      "الشهر الجاري",
-      "this month",
-      "current month",
-    ],
+  const dynamicDays = extractLastNDays(question);
+  if (dynamicDays) return dynamicDays;
 
-    lastMonth: [
-      "الشهر الماضي",
-      "الشهر اللي فات",
-      "الشهر السابق",
-      "الشهر الفات",
-      "last month",
-      "previous month",
-    ],
+  const now = new Date();
 
-    thisYear: [
-      "هذه السنه",
-      "هذه السنة",
-      "السنه الحاليه",
-      "السنة الحالية",
-      "السنه دي",
-      "السنة دي",
-      "هذا العام",
-      "العام الحالي",
-      "this year",
-      "current year",
-    ],
+  if (includesAny(question, SYNONYMS.time.today)) {
+    return {
+      range: "today",
+      date_from: formatDateLocal(now),
+      date_to: formatDateLocal(now),
+    };
+  }
 
-    lastYear: [
-      "السنه الماضيه",
-      "السنة الماضية",
-      "العام الماضي",
-      "العام السابق",
-      "last year",
-      "previous year",
-    ],
+  if (includesAny(question, SYNONYMS.time.thisWeek)) {
+    return {
+      range: "this_week",
+      date_from: formatDateLocal(startOfWeek(now)),
+      date_to: formatDateLocal(endOfWeek(now)),
+    };
+  }
 
-    last7Days: [
-      "اخر 7 ايام",
-      "آخر 7 ايام",
-      "اخر 7 أيام",
-      "آخر 7 أيام",
-      "اخر 7 يوم",
-      "آخر 7 يوم",
-      "اخر سبع ايام",
-      "آخر سبع ايام",
-      "last 7 days",
-    ],
+  if (includesAny(question, SYNONYMS.time.lastWeek)) {
+    const lastWeekRef = addDays(now, -7);
+    return {
+      range: "last_week",
+      date_from: formatDateLocal(startOfWeek(lastWeekRef)),
+      date_to: formatDateLocal(endOfWeek(lastWeekRef)),
+    };
+  }
 
-    last30Days: [
-      "اخر 30 يوم",
-      "آخر 30 يوم",
-      "اخر ٣٠ يوم",
-      "آخر ٣٠ يوم",
-      "خلال 30 يوم",
-      "خلال ٣٠ يوم",
-      "last 30 days",
-    ],
+  if (includesAny(question, SYNONYMS.time.thisYear)) {
+    return {
+      range: "this_year",
+      date_from: formatDateLocal(startOfYear(now)),
+      date_to: formatDateLocal(endOfYear(now)),
+    };
+  }
 
-    last90Days: [
-      "اخر 90 يوم",
-      "آخر 90 يوم",
-      "اخر ٩٠ يوم",
-      "آخر ٩٠ يوم",
-      "خلال 90 يوم",
-      "خلال ٩٠ يوم",
-      "last 90 days",
-    ],
-  },
-};
+  if (includesAny(question, SYNONYMS.time.lastYear)) {
+    const lastYearRef = new Date(now.getFullYear() - 1, 0, 1);
+    return {
+      range: "last_year",
+      date_from: formatDateLocal(startOfYear(lastYearRef)),
+      date_to: formatDateLocal(endOfYear(lastYearRef)),
+    };
+  }
+
+  if (includesAny(question, SYNONYMS.time.thisMonth)) {
+    return {
+      range: "this_month",
+      date_from: formatDateLocal(startOfMonth(now)),
+      date_to: formatDateLocal(endOfMonth(now)),
+    };
+  }
+
+  if (includesAny(question, SYNONYMS.time.lastMonth)) {
+    const lastMonthRef = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+    return {
+      range: "last_month",
+      date_from: formatDateLocal(startOfMonth(lastMonthRef)),
+      date_to: formatDateLocal(endOfMonth(lastMonthRef)),
+    };
+  }
+
+  if (includesAny(question, SYNONYMS.time.last7Days)) {
+    return {
+      range: "last_7_days",
+      date_from: formatDateLocal(addDays(now, -6)),
+      date_to: formatDateLocal(now),
+    };
+  }
+
+  if (includesAny(question, SYNONYMS.time.last30Days)) {
+    return {
+      range: "last_30_days",
+      date_from: formatDateLocal(addDays(now, -29)),
+      date_to: formatDateLocal(now),
+    };
+  }
+
+  if (includesAny(question, SYNONYMS.time.last90Days)) {
+    return {
+      range: "last_90_days",
+      date_from: formatDateLocal(addDays(now, -89)),
+      date_to: formatDateLocal(now),
+    };
+  }
+
+  return {
+    range: "this_month",
+    date_from: formatDateLocal(startOfMonth(now)),
+    date_to: formatDateLocal(endOfMonth(now)),
+  };
+}
 
 module.exports = {
-  SYNONYMS,
+  resolveTimeFilters,
+  extractExplicitDateRange,
+  extractLastNDays,
 };

@@ -101,10 +101,7 @@ async function getActiveTrips({ range, scope, limit = 10 }) {
         },
       },
     },
-    orderBy: [
-      { scheduled_at: "desc" },
-      { created_at: "desc" },
-    ],
+    orderBy: [{ scheduled_at: "desc" }, { created_at: "desc" }],
     take: limit,
   });
 
@@ -336,9 +333,6 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10 }) {
         gte: range.from,
         lte: range.to,
       },
-      vehicle_id: {
-        not: null,
-      },
     },
     _count: {
       _all: true,
@@ -348,10 +342,12 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10 }) {
         vehicle_id: "desc",
       },
     },
-    take: limit,
+    take: limit * 3,
   });
 
-  const vehicleIds = rows.map((r) => r.vehicle_id).filter(Boolean);
+  const filteredRows = rows.filter((r) => r.vehicle_id);
+
+  const vehicleIds = filteredRows.map((r) => r.vehicle_id).filter(Boolean);
 
   const vehicles = vehicleIds.length
     ? await prisma.vehicles.findMany({
@@ -369,16 +365,19 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10 }) {
 
   const vehicleMap = new Map(vehicles.map((v) => [v.id, v]));
 
-  const items = rows.map((row) => {
-    const vehicle = vehicleMap.get(row.vehicle_id);
-    return {
-      vehicle_id: row.vehicle_id,
-      display_name: vehicle?.display_name || null,
-      fleet_no: vehicle?.fleet_no || null,
-      plate_no: vehicle?.plate_no || null,
-      trips_count: row._count?._all || 0,
-    };
-  });
+  const items = filteredRows
+    .map((row) => {
+      const vehicle = vehicleMap.get(row.vehicle_id);
+
+      return {
+        vehicle_id: row.vehicle_id,
+        display_name: vehicle?.display_name || null,
+        fleet_no: vehicle?.fleet_no || null,
+        plate_no: vehicle?.plate_no || null,
+        trips_count: row._count?._all || 0,
+      };
+    })
+    .slice(0, limit);
 
   return {
     metric: "top_vehicles_by_trips",
