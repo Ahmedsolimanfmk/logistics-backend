@@ -1,5 +1,6 @@
 const { resolveTimeRange } = require("./analytics.time");
 const { buildScopeFilters } = require("./analytics.filters");
+
 const financeAnalytics = require("./finance.analytics");
 const arAnalytics = require("./ar.analytics");
 const maintenanceAnalytics = require("./maintenance.analytics");
@@ -104,6 +105,18 @@ async function getMaintenanceOpenWorkOrders({ user, query }) {
   });
 }
 
+async function getMaintenanceCostByVehicle({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return maintenanceAnalytics.getCostByVehicle({
+    range,
+    scope,
+    limit,
+  });
+}
+
 async function getInventoryTopIssuedParts({ user, query }) {
   const range = resolveTimeRange(query);
   const scope = buildScopeFilters(user, query);
@@ -121,18 +134,6 @@ async function getInventoryLowStockItems({ user, query }) {
   const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
 
   return inventoryAnalytics.getLowStockItems({
-    scope,
-    limit,
-  });
-}
-
-async function getMaintenanceCostByVehicle({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
-
-  return maintenanceAnalytics.getCostByVehicle({
-    range,
     scope,
     limit,
   });
@@ -219,14 +220,16 @@ module.exports = {
   getFinanceExpenseByPaymentSource,
   getFinanceTopVendors,
   getFinanceExpenseApprovalBreakdown,
+
   getArOutstandingSummary,
   getArTopDebtors,
+
   getMaintenanceOpenWorkOrders,
-  getInventoryTopIssuedParts,
-  getInventoryLowStockItems,
   getMaintenanceCostByVehicle,
 
-  // trips
+  getInventoryTopIssuedParts,
+  getInventoryLowStockItems,
+
   getTripsSummary,
   getActiveTrips,
   getTripsNeedingFinancialClosure,

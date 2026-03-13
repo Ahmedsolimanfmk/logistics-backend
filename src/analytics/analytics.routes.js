@@ -20,6 +20,30 @@ router.get(
   controller.getFinanceExpenseByType
 );
 
+router.get(
+  "/finance/expense-by-vehicle",
+  authRequired,
+  controller.getFinanceExpenseByVehicle
+);
+
+router.get(
+  "/finance/expense-by-payment-source",
+  authRequired,
+  controller.getFinanceExpenseByPaymentSource
+);
+
+router.get(
+  "/finance/top-vendors",
+  authRequired,
+  controller.getFinanceTopVendors
+);
+
+router.get(
+  "/finance/expense-approval-breakdown",
+  authRequired,
+  controller.getFinanceExpenseApprovalBreakdown
+);
+
 // =======================
 // AR
 // =======================

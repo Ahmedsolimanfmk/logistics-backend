@@ -27,6 +27,58 @@ async function getFinanceExpenseByType(req, res, next) {
   }
 }
 
+async function getFinanceExpenseByVehicle(req, res, next) {
+  try {
+    const result = await analyticsService.getFinanceExpenseByVehicle({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getFinanceExpenseByPaymentSource(req, res, next) {
+  try {
+    const result = await analyticsService.getFinanceExpenseByPaymentSource({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getFinanceTopVendors(req, res, next) {
+  try {
+    const result = await analyticsService.getFinanceTopVendors({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getFinanceExpenseApprovalBreakdown(req, res, next) {
+  try {
+    const result = await analyticsService.getFinanceExpenseApprovalBreakdown({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getArOutstandingSummary(req, res, next) {
   try {
     const result = await analyticsService.getArOutstandingSummary({
@@ -66,6 +118,19 @@ async function getMaintenanceOpenWorkOrders(req, res, next) {
   }
 }
 
+async function getMaintenanceCostByVehicle(req, res, next) {
+  try {
+    const result = await analyticsService.getMaintenanceCostByVehicle({
+      user: req.user,
+      query: req.query,
+    });
+
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getInventoryTopIssuedParts(req, res, next) {
   try {
     const result = await analyticsService.getInventoryTopIssuedParts({
@@ -82,19 +147,6 @@ async function getInventoryTopIssuedParts(req, res, next) {
 async function getInventoryLowStockItems(req, res, next) {
   try {
     const result = await analyticsService.getInventoryLowStockItems({
-      user: req.user,
-      query: req.query,
-    });
-
-    return res.json(ok(result));
-  } catch (err) {
-    next(err);
-  }
-}
-
-async function getMaintenanceCostByVehicle(req, res, next) {
-  try {
-    const result = await analyticsService.getMaintenanceCostByVehicle({
       user: req.user,
       query: req.query,
     });
@@ -190,14 +242,20 @@ async function getTopVehiclesByTrips(req, res, next) {
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
+  getFinanceExpenseByVehicle,
+  getFinanceExpenseByPaymentSource,
+  getFinanceTopVendors,
+  getFinanceExpenseApprovalBreakdown,
+
   getArOutstandingSummary,
   getArTopDebtors,
+
   getMaintenanceOpenWorkOrders,
-  getInventoryTopIssuedParts,
-  getInventoryLowStockItems,
   getMaintenanceCostByVehicle,
 
-  // trips
+  getInventoryTopIssuedParts,
+  getInventoryLowStockItems,
+
   getTripsSummary,
   getActiveTrips,
   getTripsNeedingFinancialClosure,
