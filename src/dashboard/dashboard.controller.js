@@ -1,13 +1,9 @@
-// =======================
 // src/dashboard/dashboard.controller.js
-// =======================
 
 const dashboardService = require("./dashboard.service");
 const prisma = require("../prisma");
 
-// -----------------------
 // helpers
-// -----------------------
 function parseIntSafe(v, fallback) {
   const n = parseInt(String(v ?? ""), 10);
   return Number.isFinite(n) ? n : fallback;
@@ -18,10 +14,8 @@ function daysDiff(from, to) {
   return Math.ceil(ms / (1000 * 60 * 60 * 24));
 }
 
-// =======================
-// Summary (existing)
-// =======================
-exports.getDashboardSummary = async (req, res, next) => {
+// Summary
+async function getDashboardSummary(req, res, next) {
   try {
     const user = req.user;
     const filters = {
@@ -31,14 +25,15 @@ exports.getDashboardSummary = async (req, res, next) => {
       clientId: req.query.clientId,
       siteId: req.query.siteId,
     };
+
     const data = await dashboardService.getSummary(user, filters);
     res.json(data);
   } catch (err) {
     next(err);
   }
-};
+}
 
-exports.getDashboardTrends = async (req, res, next) => {
+async function getDashboardTrends(req, res, next) {
   try {
     const user = req.user;
     const params = {
@@ -51,14 +46,15 @@ exports.getDashboardTrends = async (req, res, next) => {
       vehicleId: req.query.vehicleId,
       cashAdvanceId: req.query.cashAdvanceId,
     };
+
     const data = await dashboardService.getTrends(user, params);
     res.json(data);
   } catch (err) {
     next(err);
   }
-};
+}
 
-exports.getDashboardTrendsBundle = async (req, res, next) => {
+async function getDashboardTrendsBundle(req, res, next) {
   try {
     const user = req.user;
     const params = {
@@ -76,13 +72,11 @@ exports.getDashboardTrendsBundle = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-};
+}
 
-// =======================
 // Compliance alerts
 // GET /dashboard/compliance-alerts?days=30&limit=100
-// =======================
-exports.getComplianceAlerts = async (req, res, next) => {
+async function getComplianceAlerts(req, res, next) {
   try {
     const days = Math.min(365, Math.max(1, parseIntSafe(req.query.days, 30)));
     const limit = Math.min(200, Math.max(10, parseIntSafe(req.query.limit, 100)));
@@ -246,7 +240,9 @@ exports.getComplianceAlerts = async (req, res, next) => {
 
     const mapVehicleExpiring = vehiclesExpiring.map((v) => ({
       ...v,
-      days_left: v.license_expiry_date ? daysDiff(now, new Date(v.license_expiry_date)) : null,
+      days_left: v.license_expiry_date
+        ? daysDiff(now, new Date(v.license_expiry_date))
+        : null,
     }));
 
     const mapVehicleExpired = vehiclesExpired.map((v) => ({
@@ -258,7 +254,9 @@ exports.getComplianceAlerts = async (req, res, next) => {
 
     const mapDriverExpiring = driversExpiring.map((d) => ({
       ...d,
-      days_left: d.license_expiry_date ? daysDiff(now, new Date(d.license_expiry_date)) : null,
+      days_left: d.license_expiry_date
+        ? daysDiff(now, new Date(d.license_expiry_date))
+        : null,
     }));
 
     const mapDriverExpired = driversExpired.map((d) => ({
@@ -290,4 +288,11 @@ exports.getComplianceAlerts = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+}
+
+module.exports = {
+  getDashboardSummary,
+  getDashboardTrends,
+  getDashboardTrendsBundle,
+  getComplianceAlerts,
 };

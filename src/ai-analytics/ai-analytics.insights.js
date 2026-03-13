@@ -60,14 +60,6 @@ function paymentSourceLabel(v) {
   return v || "غير محدد";
 }
 
-function approvalStatusLabel(v) {
-  const s = String(v || "").toUpperCase();
-  if (s === "APPROVED") return "معتمد";
-  if (s === "PENDING") return "معلق";
-  if (s === "REJECTED") return "مرفوض";
-  return v || "غير محدد";
-}
-
 function buildFinanceInsights(data = {}) {
   const items = [];
 
@@ -188,7 +180,7 @@ function buildFinanceInsights(data = {}) {
 
     items.push({
       type: "finance_top_vehicle_expense",
-      level: value > 0 ? "info" : "info",
+      level: "info",
       text: `أعلى مركبة من حيث المصروفات هذا الشهر هي "${vehicleName}" بإجمالي ${money(value)} جنيه.`,
     });
   }
@@ -330,7 +322,7 @@ function buildMaintenanceInsights(data = {}) {
 
     items.push({
       type: "maintenance_top_vehicle_cost",
-      level: totalCost > 0 ? "info" : "info",
+      level: "info",
       text: `أعلى مركبة تكلفة صيانة هذا الشهر هي "${vehicleName}" بإجمالي ${money(totalCost)} جنيه.`,
     });
   }
@@ -385,6 +377,117 @@ function buildInventoryInsights(data = {}) {
   return items;
 }
 
+function buildTripsInsights(data = {}) {
+  const items = [];
+
+  const tripsSummary = data?.tripsSummary;
+  const activeTrips = data?.activeTrips;
+  const tripsNeedFinancialClosure = data?.tripsNeedFinancialClosure;
+  const topClientsByTrips = data?.topClientsByTrips;
+  const topSitesByTrips = data?.topSitesByTrips;
+  const topVehiclesByTrips = data?.topVehiclesByTrips;
+
+  const totalTrips = pickNumber(tripsSummary, [
+    ["data", "total_trips"],
+    ["total_trips"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  const activeCount = pickNumber(tripsSummary, [
+    ["data", "active_count"],
+    ["active_count"],
+  ]);
+
+  const needClosureCount = pickNumber(tripsSummary, [
+    ["data", "need_financial_closure_count"],
+    ["need_financial_closure_count"],
+  ]);
+
+  if (totalTrips > 0) {
+    items.push({
+      type: "trips_total",
+      level: "info",
+      text: `إجمالي الرحلات في ${labelRange("this_month")} هو ${Number(totalTrips)} رحلة.`,
+    });
+  }
+
+  if (activeCount > 0) {
+    items.push({
+      type: "trips_active_count",
+      level: "info",
+      text: `يوجد ${Number(activeCount)} رحلة نشطة خلال الفترة الحالية.`,
+    });
+  }
+
+  if (needClosureCount > 0) {
+    items.push({
+      type: "trips_need_fin_closure",
+      level: "warning",
+      text: `يوجد ${Number(needClosureCount)} رحلة تحتاج إغلاقًا ماليًا.`,
+    });
+  }
+
+  const activeTripItems = pickItems(activeTrips);
+  if (activeTripItems.length > 0) {
+    const first = activeTripItems[0];
+    items.push({
+      type: "trips_active_example",
+      level: "info",
+      text: `من الرحلات النشطة الحالية: عميل "${first.client_name || "عميل غير معروف"}" في موقع "${first.site_name || "موقع غير معروف"}".`,
+    });
+  }
+
+  const needClosureItems = pickItems(tripsNeedFinancialClosure);
+  if (needClosureItems.length > 0) {
+    const first = needClosureItems[0];
+    items.push({
+      type: "trips_need_fin_closure_example",
+      level: "warning",
+      text: `هناك رحلة مكتملة للعميل "${first.client_name || "عميل غير معروف"}" ما زالت تحتاج إغلاقًا ماليًا.`,
+    });
+  }
+
+  const topClients = pickItems(topClientsByTrips);
+  if (topClients.length > 0) {
+    const top = topClients[0];
+    items.push({
+      type: "trips_top_client",
+      level: "info",
+      text: `أعلى عميل من حيث عدد الرحلات هو "${top.client_name || "عميل غير معروف"}" بعدد ${Number(
+        top.trips_count || 0
+      )} رحلة.`,
+    });
+  }
+
+  const topSites = pickItems(topSitesByTrips);
+  if (topSites.length > 0) {
+    const top = topSites[0];
+    items.push({
+      type: "trips_top_site",
+      level: "info",
+      text: `أعلى موقع من حيث عدد الرحلات هو "${top.site_name || "موقع غير معروف"}" بعدد ${Number(
+        top.trips_count || 0
+      )} رحلة.`,
+    });
+  }
+
+  const topVehicles = pickItems(topVehiclesByTrips);
+  if (topVehicles.length > 0) {
+    const top = topVehicles[0];
+    const vehicleName = top?.display_name || top?.fleet_no || top?.plate_no || "مركبة غير معروفة";
+    items.push({
+      type: "trips_top_vehicle",
+      level: "info",
+      text: `أعلى مركبة من حيث عدد الرحلات هي "${vehicleName}" بعدد ${Number(
+        top.trips_count || 0
+      )} رحلة.`,
+    });
+  }
+
+  return items;
+}
+
 function buildInsightsByContext({ context, data }) {
   const c = String(context || "").trim().toLowerCase();
 
@@ -404,12 +507,17 @@ function buildInsightsByContext({ context, data }) {
     return buildInventoryInsights(data);
   }
 
+  if (c === "trips") {
+    return buildTripsInsights(data);
+  }
+
   return [
     ...buildFinanceInsights(data),
     ...buildArInsights(data),
     ...buildMaintenanceInsights(data),
     ...buildInventoryInsights(data),
-  ].slice(0, 10);
+    ...buildTripsInsights(data),
+  ].slice(0, 12);
 }
 
 module.exports = {

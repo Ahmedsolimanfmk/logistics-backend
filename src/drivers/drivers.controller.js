@@ -1,8 +1,6 @@
-// =======================
 // src/drivers/drivers.controller.js
 // FINAL: driver compliance fields + enum validation + license expiry guard
 // + driver financial summary
-// =======================
 
 const prisma = require("../prisma");
 
@@ -20,7 +18,10 @@ function parseBool(v) {
 function pickPagination(req) {
   const page = Math.max(1, parseInt(req.query.page || "1", 10));
   const pageSizeRaw = parseInt(req.query.pageSize || "10", 10);
-  const pageSize = Math.min(100, Math.max(5, Number.isFinite(pageSizeRaw) ? pageSizeRaw : 10));
+  const pageSize = Math.min(
+    100,
+    Math.max(5, Number.isFinite(pageSizeRaw) ? pageSizeRaw : 10)
+  );
   const skip = (page - 1) * pageSize;
   return { page, pageSize, skip };
 }
@@ -99,9 +100,7 @@ function applyDriverStateRules(res, data, incoming) {
   return true;
 }
 
-// =======================
 // GET /drivers/active
-// =======================
 async function getActiveDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -144,9 +143,7 @@ async function getActiveDrivers(req, res) {
   }
 }
 
-// =======================
 // GET /drivers
-// =======================
 async function getDrivers(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -189,9 +186,7 @@ async function getDrivers(req, res) {
   }
 }
 
-// =======================
 // GET /drivers/:id
-// =======================
 async function getDriverById(req, res) {
   try {
     const { id } = req.params;
@@ -205,9 +200,7 @@ async function getDriverById(req, res) {
   }
 }
 
-// =======================
 // GET /drivers/:id/financial-summary
-// =======================
 async function getDriverFinancialSummary(req, res) {
   try {
     const { id } = req.params;
@@ -386,9 +379,7 @@ async function getDriverFinancialSummary(req, res) {
   }
 }
 
-// =======================
 // POST /drivers
-// =======================
 async function createDriver(req, res) {
   try {
     const {
@@ -426,7 +417,9 @@ async function createDriver(req, res) {
     const reasonUpper = disable_reason ? upper(disable_reason) : null;
 
     if (!validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
-    if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) return;
+    if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) {
+      return;
+    }
 
     const data = {
       full_name: name,
@@ -467,9 +460,7 @@ async function createDriver(req, res) {
   }
 }
 
-// =======================
 // PATCH /drivers/:id
-// =======================
 async function updateDriver(req, res) {
   try {
     const { id } = req.params;
@@ -534,7 +525,9 @@ async function updateDriver(req, res) {
     let reasonUpper;
     if (disable_reason !== undefined) {
       reasonUpper = disable_reason ? upper(disable_reason) : null;
-      if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) return;
+      if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) {
+        return;
+      }
       data.disable_reason = reasonUpper;
     }
 
@@ -542,10 +535,13 @@ async function updateDriver(req, res) {
 
     const incoming = {
       status: data.status !== undefined ? data.status : exists.status,
-      disable_reason: data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
+      disable_reason:
+        data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
       is_active: data.is_active !== undefined ? data.is_active : exists.is_active,
       license_expiry_date:
-        data.license_expiry_date !== undefined ? data.license_expiry_date : exists.license_expiry_date,
+        data.license_expiry_date !== undefined
+          ? data.license_expiry_date
+          : exists.license_expiry_date,
     };
 
     if (!applyDriverStateRules(res, data, incoming)) return;
@@ -564,9 +560,7 @@ async function updateDriver(req, res) {
   }
 }
 
-// =======================
 // PATCH /drivers/:id/status
-// =======================
 async function setDriverStatus(req, res) {
   try {
     const { id } = req.params;
@@ -576,9 +570,12 @@ async function setDriverStatus(req, res) {
 
     const isActive = parseBool(req.body?.is_active);
     const statusUpper = req.body?.status !== undefined ? upper(req.body?.status) : undefined;
-    const reasonUpper = req.body?.disable_reason !== undefined ? upper(req.body?.disable_reason) : undefined;
+    const reasonUpper =
+      req.body?.disable_reason !== undefined ? upper(req.body?.disable_reason) : undefined;
 
-    if (statusUpper !== undefined && !validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
+    if (statusUpper !== undefined && !validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) {
+      return;
+    }
     if (
       reasonUpper !== undefined &&
       reasonUpper &&
@@ -606,7 +603,8 @@ async function setDriverStatus(req, res) {
 
     const incoming = {
       status: data.status !== undefined ? data.status : exists.status,
-      disable_reason: data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
+      disable_reason:
+        data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
       is_active: data.is_active !== undefined ? data.is_active : exists.is_active,
       license_expiry_date: exists.license_expiry_date,
     };
@@ -616,7 +614,10 @@ async function setDriverStatus(req, res) {
     const updated = await prisma.drivers.update({ where: { id }, data });
     return res.json(updated);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to update driver status", error: e.message });
+    return res.status(500).json({
+      message: "Failed to update driver status",
+      error: e.message,
+    });
   }
 }
 

@@ -1,6 +1,4 @@
-// =======================
 // src/middleware/jwt.middleware.js
-// =======================
 
 const jwt = require("jsonwebtoken");
 
@@ -15,10 +13,21 @@ function authRequired(req, res, next) {
       });
     }
 
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
+        message: "Server misconfigured: JWT_SECRET missing",
+      });
+    }
+
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // decoded = { sub, role, email?, iat, exp }
-    req.user = decoded;
+    req.user = {
+      sub: decoded.sub,
+      role: decoded.role,
+      email: decoded.email || null,
+      iat: decoded.iat,
+      exp: decoded.exp,
+    };
 
     next();
   } catch (err) {

@@ -49,7 +49,7 @@ function renderEntityLabel(item) {
 
   return (
     item.client_name ||
-    item.name ||
+    item.site_name ||
     item.vehicle_name ||
     item.display_name ||
     item.part_name ||
@@ -61,6 +61,7 @@ function renderEntityLabel(item) {
     item.approval_status ||
     item.plate_no ||
     item.fleet_no ||
+    item.name ||
     "العنصر المطلوب"
   );
 }
@@ -184,6 +185,7 @@ function buildUiMeta({ parsed, result, answer }) {
   if (parsed?.module === "ar") badges.push("حسابات العملاء");
   if (parsed?.module === "maintenance") badges.push("الصيانة");
   if (parsed?.module === "inventory") badges.push("المخازن");
+  if (parsed?.module === "trips") badges.push("الرحلات");
 
   if (parsed?.mode === "reference_followup") badges.push("متابعة");
   if (range) badges.push(labelRange(range));
@@ -199,25 +201,21 @@ function buildUiMeta({ parsed, result, answer }) {
   else if (intent === "outstanding_summary") title = "مستحقات العملاء";
   else if (intent === "top_debtors") title = limit > 1 ? "أعلى العملاء مديونية" : "أعلى عميل مديونية";
   else if (intent === "open_work_orders") title = "أوامر العمل المفتوحة";
-  else if (intent === "maintenance_cost_by_vehicle") {
-    title = limit > 1 ? "أعلى المركبات تكلفة صيانة" : "أعلى مركبة تكلفة صيانة";
-  } else if (intent === "top_issued_parts") {
-    title = limit > 1 ? "أكثر الأصناف صرفًا" : "أكثر صنف صرفًا";
-  } else if (intent === "low_stock_items") {
-    title = "الأصناف منخفضة المخزون";
-  } else if (intent === "create_work_order") {
-    title = "إنشاء أمر عمل";
-  } else if (intent === "create_maintenance_request") {
-    title = "إنشاء طلب صيانة";
-  } else if (intent === "create_expense") {
-    title = "تسجيل مصروف";
-  } else if (intent === "reference_previous_item") {
-    title = "عنصر من النتائج السابقة";
-  } else if (intent === "reference_previous_entity") {
-    title = "نفس الكيان السابق";
-  } else if (intent === "reference_previous_expand_limit") {
-    title = "توسيع النتائج السابقة";
-  }
+  else if (intent === "maintenance_cost_by_vehicle") title = limit > 1 ? "أعلى المركبات تكلفة صيانة" : "أعلى مركبة تكلفة صيانة";
+  else if (intent === "top_issued_parts") title = limit > 1 ? "أكثر الأصناف صرفًا" : "أكثر صنف صرفًا";
+  else if (intent === "low_stock_items") title = "الأصناف منخفضة المخزون";
+  else if (intent === "trips_summary") title = "ملخص الرحلات";
+  else if (intent === "active_trips") title = limit > 1 ? "الرحلات النشطة" : "الرحلة النشطة";
+  else if (intent === "trips_need_financial_closure") title = "رحلات تحتاج إغلاق مالي";
+  else if (intent === "top_clients_by_trips") title = limit > 1 ? "أعلى العملاء حسب الرحلات" : "أعلى عميل حسب الرحلات";
+  else if (intent === "top_sites_by_trips") title = limit > 1 ? "أعلى المواقع حسب الرحلات" : "أعلى موقع حسب الرحلات";
+  else if (intent === "top_vehicles_by_trips") title = limit > 1 ? "أعلى المركبات حسب الرحلات" : "أعلى مركبة حسب الرحلات";
+  else if (intent === "create_work_order") title = "إنشاء أمر عمل";
+  else if (intent === "create_maintenance_request") title = "إنشاء طلب صيانة";
+  else if (intent === "create_expense") title = "تسجيل مصروف";
+  else if (intent === "reference_previous_item") title = "عنصر من النتائج السابقة";
+  else if (intent === "reference_previous_entity") title = "نفس الكيان السابق";
+  else if (intent === "reference_previous_expand_limit") title = "توسيع النتائج السابقة";
 
   return {
     mode: parsed?.mode || "unknown",
@@ -568,6 +566,176 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       answer = `يوجد ${items.length} أصناف منخفضة المخزون حاليًا. أقربها للنفاد هو "${
         top.part_name || top.item_name || top.name || "غير محدد"
       }".`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "trips_summary") {
+    const totalTrips = pickValue(result, [
+      ["data", "total_trips"],
+      ["total_trips"],
+      ["data", "count"],
+      ["count"],
+      ["data", "total"],
+      ["total"],
+    ]);
+
+    const activeCount = pickValue(result, [
+      ["data", "active_count"],
+      ["active_count"],
+    ]);
+
+    const completedCount = pickValue(result, [
+      ["data", "completed_count"],
+      ["completed_count"],
+    ]);
+
+    const answer = `إجمالي الرحلات خلال ${labelRange(
+      parsed?.filters?.range
+    )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+      completedCount || 0
+    )} مكتملة.`;
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "active_trips") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد رحلات نشطة خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else if (limit > 1) {
+      answer = `أول ${Math.min(limit, items.length)} رحلات نشطة خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => `${x.client_name || "عميل غير معروف"} — ${x.site_name || "موقع غير معروف"}`,
+        () => 1,
+        "عدد"
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `هناك رحلة نشطة تخص العميل "${top.client_name || "عميل غير معروف"}" في "${
+        top.site_name || "موقع غير معروف"
+      }".`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "trips_need_financial_closure") {
+    const items = pickItems(result);
+    const totalNeed = pickValue(result, [
+      ["data", "total_need_financial_closure"],
+      ["total_need_financial_closure"],
+      ["data", "count"],
+      ["count"],
+    ]);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد رحلات تحتاج إغلاقًا ماليًا خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else {
+      answer = `يوجد ${Number(totalNeed || items.length)} رحلة تحتاج إغلاقًا ماليًا خلال ${labelRange(
+        parsed?.filters?.range
+      )}.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "top_clients_by_trips") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات عملاء للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else if (limit > 1) {
+      answer = `أعلى ${Math.min(limit, items.length)} عملاء من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => x.client_name || "عميل غير معروف",
+        (x) => x.trips_count || 0,
+        "عدد"
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `أعلى عميل من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو "${top.client_name || "عميل غير معروف"}" بعدد ${Number(top.trips_count || 0)} رحلة.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "top_sites_by_trips") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات مواقع للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else if (limit > 1) {
+      answer = `أعلى ${Math.min(limit, items.length)} مواقع من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => x.site_name || "موقع غير معروف",
+        (x) => x.trips_count || 0,
+        "عدد"
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `أعلى موقع من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو "${top.site_name || "موقع غير معروف"}" بعدد ${Number(top.trips_count || 0)} رحلة.`;
+    }
+
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "top_vehicles_by_trips") {
+    const items = pickItems(result);
+
+    let answer = "";
+    if (!items.length) {
+      answer = `لا توجد بيانات مركبات للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
+    } else if (limit > 1) {
+      answer = `أعلى ${Math.min(limit, items.length)} مركبات من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )}:\n${renderTopList(
+        items.slice(0, limit),
+        (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
+        (x) => x.trips_count || 0,
+        "عدد"
+      )}`;
+    } else {
+      const top = items[0];
+      answer = `أعلى مركبة من حيث عدد الرحلات خلال ${labelRange(
+        parsed?.filters?.range
+      )} هي "${
+        top.display_name || top.fleet_no || top.plate_no || "مركبة غير معروفة"
+      }" بعدد ${Number(top.trips_count || 0)} رحلة.`;
     }
 
     return {

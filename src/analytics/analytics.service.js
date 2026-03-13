@@ -4,6 +4,7 @@ const financeAnalytics = require("./finance.analytics");
 const arAnalytics = require("./ar.analytics");
 const maintenanceAnalytics = require("./maintenance.analytics");
 const inventoryAnalytics = require("./inventory.analytics");
+const tripsAnalytics = require("./trips.analytics");
 
 async function getFinanceExpenseSummary({ user, query }) {
   const range = resolveTimeRange(query);
@@ -137,6 +138,80 @@ async function getMaintenanceCostByVehicle({ user, query }) {
   });
 }
 
+// =======================
+// Trips
+// =======================
+
+async function getTripsSummary({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+
+  return tripsAnalytics.getTripsSummary({
+    range,
+    scope,
+  });
+}
+
+async function getActiveTrips({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return tripsAnalytics.getActiveTrips({
+    range,
+    scope,
+    limit,
+  });
+}
+
+async function getTripsNeedingFinancialClosure({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return tripsAnalytics.getTripsNeedingFinancialClosure({
+    range,
+    scope,
+    limit,
+  });
+}
+
+async function getTopClientsByTrips({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return tripsAnalytics.getTopClientsByTrips({
+    range,
+    scope,
+    limit,
+  });
+}
+
+async function getTopSitesByTrips({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return tripsAnalytics.getTopSitesByTrips({
+    range,
+    scope,
+    limit,
+  });
+}
+
+async function getTopVehiclesByTrips({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+
+  return tripsAnalytics.getTopVehiclesByTrips({
+    range,
+    scope,
+    limit,
+  });
+}
+
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -150,4 +225,12 @@ module.exports = {
   getInventoryTopIssuedParts,
   getInventoryLowStockItems,
   getMaintenanceCostByVehicle,
+
+  // trips
+  getTripsSummary,
+  getActiveTrips,
+  getTripsNeedingFinancialClosure,
+  getTopClientsByTrips,
+  getTopSitesByTrips,
+  getTopVehiclesByTrips,
 };

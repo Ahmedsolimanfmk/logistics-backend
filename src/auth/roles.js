@@ -1,19 +1,21 @@
+// src/auth/roles.js
+
 const ROLES = Object.freeze({
   ADMIN: "ADMIN",
 
   // Operations
-  FIELD_SUPERVISOR: "FIELD_SUPERVISOR",     // مشرف الرحلة (مسؤول مباشر)
-  GENERAL_SUPERVISOR: "GENERAL_SUPERVISOR", // المشرف العام
+  FIELD_SUPERVISOR: "FIELD_SUPERVISOR",
+  GENERAL_SUPERVISOR: "GENERAL_SUPERVISOR",
 
   // Management
-  DEPT_MANAGER: "DEPT_MANAGER",             // مدير الإدارة
-  GENERAL_MANAGER: "GENERAL_MANAGER",       // المدير العام
-  GENERAL_RESPONSIBLE: "GENERAL_RESPONSIBLE", // المسؤول العام
+  DEPT_MANAGER: "DEPT_MANAGER",
+  GENERAL_MANAGER: "GENERAL_MANAGER",
+  GENERAL_RESPONSIBLE: "GENERAL_RESPONSIBLE",
 
   // Store
-  STOREKEEPER: "STOREKEEPER",   // 
+  STOREKEEPER: "STOREKEEPER",
 
-  // existing
+  // Existing
   HR: "HR",
   ACCOUNTANT: "ACCOUNTANT",
   DISPATCHER: "DISPATCHER",

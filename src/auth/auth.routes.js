@@ -1,6 +1,4 @@
-// =======================
 // src/auth/auth.routes.js
-// =======================
 
 const express = require("express");
 const bcrypt = require("bcrypt");
@@ -17,12 +15,8 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "email and password are required" });
     }
 
-    // ✅ Normalize email (trim only)
-    // IMPORTANT: DB قد تحتوي Email بحروف كبيرة (Ahmed...)
-    // لذلك لا نعتمد على toLowerCase، ونستخدم lookup insensitive
     const emailNorm = String(email).trim();
 
-    // ✅ Case-insensitive lookup
     const user = await prisma.users.findFirst({
       where: {
         email: { equals: emailNorm, mode: "insensitive" },
@@ -52,13 +46,17 @@ router.post("/login", async (req, res) => {
     }
 
     if (!process.env.JWT_SECRET) {
-      return res
-        .status(500)
-        .json({ message: "Server misconfigured: JWT_SECRET missing" });
+      return res.status(500).json({
+        message: "Server misconfigured: JWT_SECRET missing",
+      });
     }
 
     const token = jwt.sign(
-      { sub: user.id, role: user.role, email: user.email || undefined },
+      {
+        sub: user.id,
+        role: user.role,
+        email: user.email || undefined,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -75,7 +73,10 @@ router.post("/login", async (req, res) => {
     });
   } catch (e) {
     console.error("LOGIN ERROR:", e);
-    return res.status(500).json({ message: "Login failed", error: e.message });
+    return res.status(500).json({
+      message: "Login failed",
+      error: e.message,
+    });
   }
 });
 

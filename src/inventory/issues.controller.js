@@ -1,18 +1,12 @@
-// =======================
 // src/inventory/issues.controller.js
-// =======================
 
 const prisma = require("../maintenance/prisma");
 const { ROLES } = require("../auth/roles");
-// عدّل المسار لو مختلف عندك
-
-function getAuthUserId(req) {
-  return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
-}
-
-function getAuthUserRole(req) {
-  return req?.user?.role || null;
-}
+const {
+  getUserId,
+  getUserRole,
+  isAdminOrStorekeeper,
+} = require("../auth/access");
 
 function isUuid(v) {
   return (
@@ -22,22 +16,22 @@ function isUuid(v) {
 }
 
 function isPrismaModelMissing(err) {
-  // Prisma sometimes throws "Unknown arg" or "Invalid prisma.<model>" etc.
-  // Here we only want to detect "inventory_request_reservations model doesn't exist"
   const msg = String(err?.message || "");
   return (
     msg.includes("inventory_request_reservations") &&
-    (msg.includes("is not a function") ||
+    (
+      msg.includes("is not a function") ||
       msg.includes("Unknown arg") ||
       msg.includes("Unknown field") ||
       msg.includes("does not exist") ||
-      msg.includes("Invalid `prisma."))
+      msg.includes("Invalid `prisma.")
+    )
   );
 }
 
 async function listIssues(req, res) {
   try {
-    const status = String(req.query.status || "").trim(); // DRAFT/POSTED/CANCELLED
+    const status = String(req.query.status || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
     const request_id = String(req.query.request_id || "").trim();
     const work_order_id = String(req.query.work_order_id || "").trim();
@@ -54,7 +48,9 @@ async function listIssues(req, res) {
       include: {
         warehouses: true,
         requests: true,
-        inventory_issue_lines: { include: { parts: true, part_items: true } },
+        inventory_issue_lines: {
+          include: { parts: true, part_items: true },
+        },
       },
     });
 
@@ -75,7 +71,9 @@ async function getIssue(req, res) {
       include: {
         warehouses: true,
         requests: true,
-        inventory_issue_lines: { include: { parts: true, part_items: true } },
+        inventory_issue_lines: {
+          include: { parts: true, part_items: true },
+        },
       },
     });
 
@@ -89,8 +87,8 @@ async function getIssue(req, res) {
 
 async function createIssueDraft(req, res) {
   try {
-    const issued_by = getAuthUserId(req);
-    const userRole = getAuthUserRole(req);
+    const issued_by = getUserId(req);
+    const userRole = getUserRole(req);
 
     const warehouse_id = String(req.body?.warehouse_id || "").trim();
     const work_order_id = String(req.body?.work_order_id || "").trim();
@@ -99,72 +97,104 @@ async function createIssueDraft(req, res) {
         ? String(req.body.request_id).trim()
         : null;
 
-    const notes = req.body?.notes != null ? String(req.body.notes).trim() : null;
+    const notes =
+      req.body?.notes != null ? String(req.body.notes).trim() : null;
+
     const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
 
     if (!issued_by) return res.status(401).json({ message: "Unauthorized" });
-    if (!isUuid(warehouse_id)) return res.status(400).json({ message: "warehouse_id is required" });
-    if (!isUuid(work_order_id)) return res.status(400).json({ message: "work_order_id is required" });
-    if (request_id && !isUuid(request_id)) return res.status(400).json({ message: "request_id invalid" });
-    if (!lines.length) return res.status(400).json({ message: "lines is required" });
+    if (!isUuid(warehouse_id)) {
+      return res.status(400).json({ message: "warehouse_id is required" });
+    }
+    if (!isUuid(work_order_id)) {
+      return res.status(400).json({ message: "work_order_id is required" });
+    }
+    if (request_id && !isUuid(request_id)) {
+      return res.status(400).json({ message: "request_id invalid" });
+    }
+    if (!lines.length) {
+      return res.status(400).json({ message: "lines is required" });
+    }
 
-    // Direct issue must have reason + role allowed
     if (!request_id) {
-      if (![ROLES.ADMIN, ROLES.STOREKEEPER].includes(userRole)) {
-        return res.status(403).json({ message: "Direct issue allowed only for ADMIN or STOREKEEPER" });
+      if (!isAdminOrStorekeeper(req)) {
+        return res.status(403).json({
+          message: "Direct issue allowed only for ADMIN or STOREKEEPER",
+        });
       }
+
       if (!notes || notes.length < 5) {
-        return res.status(400).json({ message: "Direct issue requires reason in notes" });
+        return res.status(400).json({
+          message: "Direct issue requires reason in notes",
+        });
       }
     }
 
-    // ✅ UPDATED: allow both Serial and Bulk lines
-    // Serial: part_item_id required + qty must be 1
-    // Bulk: no part_item_id + qty > 0
     for (const [i, ln] of lines.entries()) {
       const part_id = String(ln?.part_id || "").trim();
       const part_item_id = String(ln?.part_item_id || "").trim();
       const qty = ln?.qty == null ? 1 : Number(ln.qty);
 
-      if (!isUuid(part_id)) return res.status(400).json({ message: `lines[${i}].part_id invalid` });
+      if (!isUuid(part_id)) {
+        return res
+          .status(400)
+          .json({ message: `lines[${i}].part_id invalid` });
+      }
 
       const hasSerial = !!part_item_id;
 
       if (hasSerial) {
-        // ===== OLD LOGIC preserved for serial =====
         if (!isUuid(part_item_id)) {
-          return res.status(400).json({ message: `lines[${i}].part_item_id invalid (serial required)` });
+          return res.status(400).json({
+            message: `lines[${i}].part_item_id invalid (serial required)`,
+          });
         }
+
         if (!Number.isFinite(qty) || qty !== 1) {
-          return res.status(400).json({ message: `lines[${i}].qty must be 1 for serial items` });
+          return res.status(400).json({
+            message: `lines[${i}].qty must be 1 for serial items`,
+          });
         }
       } else {
-        // ===== NEW LOGIC for bulk =====
         if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ message: `lines[${i}].qty must be > 0 for bulk items` });
+          return res.status(400).json({
+            message: `lines[${i}].qty must be > 0 for bulk items`,
+          });
         }
       }
     }
 
-    // If request-based: request must be APPROVED + (optional) reservation checks
     if (request_id) {
       const reqRow = await prisma.inventory_requests.findUnique({
         where: { id: request_id },
-        select: { id: true, status: true, warehouse_id: true, work_order_id: true },
+        select: {
+          id: true,
+          status: true,
+          warehouse_id: true,
+          work_order_id: true,
+        },
       });
 
       if (!reqRow) return res.status(404).json({ message: "Request not found" });
+
       if (reqRow.status !== "APPROVED") {
-        return res.status(400).json({ message: "Request must be APPROVED before issuing" });
-      }
-      if (String(reqRow.warehouse_id) !== warehouse_id) {
-        return res.status(400).json({ message: "Issue warehouse_id must match request warehouse_id" });
-      }
-      if (reqRow.work_order_id && String(reqRow.work_order_id) !== work_order_id) {
-        return res.status(400).json({ message: "work_order_id must match request work_order_id" });
+        return res.status(400).json({
+          message: "Request must be APPROVED before issuing",
+        });
       }
 
-      // ✅ Serial-only validations remain; apply ONLY to serial lines
+      if (String(reqRow.warehouse_id) !== warehouse_id) {
+        return res.status(400).json({
+          message: "Issue warehouse_id must match request warehouse_id",
+        });
+      }
+
+      if (reqRow.work_order_id && String(reqRow.work_order_id) !== work_order_id) {
+        return res.status(400).json({
+          message: "work_order_id must match request work_order_id",
+        });
+      }
+
       const serialPartItemIds = lines
         .map((ln) => String(ln?.part_item_id || "").trim())
         .filter(Boolean);
@@ -179,18 +209,29 @@ async function createIssueDraft(req, res) {
 
         for (const [i, ln] of lines.entries()) {
           const part_item_id = String(ln?.part_item_id || "").trim();
-          if (!part_item_id) continue; // bulk => skip
+          if (!part_item_id) continue;
 
           const part_id = String(ln.part_id).trim();
           const pi = map.get(part_item_id);
 
-          if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+          if (!pi) {
+            return res
+              .status(400)
+              .json({ message: `lines[${i}].part_item_id not found` });
+          }
+
           if (String(pi.warehouse_id) !== warehouse_id) {
-            return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+            return res.status(400).json({
+              message: `lines[${i}].part_item_id not in this warehouse`,
+            });
           }
+
           if (String(pi.part_id) !== part_id) {
-            return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+            return res.status(400).json({
+              message: `lines[${i}].part_item_id does not match part_id`,
+            });
           }
+
           if (pi.status !== "RESERVED") {
             return res.status(409).json({
               message: `lines[${i}].part_item_id must be RESERVED (current=${pi.status})`,
@@ -198,14 +239,17 @@ async function createIssueDraft(req, res) {
           }
         }
 
-        // Optional: verify reservations table if exists (serial only)
         try {
           const reservations = await prisma.inventory_request_reservations.findMany({
-            where: { request_id, part_item_id: { in: serialPartItemIds } },
+            where: {
+              request_id,
+              part_item_id: { in: serialPartItemIds },
+            },
             select: { part_item_id: true },
           });
 
           const set = new Set(reservations.map((r) => r.part_item_id));
+
           for (const pid of serialPartItemIds) {
             if (!set.has(pid)) {
               return res.status(409).json({
@@ -214,18 +258,15 @@ async function createIssueDraft(req, res) {
             }
           }
         } catch (e) {
-          // if model not present, ignore (system will still work using part_items.status RESERVED)
           if (!isPrismaModelMissing(e)) {
             console.error("reservations check error:", e);
-            return res.status(500).json({ message: "Failed to validate reservations" });
+            return res
+              .status(500)
+              .json({ message: "Failed to validate reservations" });
           }
         }
       }
-
-      // ✅ bulk request-based lines will be validated at posting time against warehouse_parts
     } else {
-      // Direct: ensure IN_STOCK now (early feedback)
-      // ✅ Serial-only checks remain; apply ONLY to serial lines
       const serialPartItemIds = lines
         .map((ln) => String(ln?.part_item_id || "").trim())
         .filter(Boolean);
@@ -237,20 +278,32 @@ async function createIssueDraft(req, res) {
         });
 
         const map = new Map(partItems.map((p) => [p.id, p]));
+
         for (const [i, ln] of lines.entries()) {
           const part_item_id = String(ln?.part_item_id || "").trim();
-          if (!part_item_id) continue; // bulk => skip
+          if (!part_item_id) continue;
 
           const part_id = String(ln.part_id).trim();
           const pi = map.get(part_item_id);
 
-          if (!pi) return res.status(400).json({ message: `lines[${i}].part_item_id not found` });
+          if (!pi) {
+            return res
+              .status(400)
+              .json({ message: `lines[${i}].part_item_id not found` });
+          }
+
           if (String(pi.warehouse_id) !== warehouse_id) {
-            return res.status(400).json({ message: `lines[${i}].part_item_id not in this warehouse` });
+            return res.status(400).json({
+              message: `lines[${i}].part_item_id not in this warehouse`,
+            });
           }
+
           if (String(pi.part_id) !== part_id) {
-            return res.status(400).json({ message: `lines[${i}].part_item_id does not match part_id` });
+            return res.status(400).json({
+              message: `lines[${i}].part_item_id does not match part_id`,
+            });
           }
+
           if (pi.status !== "IN_STOCK") {
             return res.status(409).json({
               message: `lines[${i}].part_item_id must be IN_STOCK for direct issue (current=${pi.status})`,
@@ -258,8 +311,6 @@ async function createIssueDraft(req, res) {
           }
         }
       }
-
-      // ✅ bulk direct lines will be validated at posting time against warehouse_parts
     }
 
     const created = await prisma.inventory_issues.create({
@@ -277,31 +328,31 @@ async function createIssueDraft(req, res) {
             const qty = ln?.qty == null ? 1 : Number(ln.qty);
 
             const unit_cost =
-              ln?.unit_cost == null || ln?.unit_cost === "" ? null : Number(ln.unit_cost);
+              ln?.unit_cost == null || ln?.unit_cost === ""
+                ? null
+                : Number(ln.unit_cost);
 
             const hasSerial = !!part_item_id;
 
-            // Serial: preserve old behavior
             if (hasSerial) {
               return {
                 part_id,
                 part_item_id,
                 qty: 1,
-                unit_cost: unit_cost,
+                unit_cost,
                 total_cost: unit_cost,
                 notes: ln?.notes != null ? String(ln.notes).trim() : null,
               };
             }
 
-            // Bulk
             const total_cost = unit_cost == null ? null : unit_cost * qty;
 
             return {
               part_id,
               part_item_id: null,
-              qty: qty,
-              unit_cost: unit_cost,
-              total_cost: total_cost,
+              qty,
+              unit_cost,
+              total_cost,
               notes: ln?.notes != null ? String(ln.notes).trim() : null,
             };
           }),
@@ -319,12 +370,11 @@ async function createIssueDraft(req, res) {
 
 async function postIssue(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const userRole = getAuthUserRole(req);
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const id = String(req.params.id || "").trim();
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const result = await prisma.$transaction(async (tx) => {
       const issue = await tx.inventory_issues.findUnique({
@@ -337,16 +387,19 @@ async function postIssue(req, res) {
         e.statusCode = 404;
         throw e;
       }
+
       if (issue.status !== "DRAFT") {
         const e = new Error("Only DRAFT issues can be posted");
         e.statusCode = 400;
         throw e;
       }
+
       if (!issue.inventory_issue_lines.length) {
         const e = new Error("Issue has no lines");
         e.statusCode = 400;
         throw e;
       }
+
       if (!issue.warehouse_id) {
         const e = new Error("Issue missing warehouse_id");
         e.statusCode = 400;
@@ -355,13 +408,13 @@ async function postIssue(req, res) {
 
       const isRequestBased = !!issue.request_id;
 
-      // Direct post permission + reason
       if (!isRequestBased) {
-        if (![ROLES.ADMIN, ROLES.STOREKEEPER].includes(userRole)) {
+        if (!isAdminOrStorekeeper(req)) {
           const e = new Error("Direct issue allowed only for ADMIN or STOREKEEPER");
           e.statusCode = 403;
           throw e;
         }
+
         if (!issue.notes || String(issue.notes).trim().length < 5) {
           const e = new Error("Direct issue requires reason in notes");
           e.statusCode = 400;
@@ -369,11 +422,15 @@ async function postIssue(req, res) {
         }
       }
 
-      // If request-based: request must still be APPROVED
       if (isRequestBased) {
         const reqRow = await tx.inventory_requests.findUnique({
           where: { id: issue.request_id },
-          select: { id: true, status: true, warehouse_id: true, work_order_id: true },
+          select: {
+            id: true,
+            status: true,
+            warehouse_id: true,
+            work_order_id: true,
+          },
         });
 
         if (!reqRow) {
@@ -381,29 +438,36 @@ async function postIssue(req, res) {
           e.statusCode = 400;
           throw e;
         }
+
         if (reqRow.status !== "APPROVED") {
           const e = new Error("Linked request must be APPROVED before posting issue");
           e.statusCode = 400;
           throw e;
         }
+
         if (String(reqRow.warehouse_id) !== String(issue.warehouse_id)) {
           const e = new Error("Request warehouse mismatch");
           e.statusCode = 400;
           throw e;
         }
-        if (reqRow.work_order_id && String(reqRow.work_order_id) !== String(issue.work_order_id)) {
+
+        if (
+          reqRow.work_order_id &&
+          String(reqRow.work_order_id) !== String(issue.work_order_id)
+        ) {
           const e = new Error("Request work order mismatch");
           e.statusCode = 400;
           throw e;
         }
       }
 
-      // ✅ split serial vs bulk
-      const serialLines = issue.inventory_issue_lines.filter((l) => String(l.part_item_id || "").trim());
-      const bulkLines = issue.inventory_issue_lines.filter((l) => !String(l.part_item_id || "").trim());
+      const serialLines = issue.inventory_issue_lines.filter((l) =>
+        String(l.part_item_id || "").trim()
+      );
+      const bulkLines = issue.inventory_issue_lines.filter(
+        (l) => !String(l.part_item_id || "").trim()
+      );
 
-      // ===== OLD CHECK (kept): "All lines must include part_item_id (serial)" =====
-      // Preserve the old strict behavior ONLY when there are no bulk lines.
       const partItemIds = serialLines.map((l) => l.part_item_id).filter(Boolean);
 
       if (!bulkLines.length) {
@@ -413,13 +477,12 @@ async function postIssue(req, res) {
           throw e;
         }
       } else {
-        // With bulk lines, still enforce: serial lines must include part_item_id
         if (partItemIds.length !== serialLines.length) {
           const e = new Error("All serial lines must include part_item_id (serial)");
           e.statusCode = 400;
           throw e;
         }
-        // Validate bulk qty > 0
+
         for (const l of bulkLines) {
           const q = Number(l.qty);
           if (!Number.isFinite(q) || q <= 0) {
@@ -430,11 +493,13 @@ async function postIssue(req, res) {
         }
       }
 
-      // If request-based: verify reservations table if exists (optional) — serial only
       if (isRequestBased && partItemIds.length) {
         try {
           const reservations = await tx.inventory_request_reservations.findMany({
-            where: { request_id: issue.request_id, part_item_id: { in: partItemIds } },
+            where: {
+              request_id: issue.request_id,
+              part_item_id: { in: partItemIds },
+            },
             select: { part_item_id: true },
           });
 
@@ -456,7 +521,6 @@ async function postIssue(req, res) {
         }
       }
 
-      // ===== OLD serial part_items validation & status logic (kept): now applied to serial only =====
       if (partItemIds.length) {
         const partItems = await tx.part_items.findMany({
           where: { id: { in: partItemIds } },
@@ -481,33 +545,33 @@ async function postIssue(req, res) {
           }
 
           if (isRequestBased) {
-            // request-based => must be RESERVED
             if (pi.status !== "RESERVED") {
-              const e = new Error(`part_item must be RESERVED (status=${pi.status}): ${line.part_item_id}`);
+              const e = new Error(
+                `part_item must be RESERVED (status=${pi.status}): ${line.part_item_id}`
+              );
               e.statusCode = 409;
               throw e;
             }
           } else {
-            // direct => must be IN_STOCK
             if (pi.status !== "IN_STOCK") {
-              const e = new Error(`part_item must be IN_STOCK (status=${pi.status}): ${line.part_item_id}`);
+              const e = new Error(
+                `part_item must be IN_STOCK (status=${pi.status}): ${line.part_item_id}`
+              );
               e.statusCode = 409;
               throw e;
             }
           }
         }
 
-        // mark part_items as ISSUED (serial only) — unchanged
         await tx.part_items.updateMany({
           where: { id: { in: partItemIds } },
           data: { status: "ISSUED", last_moved_at: new Date() },
         });
       }
 
-      // ✅ NEW: bulk stock decrement using warehouse_parts (safe & prevents negative)
       if (bulkLines.length) {
-        // Aggregate per part_id for fewer queries (optional but better)
         const agg = new Map();
+
         for (const l of bulkLines) {
           const pid = String(l.part_id);
           const q = Number(l.qty);
@@ -515,7 +579,6 @@ async function postIssue(req, res) {
         }
 
         for (const [part_id, qty] of agg.entries()) {
-          // ensure row exists and has enough qty_on_hand
           const row = await tx.warehouse_parts.findUnique({
             where: {
               uq_warehouse_parts_warehouse_part: {
@@ -542,20 +605,17 @@ async function postIssue(req, res) {
         }
       }
 
-      // post issue (unchanged)
       const posted = await tx.inventory_issues.update({
         where: { id: issue.id },
         data: { status: "POSTED", posted_at: new Date() },
       });
 
-      // if linked to request: set request to ISSUED and clear reservations if table exists (unchanged)
       if (issue.request_id) {
         await tx.inventory_requests.update({
           where: { id: issue.request_id },
           data: { status: "ISSUED" },
         });
 
-        // clear reservations if model exists
         try {
           await tx.inventory_request_reservations.deleteMany({
             where: { request_id: issue.request_id },
@@ -576,7 +636,9 @@ async function postIssue(req, res) {
     res.json({ message: "Issue posted", issue: result });
   } catch (err) {
     const sc = err?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: String(err.message || "Error") });
+    if (sc !== 500) {
+      return res.status(sc).json({ message: String(err.message || "Error") });
+    }
 
     console.error("postIssue error:", err);
     res.status(500).json({ message: "Failed to post issue" });

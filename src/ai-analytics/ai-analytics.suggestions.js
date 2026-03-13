@@ -55,6 +55,20 @@ function buildInventoryQuestions() {
   ];
 }
 
+function buildTripsQuestions() {
+  return [
+    "كم عدد الرحلات هذا الشهر؟",
+    "اعرض الرحلات النشطة",
+    "كم عدد الرحلات التي تحتاج إغلاق مالي؟",
+    "من أعلى عميل من حيث الرحلات؟",
+    "اعرض أعلى 5 عملاء حسب الرحلات",
+    "من أعلى موقع من حيث الرحلات؟",
+    "اعرض أعلى 5 مواقع حسب الرحلات",
+    "من أعلى مركبة من حيث الرحلات؟",
+    "اعرض أعلى 5 مركبات حسب الرحلات",
+  ];
+}
+
 function questionsByContext(context) {
   const c = String(context || "").trim().toLowerCase();
 
@@ -62,12 +76,14 @@ function questionsByContext(context) {
   if (c === "ar") return buildArQuestions();
   if (c === "maintenance") return buildMaintenanceQuestions();
   if (c === "inventory") return buildInventoryQuestions();
+  if (c === "trips") return buildTripsQuestions();
 
   return [
     ...buildFinanceQuestions(),
     ...buildArQuestions(),
     ...buildMaintenanceQuestions(),
     ...buildInventoryQuestions(),
+    ...buildTripsQuestions(),
   ];
 }
 
@@ -85,6 +101,7 @@ function questionsByRole(role, context) {
       ...buildArQuestions(),
       ...buildMaintenanceQuestions(),
       ...buildInventoryQuestions(),
+      ...buildTripsQuestions(),
     ];
   }
 
@@ -92,6 +109,7 @@ function questionsByRole(role, context) {
     return [
       ...buildFinanceQuestions(),
       ...buildArQuestions(),
+      ...buildTripsQuestions(),
     ];
   }
 
@@ -103,6 +121,10 @@ function questionsByRole(role, context) {
       "كم عدد أوامر العمل المفتوحة؟",
       "ما أعلى مركبة تكلفة صيانة؟",
       "اعرض أعلى 5 مركبات تكلفة صيانة",
+      "كم عدد الرحلات هذا الشهر؟",
+      "اعرض الرحلات النشطة",
+      "كم عدد الرحلات التي تحتاج إغلاق مالي؟",
+      "من أعلى مركبة من حيث الرحلات؟",
     ];
   }
 
@@ -111,7 +133,10 @@ function questionsByRole(role, context) {
   }
 
   if (r === "HR") {
-    return buildMaintenanceQuestions();
+    return [
+      ...buildMaintenanceQuestions(),
+      ...buildTripsQuestions(),
+    ];
   }
 
   return [
@@ -119,6 +144,7 @@ function questionsByRole(role, context) {
     "من أعلى عميل مديونية؟",
     "كم عدد أوامر العمل المفتوحة؟",
     "ما الأصناف القريبة من النفاد؟",
+    "كم عدد الرحلات هذا الشهر؟",
   ];
 }
 
@@ -216,6 +242,40 @@ function buildDynamicInventoryQuestions(signals = {}) {
   return items;
 }
 
+function buildDynamicTripsQuestions(signals = {}) {
+  const items = [];
+
+  const totalTrips = Number(signals.totalTrips || 0);
+  const activeTrips = Number(signals.activeTrips || 0);
+  const needFinancialClosure = Number(signals.needFinancialClosure || 0);
+  const topClientTrips = Number(signals.topClientTrips || 0);
+  const topVehicleTrips = Number(signals.topVehicleTrips || 0);
+
+  if (totalTrips > 0) {
+    items.push("كم عدد الرحلات هذا الشهر؟");
+  }
+
+  if (activeTrips > 0) {
+    items.push("اعرض الرحلات النشطة");
+  }
+
+  if (needFinancialClosure > 0) {
+    items.push("كم عدد الرحلات التي تحتاج إغلاق مالي؟");
+  }
+
+  if (topClientTrips > 0) {
+    items.push("من أعلى عميل من حيث الرحلات؟");
+    items.push("اعرض أعلى 5 عملاء حسب الرحلات");
+  }
+
+  if (topVehicleTrips > 0) {
+    items.push("من أعلى مركبة من حيث الرحلات؟");
+    items.push("اعرض أعلى 5 مركبات حسب الرحلات");
+  }
+
+  return items;
+}
+
 function getDynamicQuestions({ context = null, signals = {} }) {
   const c = String(context || "").trim().toLowerCase();
 
@@ -223,12 +283,14 @@ function getDynamicQuestions({ context = null, signals = {} }) {
   if (c === "ar") return buildDynamicArQuestions(signals);
   if (c === "maintenance") return buildDynamicMaintenanceQuestions(signals);
   if (c === "inventory") return buildDynamicInventoryQuestions(signals);
+  if (c === "trips") return buildDynamicTripsQuestions(signals);
 
   return [
     ...buildDynamicFinanceQuestions(signals),
     ...buildDynamicArQuestions(signals),
     ...buildDynamicMaintenanceQuestions(signals),
     ...buildDynamicInventoryQuestions(signals),
+    ...buildDynamicTripsQuestions(signals),
   ];
 }
 

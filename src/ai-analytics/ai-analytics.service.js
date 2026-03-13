@@ -69,6 +69,7 @@ function buildUnknownResponse(parsed) {
       "من أعلى عميل مديونية؟",
       "كم عدد أوامر العمل المفتوحة؟",
       "ما الأصناف القريبة من النفاد؟",
+      "كم عدد الرحلات هذا الشهر؟",
     ],
     insights: [],
     session_snapshot: null,
@@ -140,6 +141,30 @@ async function executeParsedQuery({ user, parsed }) {
 
   if (intent === "low_stock_items") {
     return analyticsService.getInventoryLowStockItems({ user, query });
+  }
+
+  if (intent === "trips_summary") {
+    return analyticsService.getTripsSummary({ user, query });
+  }
+
+  if (intent === "active_trips") {
+    return analyticsService.getActiveTrips({ user, query });
+  }
+
+  if (intent === "trips_need_financial_closure") {
+    return analyticsService.getTripsNeedingFinancialClosure({ user, query });
+  }
+
+  if (intent === "top_clients_by_trips") {
+    return analyticsService.getTopClientsByTrips({ user, query });
+  }
+
+  if (intent === "top_sites_by_trips") {
+    return analyticsService.getTopSitesByTrips({ user, query });
+  }
+
+  if (intent === "top_vehicles_by_trips") {
+    return analyticsService.getTopVehiclesByTrips({ user, query });
   }
 
   return null;
@@ -294,6 +319,68 @@ async function buildInlineInsights({ user, parsed, result }) {
     }).slice(0, 3);
   }
 
+  if (moduleName === "trips") {
+    const tripsSummary =
+      parsed?.intent === "trips_summary"
+        ? result
+        : await analyticsService.getTripsSummary({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const activeTrips =
+      parsed?.intent === "active_trips"
+        ? result
+        : await analyticsService.getActiveTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const tripsNeedFinancialClosure =
+      parsed?.intent === "trips_need_financial_closure"
+        ? result
+        : await analyticsService.getTripsNeedingFinancialClosure({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topClientsByTrips =
+      parsed?.intent === "top_clients_by_trips"
+        ? result
+        : await analyticsService.getTopClientsByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topSitesByTrips =
+      parsed?.intent === "top_sites_by_trips"
+        ? result
+        : await analyticsService.getTopSitesByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topVehiclesByTrips =
+      parsed?.intent === "top_vehicles_by_trips"
+        ? result
+        : await analyticsService.getTopVehiclesByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    return buildInsightsByContext({
+      context: "trips",
+      data: {
+        tripsSummary,
+        activeTrips,
+        tripsNeedFinancialClosure,
+        topClientsByTrips,
+        topSitesByTrips,
+        topVehiclesByTrips,
+      },
+    }).slice(0, 5);
+  }
+
   return [];
 }
 
@@ -320,6 +407,7 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
         "اعرض أعلى 5 عملاء مديونية",
         "اعرض أعلى 5 مركبات تكلفة صيانة",
         "اعرض أعلى 5 أصناف صرفًا",
+        "اعرض أعلى 5 مركبات حسب الرحلات",
       ],
       insights: [],
       session_snapshot: null,
@@ -349,6 +437,7 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
       "اعرض أعلى 5 عملاء مديونية",
       "اعرض أعلى 5 مركبات تكلفة صيانة",
       "اعرض أعلى 5 أصناف صرفًا",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
     ],
     insights: [],
     session_snapshot: {
@@ -386,6 +475,7 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
         "اعرض أعلى 5 عملاء مديونية",
         "اعرض أعلى 5 مركبات تكلفة صيانة",
         "اعرض أعلى 5 أصناف صرفًا",
+        "اعرض أعلى 5 مركبات حسب الرحلات",
       ],
       insights: [],
       session_snapshot: null,
@@ -701,6 +791,48 @@ async function getAiInsights({ user, query }) {
       user,
       query: {
         limit: 10,
+      },
+    });
+  }
+
+  if (!context || context === "trips") {
+    data.tripsSummary = await analyticsService.getTripsSummary({
+      user,
+      query: { range: "this_month" },
+    });
+
+    data.activeTrips = await analyticsService.getActiveTrips({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.tripsNeedFinancialClosure =
+      await analyticsService.getTripsNeedingFinancialClosure({
+        user,
+        query: { range: "this_month", limit: 5 },
+      });
+
+    data.topClientsByTrips = await analyticsService.getTopClientsByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
+      },
+    });
+
+    data.topSitesByTrips = await analyticsService.getTopSitesByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
+      },
+    });
+
+    data.topVehiclesByTrips = await analyticsService.getTopVehiclesByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
       },
     });
   }

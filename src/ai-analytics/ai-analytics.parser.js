@@ -23,13 +23,13 @@ function roleUpper(role) {
 function allowedModulesByRole(role) {
   const r = roleUpper(role);
 
-  if (r === "ADMIN") return ["finance", "ar", "maintenance", "inventory"];
-  if (r === "ACCOUNTANT") return ["finance", "ar"];
+  if (r === "ADMIN") return ["finance", "ar", "maintenance", "inventory", "trips"];
+  if (r === "ACCOUNTANT") return ["finance", "ar", "trips"];
   if (r === "STOREKEEPER") return ["inventory"];
-  if (r === "FIELD_SUPERVISOR") return ["finance", "maintenance"];
-  if (r === "HR") return ["maintenance"];
+  if (r === "FIELD_SUPERVISOR") return ["finance", "maintenance", "trips"];
+  if (r === "HR") return ["maintenance", "trips"];
 
-  return ["maintenance", "inventory"];
+  return ["maintenance", "inventory", "trips"];
 }
 
 function detectLimit(question) {
@@ -67,6 +67,7 @@ function detectModule(question, context, user) {
     ar: 0,
     maintenance: 0,
     inventory: 0,
+    trips: 0,
   };
 
   for (const mod of Object.keys(SYNONYMS.modules || {})) {
@@ -108,6 +109,7 @@ function buildBaseParsed({ question, context, user, body }) {
       work_order_hint: extractWorkOrderHint(question) || null,
       client_hint: null,
       part_hint: null,
+      site_hint: null,
       expense_type: extractExpenseType(question) || null,
       vendor_name: extractVendorName(question) || null,
       paid_method: extractPaidMethod(question) || null,
@@ -630,6 +632,170 @@ function parseInventory(question, base) {
   return null;
 }
 
+function parseTrips(question, base) {
+  const text = base.normalized_question;
+  const limit = base.options.limit;
+  const qType = base.options.question_type;
+
+  if (
+    includesAny(text, SYNONYMS.trips?.summary || []) ||
+    (
+      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
+      includesAny(text, ["اجمالي", "إجمالي", "عدد", "كم", "كام"])
+    )
+  ) {
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "trips_summary",
+      confidence: 0.91,
+      metric: "total_trips",
+      group_by: null,
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    };
+  }
+
+  if (
+    includesAny(text, SYNONYMS.trips?.active || []) ||
+    (
+      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
+      includesAny(text, ["نشطه", "نشطة", "جاريه", "جارية", "فعاله", "فعالة"])
+    )
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 5);
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "active_trips",
+      confidence: 0.9,
+      metric: "active_trips_count",
+      group_by: "trip",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    includesAny(text, SYNONYMS.trips?.needFinancialClosure || []) ||
+    (
+      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
+      includesAny(text, ["اغلاق مالي", "إغلاق مالي", "مغلقه ماليا", "مغلقة ماليًا", "closure"])
+    )
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 5);
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "trips_need_financial_closure",
+      confidence: 0.91,
+      metric: "need_financial_closure_count",
+      group_by: "trip",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    includesAny(text, SYNONYMS.trips?.topClients || []) ||
+    (
+      includesAny(text, ["عميل", "العملاء", "عملاء"]) &&
+      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
+      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
+    )
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "top_clients_by_trips",
+      confidence: 0.9,
+      metric: "trips_count",
+      group_by: "client",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    includesAny(text, SYNONYMS.trips?.topSites || []) ||
+    (
+      includesAny(text, ["موقع", "الموقع", "المواقع", "site", "sites"]) &&
+      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
+      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
+    )
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "top_sites_by_trips",
+      confidence: 0.9,
+      metric: "trips_count",
+      group_by: "site",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  if (
+    includesAny(text, SYNONYMS.trips?.topVehicles || []) ||
+    (
+      includesAny(text, ["مركبه", "مركبة", "مركبات", "عربيه", "عربية", "سياره", "سيارة", "سيارات"]) &&
+      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
+      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
+    )
+  ) {
+    const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "top_vehicles_by_trips",
+      confidence: 0.9,
+      metric: "trips_count",
+      group_by: "vehicle",
+      options: {
+        ...base.options,
+        limit: finalLimit,
+        response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    };
+  }
+
+  return null;
+}
+
 function parseReferenceFollowUp(question, base) {
   const text = base.normalized_question;
 
@@ -726,6 +892,7 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
   if (!parsed && moduleName === "ar") parsed = parseAr(question, base);
   if (!parsed && moduleName === "maintenance") parsed = parseMaintenance(question, base);
   if (!parsed && moduleName === "inventory") parsed = parseInventory(question, base);
+  if (!parsed && moduleName === "trips") parsed = parseTrips(question, base);
 
   if (parsed) return parsed;
 
@@ -733,7 +900,8 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
     parseFinance(question, base) ||
     parseAr(question, base) ||
     parseMaintenance(question, base) ||
-    parseInventory(question, base);
+    parseInventory(question, base) ||
+    parseTrips(question, base);
 
   if (parsed) return parsed;
 

@@ -1,23 +1,18 @@
-// =======================
 // src/cash/cash.controller.js
 // FINAL: COMPANY + ADVANCE (enum payment_source) + backward compatibility
-// + ✅ Implemented: approve/reject/appeal/resolve/reopen + audits + trip finance helpers
-// =======================
+// + approve/reject/appeal/resolve/reopen + audits + trip finance helpers
+// + unified auth/access helpers
 
 const prisma = require("../prisma");
+const {
+  getUserId,
+  getUserRole,
+  isAdminOrAccountant,
+} = require("../auth/access");
 
 // =======================
 // Helpers
 // =======================
-
-function getAuthUserId(req) {
-  if (!req || !req.user) return null;
-  return req.user.sub || req.user.id || req.user.userId || null;
-}
-
-function getAuthRole(req) {
-  return req.user?.role || null;
-}
 
 function isUuid(v) {
   return (
@@ -26,21 +21,13 @@ function isUuid(v) {
   );
 }
 
-function roleUpper(role) {
-  return String(role || "").toUpperCase();
-}
-
-function isAccountantOrAdmin(role) {
-  return ["ADMIN", "ACCOUNTANT"].includes(roleUpper(role));
-}
-
-// ✅ Trip finance lock helper
+// Trip finance lock helper
 function isTripFinancialLocked(financial_status) {
   const s = String(financial_status || "OPEN").toUpperCase();
   return ["IN_REVIEW", "CLOSED"].includes(s);
 }
 
-// ✅ Trip ownership for supervisor (any historical assignment)
+// Trip ownership for supervisor (any historical assignment)
 async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   const where = { trip_id, field_supervisor_id: userId };
   if (vehicle_id) where.vehicle_id = vehicle_id;
@@ -54,7 +41,7 @@ async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   return !!row;
 }
 
-// ✅ Vehicle portfolio validation (when trip_id not provided)
+// Vehicle portfolio validation (when trip_id not provided)
 async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
@@ -68,7 +55,10 @@ async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
   return !!row;
 }
 
-async function writeExpenseAuditSafe(tx, { expense_id, action, actor_id, before, after, notes }) {
+async function writeExpenseAuditSafe(
+  tx,
+  { expense_id, action, actor_id, before, after, notes }
+) {
   try {
     if (!tx.cash_expense_audits?.create) return;
 
@@ -131,7 +121,7 @@ function normalizePaymentSource(v) {
 function parseOptionalDate(v) {
   if (!v) return null;
   const d = new Date(String(v));
-  if (Number.isNaN(d.getTime())) return undefined; // invalid marker
+  if (Number.isNaN(d.getTime())) return undefined;
   return d;
 }
 
@@ -146,23 +136,21 @@ function safeUpper(v) {
 // GET /cash/cash-advances/summary?q=&status=
 async function getCashAdvancesSummary(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
+    const role = getUserRole(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const { status, q } = req.query || {};
 
     const where = {};
 
     if (status) where.status = String(status).toUpperCase();
 
-    // supervisors: only their advances
     if (!isPrivileged) {
       where.field_supervisor_id = userId;
     }
 
-    // Search: settlement reference/notes
     if (q && String(q).trim()) {
       const qq = String(q).trim();
       where.OR = [
@@ -212,23 +200,20 @@ async function getCashAdvancesSummary(req, res) {
 // GET /cash/cash-advances?status=&q=&page=&page_size=
 async function getCashAdvances(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const { status, q, page = "1", page_size = "50" } = req.query || {};
 
     const where = {};
 
     if (status) where.status = String(status).toUpperCase();
 
-    // supervisors: only their advances
     if (!isPrivileged) {
       where.field_supervisor_id = userId;
     }
 
-    // simple search
     if (q && String(q).trim()) {
       const qq = String(q).trim();
       where.OR = [
@@ -258,39 +243,53 @@ async function getCashAdvances(req, res) {
 
     return res.json({ items, total, page: p, page_size: ps });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch cash advances", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch cash advances",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // POST /cash/cash-advances
 async function createCashAdvance(req, res) {
   try {
-    const issuerId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const issuerId = getUserId(req);
 
     if (!issuerId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) {
-      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can issue cash advances" });
+    if (!isAdminOrAccountant(req)) {
+      return res
+        .status(403)
+        .json({ message: "Only ADMIN or ACCOUNTANT can issue cash advances" });
     }
 
     const { field_supervisor_id, amount } = req.body || {};
 
     if (!isUuid(field_supervisor_id)) {
-      return res.status(400).json({ message: "field_supervisor_id is required and must be uuid" });
+      return res.status(400).json({
+        message: "field_supervisor_id is required and must be uuid",
+      });
     }
     if (!amount || Number(amount) <= 0) {
       return res.status(400).json({ message: "amount must be greater than 0" });
     }
 
-    const supervisor = await prisma.users.findUnique({ where: { id: field_supervisor_id } });
-    if (!supervisor) return res.status(400).json({ message: "Invalid field_supervisor_id" });
+    const supervisor = await prisma.users.findUnique({
+      where: { id: field_supervisor_id },
+    });
+    if (!supervisor) {
+      return res.status(400).json({ message: "Invalid field_supervisor_id" });
+    }
 
     const created = await prisma.cash_advances.create({
       data: {
         amount,
         status: "OPEN",
-        users_cash_advances_field_supervisor_idTousers: { connect: { id: field_supervisor_id } },
-        users_cash_advances_issued_byTousers: { connect: { id: issuerId } },
+        users_cash_advances_field_supervisor_idTousers: {
+          connect: { id: field_supervisor_id },
+        },
+        users_cash_advances_issued_byTousers: {
+          connect: { id: issuerId },
+        },
       },
       include: {
         users_cash_advances_field_supervisor_idTousers: true,
@@ -301,19 +300,22 @@ async function createCashAdvance(req, res) {
     return res.status(201).json(created);
   } catch (e) {
     console.log("CREATE CASH ADVANCE ERROR:", e);
-    return res.status(500).json({ message: "Failed to create cash advance", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to create cash advance",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// ✅ Phase B
 async function submitCashAdvanceForReview(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) {
-      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can submit advance for review" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can submit advance for review",
+      });
     }
 
     const { id } = req.params;
@@ -323,28 +325,42 @@ async function submitCashAdvanceForReview(req, res) {
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = String(advance.status || "OPEN").toUpperCase();
-    if (st === "CLOSED") return res.status(409).json({ message: "Cash advance already CLOSED" });
+    if (st === "CLOSED") {
+      return res.status(409).json({ message: "Cash advance already CLOSED" });
+    }
     if (st !== "OPEN") {
-      return res
-        .status(400)
-        .json({ message: `Cash advance must be OPEN to submit review (current: ${st})` });
+      return res.status(400).json({
+        message: `Cash advance must be OPEN to submit review (current: ${st})`,
+      });
     }
 
-    const updated = await prisma.cash_advances.update({ where: { id }, data: { status: "IN_REVIEW" } });
-    return res.json({ message: "Cash advance moved to IN_REVIEW", cash_advance: updated });
+    const updated = await prisma.cash_advances.update({
+      where: { id },
+      data: { status: "IN_REVIEW" },
+    });
+
+    return res.json({
+      message: "Cash advance moved to IN_REVIEW",
+      cash_advance: updated,
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to submit cash advance for review", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to submit cash advance for review",
+      error: e?.message || String(e),
+    });
   }
 }
 
 async function closeCashAdvance(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role))
-      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can close cash advances" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can close cash advances",
+      });
+    }
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
@@ -353,8 +369,11 @@ async function closeCashAdvance(req, res) {
     const stType = String(settlement_type || "").toUpperCase();
 
     if (!["RETURN", "SHORTAGE", "ADJUSTMENT"].includes(stType)) {
-      return res.status(400).json({ message: "settlement_type must be RETURN | SHORTAGE | ADJUSTMENT" });
+      return res.status(400).json({
+        message: "settlement_type must be RETURN | SHORTAGE | ADJUSTMENT",
+      });
     }
+
     if (amount === undefined || amount === null || isNaN(Number(amount)) || Number(amount) < 0) {
       return res.status(400).json({ message: "amount must be a number >= 0" });
     }
@@ -365,12 +384,18 @@ async function closeCashAdvance(req, res) {
     const st = String(advance.status || "OPEN").toUpperCase();
     if (st === "CLOSED") return res.status(409).json({ message: "Cash advance already CLOSED" });
     if (st !== "IN_REVIEW") {
-      return res.status(400).json({ message: `Cash advance must be IN_REVIEW before CLOSE (current: ${st})` });
+      return res.status(400).json({
+        message: `Cash advance must be IN_REVIEW before CLOSE (current: ${st})`,
+      });
     }
 
     const pendingCount = await prisma.cash_expenses.count({
-      where: { cash_advance_id: id, approval_status: { in: ["PENDING", "APPEALED"] } },
+      where: {
+        cash_advance_id: id,
+        approval_status: { in: ["PENDING", "APPEALED"] },
+      },
     });
+
     if (pendingCount > 0) {
       return res.status(409).json({
         message: "Cannot close cash advance while there are pending/appealed expenses",
@@ -379,11 +404,17 @@ async function closeCashAdvance(req, res) {
     }
 
     const approvedExpenses = await prisma.cash_expenses.findMany({
-      where: { cash_advance_id: id, approval_status: { in: ["APPROVED", "REAPPROVED"] } },
+      where: {
+        cash_advance_id: id,
+        approval_status: { in: ["APPROVED", "REAPPROVED"] },
+      },
       select: { amount: true },
     });
 
-    const totalApproved = approvedExpenses.reduce((acc, x) => acc + Number(x.amount || 0), 0);
+    const totalApproved = approvedExpenses.reduce(
+      (acc, x) => acc + Number(x.amount || 0),
+      0
+    );
     const advanceAmount = Number(advance.amount || 0);
 
     const remaining = advanceAmount - totalApproved;
@@ -441,18 +472,23 @@ async function closeCashAdvance(req, res) {
     });
   } catch (e) {
     console.log("CLOSE CASH ADVANCE ERROR:", e);
-    return res.status(500).json({ message: "Failed to close cash advance", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to close cash advance",
+      error: e?.message || String(e),
+    });
   }
 }
 
 async function reopenCashAdvance(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role))
-      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reopen cash advances" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can reopen cash advances",
+      });
+    }
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
@@ -461,8 +497,11 @@ async function reopenCashAdvance(req, res) {
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = String(advance.status || "OPEN").toUpperCase();
-    if (st !== "CLOSED")
-      return res.status(400).json({ message: `Only CLOSED advances can be reopened (current: ${st})` });
+    if (st !== "CLOSED") {
+      return res.status(400).json({
+        message: `Only CLOSED advances can be reopened (current: ${st})`,
+      });
+    }
 
     const updated = await prisma.cash_advances.update({
       where: { id },
@@ -477,9 +516,15 @@ async function reopenCashAdvance(req, res) {
       },
     });
 
-    return res.json({ message: "Cash advance reopened to IN_REVIEW", cash_advance: updated });
+    return res.json({
+      message: "Cash advance reopened to IN_REVIEW",
+      cash_advance: updated,
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to reopen cash advance", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to reopen cash advance",
+      error: e?.message || String(e),
+    });
   }
 }
 
@@ -488,6 +533,7 @@ async function getAdvanceExpenses(req, res) {
   try {
     const { id } = req.params;
     const { status } = req.query;
+
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
     const advance = await prisma.cash_advances.findUnique({ where: { id } });
@@ -509,7 +555,10 @@ async function getAdvanceExpenses(req, res) {
 
     return res.json(list);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch advance expenses", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch advance expenses",
+      error: e?.message || String(e),
+    });
   }
 }
 
@@ -520,9 +569,10 @@ async function getAdvanceExpenses(req, res) {
 // POST /cash/cash-expenses
 async function createCashExpense(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const role = getUserRole(req);
 
     const {
       expense_source,
@@ -549,11 +599,19 @@ async function createCashExpense(req, res) {
 
     const src = normalizePaymentSource(payment_source || expense_source);
 
-    if (!expense_type) return res.status(400).json({ message: "expense_type is required" });
-    if (!amount || Number(amount) <= 0) return res.status(400).json({ message: "amount must be > 0" });
+    if (!expense_type) {
+      return res.status(400).json({ message: "expense_type is required" });
+    }
+    if (!amount || Number(amount) <= 0) {
+      return res.status(400).json({ message: "amount must be > 0" });
+    }
 
-    if (trip_id && !isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
-    if (vehicle_id && !isUuid(vehicle_id)) return res.status(400).json({ message: "Invalid vehicle_id" });
+    if (trip_id && !isUuid(trip_id)) {
+      return res.status(400).json({ message: "Invalid trip_id" });
+    }
+    if (vehicle_id && !isUuid(vehicle_id)) {
+      return res.status(400).json({ message: "Invalid vehicle_id" });
+    }
     if (maintenance_work_order_id && !isUuid(maintenance_work_order_id)) {
       return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
     }
@@ -564,26 +622,35 @@ async function createCashExpense(req, res) {
         where: { id: maintenance_work_order_id },
         select: { id: true, vehicle_id: true },
       });
-      if (!mwo) return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
+      if (!mwo) {
+        return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
+      }
       mwoVehicleId = mwo.vehicle_id || null;
     }
 
-    // COMPANY
     if (src === "COMPANY") {
-      if (!isAccountantOrAdmin(role)) {
-        return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can create COMPANY expenses" });
+      if (!isAdminOrAccountant(req)) {
+        return res.status(403).json({
+          message: "Only ADMIN or ACCOUNTANT can create COMPANY expenses",
+        });
       }
 
       if (cash_advance_id) {
-        return res.status(400).json({ message: "cash_advance_id must be omitted for COMPANY expenses" });
+        return res.status(400).json({
+          message: "cash_advance_id must be omitted for COMPANY expenses",
+        });
       }
 
       if (!vendor_name || String(vendor_name).trim().length < 2) {
-        return res.status(400).json({ message: "vendor_name is required for COMPANY expenses" });
+        return res.status(400).json({
+          message: "vendor_name is required for COMPANY expenses",
+        });
       }
 
       const invDate = parseOptionalDate(invoice_date);
-      if (invDate === undefined) return res.status(400).json({ message: "Invalid invoice_date" });
+      if (invDate === undefined) {
+        return res.status(400).json({ message: "Invalid invoice_date" });
+      }
 
       if (trip_id) {
         const trip = await prisma.trips.findUnique({
@@ -607,7 +674,9 @@ async function createCashExpense(req, res) {
 
           trips: trip_id ? { connect: { id: trip_id } } : undefined,
           vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
-          maintenance_work_orders: maintenance_work_order_id ? { connect: { id: maintenance_work_order_id } } : undefined,
+          maintenance_work_orders: maintenance_work_order_id
+            ? { connect: { id: maintenance_work_order_id } }
+            : undefined,
 
           expense_type,
           amount,
@@ -619,8 +688,12 @@ async function createCashExpense(req, res) {
           invoice_date: invDate,
           paid_method: paid_method ? String(paid_method).toUpperCase() : null,
           payment_ref: payment_ref ? String(payment_ref) : null,
-          vat_amount: vat_amount !== undefined && vat_amount !== null ? vat_amount : null,
-          invoice_total: invoice_total !== undefined && invoice_total !== null ? invoice_total : null,
+          vat_amount:
+            vat_amount !== undefined && vat_amount !== null ? vat_amount : null,
+          invoice_total:
+            invoice_total !== undefined && invoice_total !== null
+              ? invoice_total
+              : null,
 
           approval_status: "PENDING",
           users_cash_expenses_created_byTousers: { connect: { id: userId } },
@@ -630,20 +703,24 @@ async function createCashExpense(req, res) {
       return res.status(201).json(created);
     }
 
-    // ADVANCE (Supervisor)
     if (!isUuid(cash_advance_id)) {
       return res.status(400).json({
         message: "cash_advance_id is required for ADVANCE expenses and must be uuid",
       });
     }
 
-    const advance = await prisma.cash_advances.findUnique({ where: { id: cash_advance_id } });
+    const advance = await prisma.cash_advances.findUnique({
+      where: { id: cash_advance_id },
+    });
+
     if (!advance || String(advance.status).toUpperCase() !== "OPEN") {
       return res.status(400).json({ message: "Cash advance not found or not OPEN" });
     }
 
     if (advance.field_supervisor_id !== userId) {
-      return res.status(403).json({ message: "Only the assigned field supervisor can add ADVANCE expenses" });
+      return res.status(403).json({
+        message: "Only the assigned field supervisor can add ADVANCE expenses",
+      });
     }
 
     if (trip_id) {
@@ -653,6 +730,7 @@ async function createCashExpense(req, res) {
       });
 
       if (!trip) return res.status(400).json({ message: "Invalid trip_id" });
+
       if (isTripFinancialLocked(trip.financial_status)) {
         return res.status(409).json({
           message: `Trip is financially locked (${trip.financial_status}). No more expenses allowed.`,
@@ -664,6 +742,7 @@ async function createCashExpense(req, res) {
         userId,
         vehicle_id: vehicle_id || null,
       });
+
       if (!okTrip) {
         return res.status(403).json({
           message: "You are not allowed to add expenses to this trip (not assigned to you).",
@@ -672,7 +751,11 @@ async function createCashExpense(req, res) {
     }
 
     if (!trip_id && vehicle_id) {
-      const okVehicle = await assertVehicleInSupervisorPortfolio({ vehicle_id, userId });
+      const okVehicle = await assertVehicleInSupervisorPortfolio({
+        vehicle_id,
+        userId,
+      });
+
       if (!okVehicle) {
         return res.status(403).json({
           message: "You are not allowed to add expenses to this vehicle (not in your portfolio).",
@@ -686,8 +769,12 @@ async function createCashExpense(req, res) {
         cash_advances: { connect: { id: cash_advance_id } },
 
         trips: trip_id ? { connect: { id: trip_id } } : undefined,
-        vehicles: (vehicle_id || mwoVehicleId) ? { connect: { id: vehicle_id || mwoVehicleId } } : undefined,
-        maintenance_work_orders: maintenance_work_order_id ? { connect: { id: maintenance_work_order_id } } : undefined,
+        vehicles: vehicle_id || mwoVehicleId
+          ? { connect: { id: vehicle_id || mwoVehicleId } }
+          : undefined,
+        maintenance_work_orders: maintenance_work_order_id
+          ? { connect: { id: maintenance_work_order_id } }
+          : undefined,
 
         expense_type,
         amount,
@@ -702,26 +789,27 @@ async function createCashExpense(req, res) {
     return res.status(201).json(created);
   } catch (e) {
     console.log("CREATE CASH EXPENSE ERROR:", e);
-    return res.status(500).json({ message: "Failed to create cash expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to create cash expense",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // GET /cash/cash-expenses?...
 async function listCashExpenses(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
-
+    const isPrivileged = isAdminOrAccountant(req);
     const { status, payment_source, q, page = "1", page_size = "50" } = req.query || {};
+
     const where = {};
 
     if (status) where.approval_status = String(status).toUpperCase();
     if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
 
-    // Supervisors: only their created expenses
     if (!isPrivileged) {
       where.created_by = userId;
     }
@@ -761,15 +849,17 @@ async function listCashExpenses(req, res) {
 
     return res.json({ items, total, page: p, page_size: ps });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch expenses", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch expenses",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // GET /cash/cash-advances/:id
 async function getCashAdvanceById(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
@@ -786,7 +876,7 @@ async function getCashAdvanceById(req, res) {
 
     if (!row) return res.status(404).json({ message: "Cash advance not found" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const isOwnerSupervisor = row.field_supervisor_id === userId;
 
     if (!isPrivileged && !isOwnerSupervisor) {
@@ -795,18 +885,20 @@ async function getCashAdvanceById(req, res) {
 
     return res.json(row);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch cash advance", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch cash advance",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // GET /cash/cash-expenses/summary?...
 async function getCashExpensesSummary(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const { status, payment_source, q } = req.query || {};
     const where = {};
 
@@ -887,15 +979,17 @@ async function getCashExpensesSummary(req, res) {
 
     return res.json(result);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch expenses summary", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch expenses summary",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // GET /cash/cash-expenses/:id
 async function getCashExpenseById(req, res) {
   try {
-    const userId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
@@ -917,7 +1011,7 @@ async function getCashExpenseById(req, res) {
 
     if (!row) return res.status(404).json({ message: "Cash expense not found" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const isOwner = row.created_by === userId;
     const isAdvanceSupervisor = row.cash_advances?.field_supervisor_id === userId;
 
@@ -927,21 +1021,23 @@ async function getCashExpenseById(req, res) {
 
     return res.json(row);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch expense",
+      error: e?.message || String(e),
+    });
   }
 }
-
-// =======================
-// Expense Actions (✅ Implemented)
-// =======================
 
 // POST /cash/cash-expenses/:id/approve
 async function approveCashExpense(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can approve expenses" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can approve expenses",
+      });
+    }
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
@@ -953,7 +1049,9 @@ async function approveCashExpense(req, res) {
 
     const st = safeUpper(expense.approval_status);
     if (!["PENDING", "APPEALED"].includes(st)) {
-      return res.status(400).json({ message: `Expense must be PENDING or APPEALED to approve (current: ${st})` });
+      return res.status(400).json({
+        message: `Expense must be PENDING or APPEALED to approve (current: ${st})`,
+      });
     }
 
     const nextStatus = st === "APPEALED" ? "REAPPROVED" : "APPROVED";
@@ -968,12 +1066,10 @@ async function approveCashExpense(req, res) {
           approved_at: new Date(),
           approved_by: actorId,
 
-          // when approving, clear reject fields if any
           rejected_at: null,
           rejected_by: null,
           rejection_reason: null,
 
-          // resolve fields
           resolved_at: new Date(),
           resolved_by: actorId,
         },
@@ -993,29 +1089,41 @@ async function approveCashExpense(req, res) {
 
     return res.json({ message: "Expense approved", expense: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to approve expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to approve expense",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // POST /cash/cash-expenses/:id/reject
 async function rejectCashExpense(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reject expenses" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can reject expenses",
+      });
+    }
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-    const reason = req.body?.reason ? String(req.body.reason) : (req.body?.notes ? String(req.body.notes) : null);
+    const reason = req.body?.reason
+      ? String(req.body.reason)
+      : req.body?.notes
+      ? String(req.body.notes)
+      : null;
 
     const expense = await getExpenseOr404(id, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
     if (!["PENDING", "APPEALED"].includes(st)) {
-      return res.status(400).json({ message: `Expense must be PENDING or APPEALED to reject (current: ${st})` });
+      return res.status(400).json({
+        message: `Expense must be PENDING or APPEALED to reject (current: ${st})`,
+      });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -1029,7 +1137,6 @@ async function rejectCashExpense(req, res) {
           rejected_by: actorId,
           rejection_reason: reason,
 
-          // resolve fields
           resolved_at: new Date(),
           resolved_by: actorId,
         },
@@ -1049,35 +1156,42 @@ async function rejectCashExpense(req, res) {
 
     return res.json({ message: "Expense rejected", expense: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to reject expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to reject expense",
+      error: e?.message || String(e),
+    });
   }
 }
 
 // POST /cash/cash-expenses/:id/appeal
 async function appealRejectedExpense(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-    const appeal_reason = req.body?.reason ? String(req.body.reason) : (req.body?.notes ? String(req.body.notes) : null);
+    const appeal_reason = req.body?.reason
+      ? String(req.body.reason)
+      : req.body?.notes
+      ? String(req.body.notes)
+      : null;
 
     const expense = await getExpenseFullOr404(id, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
     if (st !== "REJECTED") {
-      return res.status(400).json({ message: `Only REJECTED expenses can be appealed (current: ${st})` });
+      return res.status(400).json({
+        message: `Only REJECTED expenses can be appealed (current: ${st})`,
+      });
     }
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const isOwner = expense.created_by === actorId;
     const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
 
-    // Allow owner/supervisor to appeal (and admin/accountant too)
     if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -1091,9 +1205,8 @@ async function appealRejectedExpense(req, res) {
           approval_status: "APPEALED",
           appealed_at: new Date(),
           appealed_by: actorId,
-          appeal_reason: appeal_reason,
+          appeal_reason,
 
-          // clear resolve stamps (new review cycle)
           resolved_at: null,
           resolved_by: null,
         },
@@ -1113,17 +1226,23 @@ async function appealRejectedExpense(req, res) {
 
     return res.json({ message: "Appeal submitted", expense: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to appeal rejected expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to appeal rejected expense",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// POST /cash/cash-expenses/:id/resolve-appeal  body: { decision: "APPROVE"|"REJECT", notes? }
+// POST /cash/cash-expenses/:id/resolve-appeal
 async function resolveAppeal(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can resolve appeals" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can resolve appeals",
+      });
+    }
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
@@ -1140,7 +1259,9 @@ async function resolveAppeal(req, res) {
 
     const st = safeUpper(expense.approval_status);
     if (st !== "APPEALED") {
-      return res.status(400).json({ message: `Expense must be APPEALED to resolve (current: ${st})` });
+      return res.status(400).json({
+        message: `Expense must be APPEALED to resolve (current: ${st})`,
+      });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -1157,7 +1278,6 @@ async function resolveAppeal(req, res) {
             rejected_at: null,
             rejected_by: null,
             rejection_reason: null,
-
             resolved_at: new Date(),
             resolved_by: actorId,
           },
@@ -1170,7 +1290,6 @@ async function resolveAppeal(req, res) {
             rejected_at: new Date(),
             rejected_by: actorId,
             rejection_reason: notes,
-
             resolved_at: new Date(),
             resolved_by: actorId,
           },
@@ -1179,7 +1298,10 @@ async function resolveAppeal(req, res) {
 
       await writeExpenseAuditSafe(tx, {
         expense_id: id,
-        action: decision === "APPROVE" ? "RESOLVE_APPEAL_APPROVE" : "RESOLVE_APPEAL_REJECT",
+        action:
+          decision === "APPROVE"
+            ? "RESOLVE_APPEAL_APPROVE"
+            : "RESOLVE_APPEAL_REJECT",
         actor_id: actorId,
         before,
         after,
@@ -1191,17 +1313,23 @@ async function resolveAppeal(req, res) {
 
     return res.json({ message: "Appeal resolved", expense: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to resolve appeal", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to resolve appeal",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// POST /cash/cash-expenses/:id/reopen  (reopen rejected -> pending)
+// POST /cash/cash-expenses/:id/reopen
 async function reopenRejectedExpense(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can reopen rejected expenses" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can reopen rejected expenses",
+      });
+    }
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
@@ -1211,7 +1339,9 @@ async function reopenRejectedExpense(req, res) {
 
     const st = safeUpper(expense.approval_status);
     if (st !== "REJECTED") {
-      return res.status(400).json({ message: `Only REJECTED expenses can be reopened (current: ${st})` });
+      return res.status(400).json({
+        message: `Only REJECTED expenses can be reopened (current: ${st})`,
+      });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -1249,19 +1379,17 @@ async function reopenRejectedExpense(req, res) {
 
     return res.json({ message: "Expense reopened to PENDING", expense: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to reopen expense", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to reopen expense",
+      error: e?.message || String(e),
+    });
   }
 }
-
-// =======================
-// Reports / Audits (✅ Implemented minimal)
-// =======================
 
 // GET /cash/cash-expenses/:id/audit
 async function getExpenseAudit(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
@@ -1270,7 +1398,7 @@ async function getExpenseAudit(req, res) {
     const expense = await getExpenseFullOr404(id, res);
     if (!expense) return;
 
-    const isPrivileged = isAccountantOrAdmin(role);
+    const isPrivileged = isAdminOrAccountant(req);
     const isOwner = expense.created_by === actorId;
     const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
 
@@ -1279,7 +1407,10 @@ async function getExpenseAudit(req, res) {
     }
 
     if (!prisma.cash_expense_audits?.findMany) {
-      return res.json({ items: [], note: "cash_expense_audits table not available in prisma schema" });
+      return res.json({
+        items: [],
+        note: "cash_expense_audits table not available in prisma schema",
+      });
     }
 
     const items = await prisma.cash_expense_audits.findMany({
@@ -1289,17 +1420,23 @@ async function getExpenseAudit(req, res) {
 
     return res.json({ items });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch expense audit", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch expense audit",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// GET /cash/reports/supervisor-deficit?status=OPEN|IN_REVIEW|CLOSED (optional)
+// GET /cash/reports/supervisor-deficit
 async function getSupervisorDeficitReport(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can view this report" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can view this report",
+      });
+    }
 
     const status = req.query?.status ? safeUpper(req.query.status) : null;
 
@@ -1316,9 +1453,13 @@ async function getSupervisorDeficitReport(req, res) {
     });
 
     const ids = advances.map((a) => a.id);
+
     const expenses = ids.length
       ? await prisma.cash_expenses.findMany({
-          where: { cash_advance_id: { in: ids }, approval_status: { in: ["APPROVED", "REAPPROVED"] } },
+          where: {
+            cash_advance_id: { in: ids },
+            approval_status: { in: ["APPROVED", "REAPPROVED"] },
+          },
           select: { cash_advance_id: true, amount: true },
         })
       : [];
@@ -1338,7 +1479,8 @@ async function getSupervisorDeficitReport(req, res) {
       return {
         cash_advance_id: a.id,
         supervisor_id: a.field_supervisor_id,
-        supervisor_name: a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
+        supervisor_name:
+          a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
         status: a.status,
         advance_amount: advanceAmount,
         approved_spent: approvedSpent,
@@ -1348,61 +1490,88 @@ async function getSupervisorDeficitReport(req, res) {
       };
     });
 
-    return res.json({ items, total: items.length, where_applied: { status: status || null } });
+    return res.json({
+      items,
+      total: items.length,
+      where_applied: { status: status || null },
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch deficit report", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch deficit report",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// =======================
-// Trip Finance (✅ minimal - aligns with lock helper)
-// =======================
-
-// POST /cash/trips/:trip_id/open-review
+// POST /cash/trips/:id/finance/open-review
 async function openTripFinanceReview(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can open trip finance review" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can open trip finance review",
+      });
+    }
 
-    const { trip_id } = req.params || {};
+    const trip_id = String(req.params?.id || req.params?.trip_id || "").trim();
     if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
 
-    const trip = await prisma.trips.findUnique({ where: { id: trip_id }, select: { id: true, financial_status: true } });
+    const trip = await prisma.trips.findUnique({
+      where: { id: trip_id },
+      select: { id: true, financial_status: true },
+    });
+
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     const st = safeUpper(trip.financial_status || "OPEN");
-    if (st === "CLOSED") return res.status(409).json({ message: "Trip finance already CLOSED" });
+    if (st === "CLOSED") {
+      return res.status(409).json({ message: "Trip finance already CLOSED" });
+    }
 
     const updated = await prisma.trips.update({
       where: { id: trip_id },
       data: { financial_status: "IN_REVIEW" },
     });
 
-    return res.json({ message: "Trip finance moved to IN_REVIEW", trip: updated });
+    return res.json({
+      message: "Trip finance moved to IN_REVIEW",
+      trip: updated,
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to open trip finance review", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to open trip finance review",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// POST /cash/trips/:trip_id/close-finance
+// POST /cash/trips/:id/finance/close
 async function closeTripFinance(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!isAccountantOrAdmin(role)) return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can close trip finance" });
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ADMIN or ACCOUNTANT can close trip finance",
+      });
+    }
 
-    const { trip_id } = req.params || {};
+    const trip_id = String(req.params?.id || req.params?.trip_id || "").trim();
     if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
 
-    const trip = await prisma.trips.findUnique({ where: { id: trip_id }, select: { id: true, financial_status: true } });
+    const trip = await prisma.trips.findUnique({
+      where: { id: trip_id },
+      select: { id: true, financial_status: true },
+    });
+
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     const st = safeUpper(trip.financial_status || "OPEN");
     if (st !== "IN_REVIEW") {
-      return res.status(400).json({ message: `Trip must be IN_REVIEW to close finance (current: ${st})` });
+      return res.status(400).json({
+        message: `Trip must be IN_REVIEW to close finance (current: ${st})`,
+      });
     }
 
     const updated = await prisma.trips.update({
@@ -1412,19 +1581,27 @@ async function closeTripFinance(req, res) {
 
     return res.json({ message: "Trip finance CLOSED", trip: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to close trip finance", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to close trip finance",
+      error: e?.message || String(e),
+    });
   }
 }
 
-// GET /cash/trips/finance-summary?trip_id=... (optional)  OR by status
+// GET /cash/trips/:id/finance/summary
 async function getTripFinanceSummary(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const role = getAuthRole(req);
+    const actorId = getUserId(req);
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
-    const isPrivileged = isAccountantOrAdmin(role);
-    const trip_id = req.query?.trip_id ? String(req.query.trip_id) : null;
+    const isPrivileged = isAdminOrAccountant(req);
+
+    const trip_id = req.params?.id
+      ? String(req.params.id)
+      : req.query?.trip_id
+      ? String(req.query.trip_id)
+      : null;
+
     const status = req.query?.status ? safeUpper(req.query.status) : null;
 
     const whereTrip = {};
@@ -1434,7 +1611,6 @@ async function getTripFinanceSummary(req, res) {
     }
     if (status) whereTrip.financial_status = status;
 
-    // (minimal) admins/accountants only if no trip_id provided (avoid data leakage)
     if (!isPrivileged && !trip_id) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -1447,9 +1623,13 @@ async function getTripFinanceSummary(req, res) {
     });
 
     const tripIds = trips.map((t) => t.id);
+
     const expenses = tripIds.length
       ? await prisma.cash_expenses.findMany({
-          where: { trip_id: { in: tripIds }, approval_status: { in: ["APPROVED", "REAPPROVED"] } },
+          where: {
+            trip_id: { in: tripIds },
+            approval_status: { in: ["APPROVED", "REAPPROVED"] },
+          },
           select: { trip_id: true, amount: true, payment_source: true },
         })
       : [];
@@ -1476,15 +1656,18 @@ async function getTripFinanceSummary(req, res) {
       };
     });
 
-    return res.json({ items, total: items.length, where_applied: { trip_id: trip_id || null, status: status || null } });
+    return res.json({
+      items,
+      total: items.length,
+      where_applied: { trip_id: trip_id || null, status: status || null },
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch trip finance summary", error: e?.message || String(e) });
+    return res.status(500).json({
+      message: "Failed to fetch trip finance summary",
+      error: e?.message || String(e),
+    });
   }
 }
-
-// =======================
-// Exports
-// =======================
 
 module.exports = {
   // Cash Advances
@@ -1492,11 +1675,9 @@ module.exports = {
   getCashAdvances,
   getCashAdvanceById,
   createCashAdvance,
-
   submitCashAdvanceForReview,
   closeCashAdvance,
   reopenCashAdvance,
-
   getAdvanceExpenses,
 
   // Cash Expenses
@@ -1504,19 +1685,17 @@ module.exports = {
   listCashExpenses,
   getCashExpensesSummary,
   getCashExpenseById,
-
-  // ✅ Implemented actions
   approveCashExpense,
   rejectCashExpense,
   appealRejectedExpense,
   resolveAppeal,
   reopenRejectedExpense,
 
-  // ✅ Reports / Audits
+  // Reports / Audits
   getSupervisorDeficitReport,
   getExpenseAudit,
 
-  // ✅ Trip finance
+  // Trip finance
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,
