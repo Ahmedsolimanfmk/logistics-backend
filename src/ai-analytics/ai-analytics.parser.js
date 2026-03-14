@@ -715,6 +715,20 @@ function parseTrips(question, base) {
   }
 
   if (
+    includesAny(text, [
+      "اعرض اعلى 5 عملاء حسب الرحلات",
+      "اعرض أعلى 5 عملاء حسب الرحلات",
+      "اعلى 5 عملاء حسب الرحلات",
+      "أعلى 5 عملاء حسب الرحلات",
+      "اعرض اعلى 5 عملاء في عدد الرحلات",
+      "اعرض أعلى 5 عملاء في عدد الرحلات",
+      "اعلى عميل من حيث الرحلات",
+      "أعلى عميل من حيث الرحلات",
+      "من اعلى عميل من حيث الرحلات",
+      "من أعلى عميل من حيث الرحلات",
+      "ما اعلى عميل من حيث الرحلات",
+      "ما أعلى عميل من حيث الرحلات",
+    ]) ||
     includesAny(text, SYNONYMS.trips?.topClients || []) ||
     (
       includesAny(text, ["عميل", "العملاء", "عملاء"]) &&
@@ -730,7 +744,7 @@ function parseTrips(question, base) {
       module: "trips",
       domain: "trips",
       intent: "top_clients_by_trips",
-      confidence: 0.9,
+      confidence: 0.95,
       metric: "trips_count",
       group_by: "client",
       options: {
@@ -742,6 +756,22 @@ function parseTrips(question, base) {
   }
 
   if (
+    includesAny(text, [
+      "اعرض اعلى 5 مواقع حسب الرحلات",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+      "اعلى 5 مواقع حسب الرحلات",
+      "أعلى 5 مواقع حسب الرحلات",
+      "اعرض اعلى 5 مواقع في عدد الرحلات",
+      "اعرض أعلى 5 مواقع في عدد الرحلات",
+      "اعرض اعلى المواقع حسب الرحلات",
+      "اعرض أعلى المواقع حسب الرحلات",
+      "اعلى موقع من حيث الرحلات",
+      "أعلى موقع من حيث الرحلات",
+      "من اعلى موقع من حيث الرحلات",
+      "من أعلى موقع من حيث الرحلات",
+      "ما اعلى موقع من حيث الرحلات",
+      "ما أعلى موقع من حيث الرحلات",
+    ]) ||
     includesAny(text, SYNONYMS.trips?.topSites || []) ||
     (
       includesAny(text, ["موقع", "الموقع", "المواقع", "site", "sites"]) &&
@@ -757,7 +787,7 @@ function parseTrips(question, base) {
       module: "trips",
       domain: "trips",
       intent: "top_sites_by_trips",
-      confidence: 0.9,
+      confidence: 0.95,
       metric: "trips_count",
       group_by: "site",
       options: {
@@ -769,6 +799,20 @@ function parseTrips(question, base) {
   }
 
   if (
+    includesAny(text, [
+      "اعرض اعلى 5 مركبات حسب الرحلات",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
+      "اعلى 5 مركبات حسب الرحلات",
+      "أعلى 5 مركبات حسب الرحلات",
+      "اعرض اعلى 5 مركبات في عدد الرحلات",
+      "اعرض أعلى 5 مركبات في عدد الرحلات",
+      "اعلى مركبة من حيث الرحلات",
+      "أعلى مركبة من حيث الرحلات",
+      "من اعلى مركبة من حيث الرحلات",
+      "من أعلى مركبة من حيث الرحلات",
+      "ما اعلى مركبة من حيث الرحلات",
+      "ما أعلى مركبة من حيث الرحلات",
+    ]) ||
     includesAny(text, SYNONYMS.trips?.topVehicles || []) ||
     (
       includesAny(text, ["مركبه", "مركبة", "مركبات", "عربيه", "عربية", "سياره", "سيارة", "سيارات"]) &&
@@ -784,7 +828,7 @@ function parseTrips(question, base) {
       module: "trips",
       domain: "trips",
       intent: "top_vehicles_by_trips",
-      confidence: 0.9,
+      confidence: 0.95,
       metric: "trips_count",
       group_by: "vehicle",
       options: {
