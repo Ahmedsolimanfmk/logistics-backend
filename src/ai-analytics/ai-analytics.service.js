@@ -909,8 +909,8 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
 
   return base;
 }
-
 module.exports = {
-  parseAiQuestion,
-  allowedModulesByRole,
+  queryAiAnalytics,
+  getAiSuggestedQuestions,
+  getAiInsights,
 };
