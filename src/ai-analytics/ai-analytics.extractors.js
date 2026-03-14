@@ -39,6 +39,39 @@ function extractVehicleHint(question) {
   return null;
 }
 
+function extractClientHint(question) {
+  const raw = String(question || "").trim();
+
+  const patterns = [
+    /(?:للعميل|لعميل|عميل|العميل|client|clients)\s+([^\n\r,.]+)/i,
+    /(?:رحلات العميل|رحلات لعميل|trips for client)\s+([^\n\r,.]+)/i,
+  ];
+
+  for (const p of patterns) {
+    const m = raw.match(p);
+    if (m && m[1]) return m[1].trim();
+  }
+
+  return null;
+}
+
+function extractSiteHint(question) {
+  const raw = String(question || "").trim();
+
+  const patterns = [
+    /(?:للموقع|لموقع|موقع|الموقع|site|sites)\s+([^\n\r,.]+)/i,
+    /(?:رحلات الموقع|رحلات لموقع|trips for site)\s+([^\n\r,.]+)/i,
+    /(?:الى موقع|إلى موقع)\s+([^\n\r,.]+)/i,
+  ];
+
+  for (const p of patterns) {
+    const m = raw.match(p);
+    if (m && m[1]) return m[1].trim();
+  }
+
+  return null;
+}
+
 function extractTripHint(question) {
   const raw = String(question || "").trim();
 
@@ -126,6 +159,8 @@ function extractPaidMethod(question) {
 module.exports = {
   normalizeArabicText,
   extractVehicleHint,
+  extractClientHint,
+  extractSiteHint,
   extractTripHint,
   extractWorkOrderHint,
   extractAmount,

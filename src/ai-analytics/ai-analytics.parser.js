@@ -7,6 +7,8 @@ const {
 const { resolveTimeFilters } = require("./ai-analytics.time-parser");
 const {
   extractVehicleHint,
+  extractClientHint,
+  extractSiteHint,
   extractTripHint,
   extractWorkOrderHint,
   extractAmount,
@@ -107,9 +109,9 @@ function buildBaseParsed({ question, context, user, body }) {
       vehicle_hint: extractVehicleHint(question) || null,
       trip_hint: extractTripHint(question) || null,
       work_order_hint: extractWorkOrderHint(question) || null,
-      client_hint: null,
+      client_hint: extractClientHint(question) || null,
       part_hint: null,
-      site_hint: null,
+      site_hint: extractSiteHint(question) || null,
       expense_type: extractExpenseType(question) || null,
       vendor_name: extractVendorName(question) || null,
       paid_method: extractPaidMethod(question) || null,
@@ -667,7 +669,7 @@ function parseTrips(question, base) {
       includesAny(text, ["نشطه", "نشطة", "جاريه", "جارية", "فعاله", "فعالة"])
     )
   ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 5);
+    const finalLimit = limit || 5;
 
     return {
       ...base,
@@ -693,7 +695,7 @@ function parseTrips(question, base) {
       includesAny(text, ["اغلاق مالي", "إغلاق مالي", "مغلقه ماليا", "مغلقة ماليًا", "closure"])
     )
   ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 5);
+    const finalLimit = limit || 5;
 
     return {
       ...base,

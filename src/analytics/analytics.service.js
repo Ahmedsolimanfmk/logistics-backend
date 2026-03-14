@@ -150,6 +150,8 @@ async function getTripsSummary({ user, query }) {
   return tripsAnalytics.getTripsSummary({
     range,
     scope,
+    client_hint: query?.client_hint || null,
+    site_hint: query?.site_hint || null,
   });
 }
 
@@ -162,6 +164,8 @@ async function getActiveTrips({ user, query }) {
     range,
     scope,
     limit,
+    client_hint: query?.client_hint || null,
+    site_hint: query?.site_hint || null,
   });
 }
 
@@ -174,6 +178,8 @@ async function getTripsNeedingFinancialClosure({ user, query }) {
     range,
     scope,
     limit,
+    client_hint: query?.client_hint || null,
+    site_hint: query?.site_hint || null,
   });
 }
 
@@ -186,6 +192,7 @@ async function getTopClientsByTrips({ user, query }) {
     range,
     scope,
     limit,
+    site_hint: query?.site_hint || null,
   });
 }
 
@@ -198,6 +205,7 @@ async function getTopSitesByTrips({ user, query }) {
     range,
     scope,
     limit,
+    client_hint: query?.client_hint || null,
   });
 }
 
@@ -210,6 +218,7 @@ async function getTopVehiclesByTrips({ user, query }) {
     range,
     scope,
     limit,
+    vehicle_hint: query?.vehicle_hint || null,
   });
 }
 
