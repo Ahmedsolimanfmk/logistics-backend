@@ -7,9 +7,9 @@ async function queryAiAnalytics(req, res, next) {
       body: req.body,
     });
 
-    return res.json(result);
+    return res.status(200).json(result);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 
@@ -20,9 +20,9 @@ async function getAiSuggestedQuestions(req, res, next) {
       query: req.query,
     });
 
-    return res.json(result);
+    return res.status(200).json(result);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 
@@ -33,9 +33,9 @@ async function getAiInsights(req, res, next) {
       query: req.query,
     });
 
-    return res.json(result);
+    return res.status(200).json(result);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 

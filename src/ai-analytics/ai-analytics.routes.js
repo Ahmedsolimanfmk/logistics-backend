@@ -1,11 +1,10 @@
 const express = require("express");
+const controller = require("./ai-analytics.controller");
+
 const router = express.Router();
 
-const controller = require("./ai-analytics.controller");
-const { authRequired } = require("../auth/jwt.middleware");
-
-router.get("/suggested", authRequired, controller.getAiSuggestedQuestions);
-router.get("/insights", authRequired, controller.getAiInsights);
-router.post("/query", authRequired, controller.queryAiAnalytics);
+router.post("/query", controller.queryAiAnalytics);
+router.get("/suggestions", controller.getAiSuggestedQuestions);
+router.get("/insights", controller.getAiInsights);
 
 module.exports = router;
