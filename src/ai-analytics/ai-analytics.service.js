@@ -84,12 +84,18 @@ function parsedToAnalyticsQuery(parsed) {
     date_from: parsed?.filters?.date_from || null,
     date_to: parsed?.filters?.date_to || null,
     status: parsed?.filters?.status || null,
+
     vehicle_hint: parsed?.entities?.vehicle_hint || null,
     client_hint: parsed?.entities?.client_hint || null,
     site_hint: parsed?.entities?.site_hint || null,
+    trip_hint: parsed?.entities?.trip_hint || null,
+    work_order_hint: parsed?.entities?.work_order_hint || null,
+
+    expense_type: parsed?.entities?.expense_type || null,
+    vendor_name: parsed?.entities?.vendor_name || null,
+    paid_method: parsed?.entities?.paid_method || null,
   };
 }
-
 async function executeParsedQuery({ user, parsed }) {
   const intent = parsed?.intent;
   const query = parsedToAnalyticsQuery(parsed);
