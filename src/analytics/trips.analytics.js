@@ -112,6 +112,78 @@ async function resolveTripIdsByVehicleHint({ range, vehicleHint }) {
   return tripIds.length ? tripIds : ["__NO_MATCH__"];
 }
 
+function mapTripRow(row) {
+  return {
+    id: row.id,
+    status: row.status,
+    financial_status: row.financial_status,
+    scheduled_at: row.scheduled_at,
+    created_at: row.created_at,
+    client_name: row.clients?.name || "عميل غير معروف",
+    site_name: row.sites?.name || "موقع غير معروف",
+  };
+}
+
+async function getTripsList({ range, scope, limit = 10, query = {} }) {
+  const where = await buildTripsWhere({ range, query });
+
+  if (query?.vehicle_hint) {
+    const tripIds = await resolveTripIdsByVehicleHint({
+      range,
+      vehicleHint: query.vehicle_hint,
+    });
+    where.id = { in: tripIds };
+  }
+
+  const rows = await prisma.trips.findMany({
+    where,
+    select: {
+      id: true,
+      status: true,
+      financial_status: true,
+      scheduled_at: true,
+      created_at: true,
+      clients: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      sites: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+    orderBy: [{ scheduled_at: "desc" }, { created_at: "desc" }],
+    take: limit,
+  });
+
+  return {
+    metric: "trips_list",
+    range: {
+      from: range.from,
+      to: range.to,
+      key: range.key,
+    },
+    filters: {
+      role: scope?.role || null,
+      limit,
+      vehicle_hint: query?.vehicle_hint || null,
+      client_hint: query?.client_hint || null,
+      site_hint: query?.site_hint || null,
+      status: query?.status || null,
+    },
+    data: {
+      items: rows.map(mapTripRow),
+    },
+    summary: {
+      count: rows.length,
+    },
+  };
+}
+
 async function getTripsSummary({ range, scope, query = {} }) {
   const where = await buildTripsWhere({ range, query });
 
@@ -246,15 +318,7 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
       site_hint: query?.site_hint || null,
     },
     data: {
-      items: rows.map((row) => ({
-        id: row.id,
-        status: row.status,
-        financial_status: row.financial_status,
-        scheduled_at: row.scheduled_at,
-        created_at: row.created_at,
-        client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.sites?.name || "موقع غير معروف",
-      })),
+      items: rows.map(mapTripRow),
     },
     summary: {
       active_count: rows.length,
@@ -323,15 +387,7 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
       site_hint: query?.site_hint || null,
     },
     data: {
-      items: rows.map((row) => ({
-        id: row.id,
-        status: row.status,
-        financial_status: row.financial_status,
-        scheduled_at: row.scheduled_at,
-        created_at: row.created_at,
-        client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.sites?.name || "موقع غير معروف",
-      })),
+      items: rows.map(mapTripRow),
       total_need_financial_closure: rows.length,
     },
     summary: {},
@@ -584,6 +640,7 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
 }
 
 module.exports = {
+  getTripsList,
   getTripsSummary,
   getActiveTrips,
   getTripsNeedingFinancialClosure,
