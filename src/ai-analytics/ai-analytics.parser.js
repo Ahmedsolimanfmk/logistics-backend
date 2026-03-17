@@ -137,6 +137,36 @@ function buildBaseParsed({ question, context, user, body }) {
   };
 }
 
+function applySnapshotEntityHints(base, body = {}) {
+  const snapshot = body?.session_snapshot || null;
+  const applied = snapshot?.applied_entities || {};
+  const firstEntity = snapshot?.first_entity || null;
+
+  const merged = {
+    ...base,
+    entities: {
+      ...base.entities,
+      vehicle_hint:
+        base?.entities?.vehicle_hint ||
+        applied?.vehicle_hint ||
+        firstEntity?.vehicle_hint ||
+        null,
+      client_hint:
+        base?.entities?.client_hint ||
+        applied?.client_hint ||
+        firstEntity?.client_hint ||
+        null,
+      site_hint:
+        base?.entities?.site_hint ||
+        applied?.site_hint ||
+        firstEntity?.site_hint ||
+        null,
+    },
+  };
+
+  return merged;
+}
+
 function detectAction(question, body = {}, base) {
   const text = normalizeArabicText(question);
 
@@ -634,6 +664,110 @@ function parseInventory(question, base) {
   return null;
 }
 
+function parseTripsFollowup(question, base, body = {}) {
+  const text = base.normalized_question;
+  const snapshot = body?.session_snapshot || null;
+  const hasClient = Boolean(base?.entities?.client_hint || snapshot?.applied_entities?.client_hint);
+  const hasSite = Boolean(base?.entities?.site_hint || snapshot?.applied_entities?.site_hint);
+  const hasVehicle = Boolean(base?.entities?.vehicle_hint || snapshot?.applied_entities?.vehicle_hint);
+
+  if (
+    includesAny(text, [
+      "رحلاته هذا الشهر",
+      "رحلاتها هذا الشهر",
+      "رحلات العميل هذا الشهر",
+      "رحلات المركبة هذا الشهر",
+      "رحلات الموقع هذا الشهر",
+      "اعرض رحلاته",
+      "اعرض رحلاتها",
+      "الرحلات الخاصة به",
+      "الرحلات الخاصة بها",
+    ])
+  ) {
+    if (hasClient || hasSite || hasVehicle) {
+      return {
+        ...base,
+        mode: "query",
+        module: "trips",
+        domain: "trips",
+        intent: "trips_summary",
+        confidence: 0.88,
+        metric: "total_trips",
+        group_by: null,
+        options: {
+          ...base.options,
+          response_type: "summary",
+        },
+      };
+    }
+  }
+
+  if (
+    includesAny(text, [
+      "الرحلات النشطة له",
+      "الرحلات النشطة لها",
+      "الرحلات النشطة للمركبة",
+      "الرحلات النشطة للعميل",
+      "الرحلات النشطة للموقع",
+      "النشطة فقط",
+      "رحلاته النشطة",
+      "رحلاتها النشطة",
+    ])
+  ) {
+    if (hasClient || hasSite || hasVehicle) {
+      return {
+        ...base,
+        mode: "query",
+        module: "trips",
+        domain: "trips",
+        intent: "active_trips",
+        confidence: 0.9,
+        metric: "active_trips_count",
+        group_by: "trip",
+        options: {
+          ...base.options,
+          limit: base.options.limit || 5,
+          response_type: "table",
+        },
+      };
+    }
+  }
+
+  if (
+    includesAny(text, [
+      "التي تحتاج إغلاق مالي",
+      "التي تحتاج اغلاق مالي",
+      "رحلاته التي تحتاج إغلاق مالي",
+      "رحلاتها التي تحتاج إغلاق مالي",
+      "الرحلات التي تحتاج إغلاق مالي له",
+      "الرحلات التي تحتاج إغلاق مالي للمركبة",
+      "الرحلات التي تحتاج إغلاق مالي للموقع",
+      "اغلاق مالي فقط",
+      "إغلاق مالي فقط",
+    ])
+  ) {
+    if (hasClient || hasSite || hasVehicle) {
+      return {
+        ...base,
+        mode: "query",
+        module: "trips",
+        domain: "trips",
+        intent: "trips_need_financial_closure",
+        confidence: 0.9,
+        metric: "need_financial_closure_count",
+        group_by: "trip",
+        options: {
+          ...base.options,
+          limit: base.options.limit || 5,
+          response_type: "table",
+        },
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseTrips(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -838,27 +972,29 @@ function parseTrips(question, base) {
       },
     };
   }
-if (
-  includesAny(text, ["اعرض", "هات", "طلع"]) &&
-  includesAny(text, ["5", "خمسه", "خمسة"]) &&
-  includesAny(text, ["عملاء", "العملاء"])
-) {
-  return {
-    ...base,
-    mode: "query",
-    module: "trips",
-    domain: "trips",
-    intent: "top_clients_by_trips",
-    confidence: 0.85,
-    metric: "trips_count",
-    group_by: "client",
-    options: {
-      ...base.options,
-      limit: 5,
-      response_type: "table",
-    },
-  };
-}
+
+  if (
+    includesAny(text, ["اعرض", "هات", "طلع"]) &&
+    includesAny(text, ["5", "خمسه", "خمسة"]) &&
+    includesAny(text, ["عملاء", "العملاء"])
+  ) {
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "top_clients_by_trips",
+      confidence: 0.85,
+      metric: "trips_count",
+      group_by: "client",
+      options: {
+        ...base.options,
+        limit: 5,
+        response_type: "table",
+      },
+    };
+  }
+
   return null;
 }
 
@@ -943,13 +1079,17 @@ function parseReferenceFollowUp(question, base) {
 }
 
 function parseAiQuestion({ question, context = null, user, body = {} }) {
-  const base = buildBaseParsed({ question, context, user, body });
+  let base = buildBaseParsed({ question, context, user, body });
+  base = applySnapshotEntityHints(base, body);
 
   const action = detectAction(question, body, base);
   if (action) return action;
 
   const refFollowup = parseReferenceFollowUp(question, base);
   if (refFollowup) return refFollowup;
+
+  const tripsFollowup = parseTripsFollowup(question, base, body);
+  if (tripsFollowup) return tripsFollowup;
 
   const moduleName = base.module;
   let parsed = null;

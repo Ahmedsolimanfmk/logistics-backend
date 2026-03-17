@@ -8,6 +8,44 @@ function uniqueQuestions(items = []) {
   );
 }
 
+function buildEntityAwareTripFollowups(parsed) {
+  const hasClient = Boolean(parsed?.entities?.client_hint);
+  const hasSite = Boolean(parsed?.entities?.site_hint);
+  const hasVehicle = Boolean(parsed?.entities?.vehicle_hint);
+
+  if (hasClient) {
+    return uniqueQuestions([
+      "رحلاته هذا الشهر",
+      "الرحلات النشطة له",
+      "التي تحتاج إغلاق مالي",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
+    ]);
+  }
+
+  if (hasSite) {
+    return uniqueQuestions([
+      "رحلات الموقع هذا الشهر",
+      "الرحلات النشطة للموقع",
+      "التي تحتاج إغلاق مالي",
+      "اعرض أعلى 5 عملاء حسب الرحلات",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
+    ]);
+  }
+
+  if (hasVehicle) {
+    return uniqueQuestions([
+      "رحلات المركبة هذا الشهر",
+      "الرحلات النشطة للمركبة",
+      "التي تحتاج إغلاق مالي",
+      "اعرض أعلى 5 عملاء حسب الرحلات",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ]);
+  }
+
+  return [];
+}
+
 function buildActionFollowUps(parsed, execution) {
   if (execution?.ok && execution?.executed) {
     if (parsed?.intent === "create_work_order") {
@@ -68,6 +106,9 @@ function buildActionFollowUps(parsed, execution) {
 }
 
 function buildReferenceFollowUps(parsed) {
+  const entityAware = buildEntityAwareTripFollowups(parsed);
+  if (entityAware.length) return entityAware;
+
   if (parsed?.intent === "reference_previous_expand_limit") {
     return uniqueQuestions([
       "الأول",
@@ -208,6 +249,9 @@ function getFollowUpQuestions({ parsed, result, execution = null }) {
   }
 
   if (intent === "trips_summary") {
+    const entityAware = buildEntityAwareTripFollowups(parsed);
+    if (entityAware.length) return entityAware;
+
     return uniqueQuestions([
       "كم عدد الرحلات النشطة؟",
       "اعرض الرحلات النشطة",
@@ -218,6 +262,9 @@ function getFollowUpQuestions({ parsed, result, execution = null }) {
   }
 
   if (intent === "active_trips") {
+    const entityAware = buildEntityAwareTripFollowups(parsed);
+    if (entityAware.length) return entityAware;
+
     return uniqueQuestions([
       "كم عدد الرحلات هذا الشهر؟",
       "كم عدد الرحلات التي تحتاج إغلاق مالي؟",
@@ -227,6 +274,9 @@ function getFollowUpQuestions({ parsed, result, execution = null }) {
   }
 
   if (intent === "trips_need_financial_closure") {
+    const entityAware = buildEntityAwareTripFollowups(parsed);
+    if (entityAware.length) return entityAware;
+
     return uniqueQuestions([
       "كم عدد الرحلات هذا الشهر؟",
       "اعرض الرحلات النشطة",

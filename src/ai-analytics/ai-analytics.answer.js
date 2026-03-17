@@ -187,6 +187,10 @@ function buildUiMeta({ parsed, result, answer }) {
   if (parsed?.module === "inventory") badges.push("المخازن");
   if (parsed?.module === "trips") badges.push("الرحلات");
 
+  if (parsed?.entities?.client_hint) badges.push(`عميل: ${parsed.entities.client_hint}`);
+  if (parsed?.entities?.site_hint) badges.push(`موقع: ${parsed.entities.site_hint}`);
+  if (parsed?.entities?.vehicle_hint) badges.push(`مركبة: ${parsed.entities.vehicle_hint}`);
+
   if (parsed?.mode === "reference_followup") badges.push("متابعة");
   if (range) badges.push(labelRange(range));
   if (limit > 1) badges.push(`Top ${limit}`);
@@ -264,9 +268,15 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       ["total"],
     ]);
 
-    const answer = `إجمالي المصروفات خلال ${labelRange(
+    let answer = `إجمالي المصروفات خلال ${labelRange(
       parsed?.filters?.range
     )} هو ${money(totalExpense)} جنيه مصري.`;
+
+    if (parsed?.entities?.vehicle_hint) {
+      answer = `إجمالي مصروفات المركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${money(totalExpense)} جنيه مصري.`;
+    }
 
     return {
       answer,
@@ -594,11 +604,31 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       ["completed_count"],
     ]);
 
-    const answer = `إجمالي الرحلات خلال ${labelRange(
+    let answer = `إجمالي الرحلات خلال ${labelRange(
       parsed?.filters?.range
     )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
       completedCount || 0
     )} مكتملة.`;
+
+    if (parsed?.entities?.client_hint) {
+      answer = `إجمالي رحلات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+        completedCount || 0
+      )} مكتملة.`;
+    } else if (parsed?.entities?.site_hint) {
+      answer = `إجمالي رحلات الموقع "${parsed.entities.site_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+        completedCount || 0
+      )} مكتملة.`;
+    } else if (parsed?.entities?.vehicle_hint) {
+      answer = `إجمالي رحلات المركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+        completedCount || 0
+      )} مكتملة.`;
+    }
 
     return {
       answer,
@@ -611,7 +641,21 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
 
     let answer = "";
     if (!items.length) {
-      answer = `لا توجد رحلات نشطة خلال ${labelRange(parsed?.filters?.range)}.`;
+      if (parsed?.entities?.client_hint) {
+        answer = `لا توجد رحلات نشطة للعميل "${parsed.entities.client_hint}" خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.site_hint) {
+        answer = `لا توجد رحلات نشطة للموقع "${parsed.entities.site_hint}" خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.vehicle_hint) {
+        answer = `لا توجد رحلات نشطة للمركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else {
+        answer = `لا توجد رحلات نشطة خلال ${labelRange(parsed?.filters?.range)}.`;
+      }
     } else if (limit > 1) {
       answer = `أول ${Math.min(limit, items.length)} رحلات نشطة خلال ${labelRange(
         parsed?.filters?.range
@@ -645,11 +689,39 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
 
     let answer = "";
     if (!items.length) {
-      answer = `لا توجد رحلات تحتاج إغلاقًا ماليًا خلال ${labelRange(parsed?.filters?.range)}.`;
+      if (parsed?.entities?.client_hint) {
+        answer = `لا توجد رحلات للعميل "${parsed.entities.client_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.site_hint) {
+        answer = `لا توجد رحلات للموقع "${parsed.entities.site_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.vehicle_hint) {
+        answer = `لا توجد رحلات للمركبة "${parsed.entities.vehicle_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else {
+        answer = `لا توجد رحلات تحتاج إغلاقًا ماليًا خلال ${labelRange(parsed?.filters?.range)}.`;
+      }
     } else {
-      answer = `يوجد ${Number(totalNeed || items.length)} رحلة تحتاج إغلاقًا ماليًا خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
+      if (parsed?.entities?.client_hint) {
+        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للعميل "${parsed.entities.client_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.site_hint) {
+        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للموقع "${parsed.entities.site_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else if (parsed?.entities?.vehicle_hint) {
+        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للمركبة "${parsed.entities.vehicle_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      } else {
+        answer = `يوجد ${Number(totalNeed || items.length)} رحلة تحتاج إغلاقًا ماليًا خلال ${labelRange(
+          parsed?.filters?.range
+        )}.`;
+      }
     }
 
     return {

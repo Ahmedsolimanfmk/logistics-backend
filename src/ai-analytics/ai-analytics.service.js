@@ -96,6 +96,7 @@ function parsedToAnalyticsQuery(parsed) {
     paid_method: parsed?.entities?.paid_method || null,
   };
 }
+
 async function executeParsedQuery({ user, parsed }) {
   const intent = parsed?.intent;
   const query = parsedToAnalyticsQuery(parsed);
@@ -395,6 +396,7 @@ async function buildInlineInsights({ user, parsed, result }) {
 
 function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
   const item = referenceResult?.resolved_item || null;
+  const entity = referenceResult?.resolved_entity || null;
 
   if (!item) {
     return {
@@ -423,6 +425,25 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
     };
   }
 
+  const snapshot = buildSessionSnapshot({
+    parsed,
+    result: {
+      data: {
+        items: [item],
+      },
+    },
+  });
+
+  if (entity?.client_hint) {
+    snapshot.applied_entities.client_hint = entity.client_hint;
+  }
+  if (entity?.site_hint) {
+    snapshot.applied_entities.site_hint = entity.site_hint;
+  }
+  if (entity?.vehicle_hint) {
+    snapshot.applied_entities.vehicle_hint = entity.vehicle_hint;
+  }
+
   return {
     ok: true,
     parsed,
@@ -431,7 +452,9 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
     ui: {
       mode: "query",
       title: "العنصر المشار إليه من النتيجة السابقة",
-      summary: "تم تحديد العنصر المقصود من النتائج السابقة.",
+      summary: entity?.entity_label
+        ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
+        : "تم تحديد العنصر المقصود من النتائج السابقة.",
       badges: ["متابعة", "مرجع سابق"],
       result_type: "table",
       has_items: true,
@@ -441,21 +464,19 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
         items: [item],
       },
     },
-    answer: "هذا هو العنصر المقصود من النتائج السابقة.",
-    followUps: [
-      "اعرض أعلى 5 عملاء مديونية",
-      "اعرض أعلى 5 مركبات تكلفة صيانة",
-      "اعرض أعلى 5 أصناف صرفًا",
-      "اعرض أعلى 5 مركبات حسب الرحلات",
-    ],
-    insights: [],
-    session_snapshot: {
+    answer: entity?.entity_label
+      ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
+      : "هذا هو العنصر المقصود من النتائج السابقة.",
+    followUps: getFollowUpQuestions({
       parsed,
-      items: [item],
-      first_item: item,
-      count: 1,
-      created_at: new Date().toISOString(),
-    },
+      result: {
+        data: {
+          items: [item],
+        },
+      },
+    }),
+    insights: [],
+    session_snapshot: snapshot,
   };
 }
 
@@ -491,6 +512,14 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
     };
   }
 
+  const newSnapshot = {
+    ...snapshot,
+    items: sliced,
+    first_item: sliced[0] || null,
+    count: sliced.length,
+    created_at: new Date().toISOString(),
+  };
+
   return {
     ok: true,
     parsed,
@@ -510,20 +539,16 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
       },
     },
     answer: `تم عرض أول ${sliced.length} عنصر من النتائج السابقة.`,
-    followUps: [
-      "الأول",
-      "الثاني",
-      "نفس العميل",
-      "نفس المركبة",
-    ],
+    followUps: getFollowUpQuestions({
+      parsed,
+      result: {
+        data: {
+          items: sliced,
+        },
+      },
+    }),
     insights: [],
-    session_snapshot: {
-      parsed: snapshot?.parsed || parsed,
-      items: sliced,
-      first_item: sliced[0] || null,
-      count: sliced.length,
-      created_at: new Date().toISOString(),
-    },
+    session_snapshot: newSnapshot,
   };
 }
 
