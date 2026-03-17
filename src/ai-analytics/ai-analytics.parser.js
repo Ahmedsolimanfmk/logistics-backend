@@ -838,7 +838,27 @@ function parseTrips(question, base) {
       },
     };
   }
-
+if (
+  includesAny(text, ["اعرض", "هات", "طلع"]) &&
+  includesAny(text, ["5", "خمسه", "خمسة"]) &&
+  includesAny(text, ["عملاء", "العملاء"])
+) {
+  return {
+    ...base,
+    mode: "query",
+    module: "trips",
+    domain: "trips",
+    intent: "top_clients_by_trips",
+    confidence: 0.85,
+    metric: "trips_count",
+    group_by: "client",
+    options: {
+      ...base.options,
+      limit: 5,
+      response_type: "table",
+    },
+  };
+}
   return null;
 }
 

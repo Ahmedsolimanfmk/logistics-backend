@@ -4,19 +4,28 @@ function normalizeHint(v) {
   return String(v || "").trim();
 }
 
+function isUUID(v) {
+  return /^[0-9a-fA-F-]{36}$/.test(String(v || ""));
+}
+
 async function resolveVehicleIdsByHint(vehicleHint) {
   const hint = normalizeHint(vehicleHint);
   if (!hint) return null;
 
+  const where = {
+    OR: [
+      { fleet_no: { contains: hint, mode: "insensitive" } },
+      { plate_no: { contains: hint, mode: "insensitive" } },
+      { display_name: { contains: hint, mode: "insensitive" } },
+    ],
+  };
+
+  if (isUUID(hint)) {
+    where.OR.push({ id: hint });
+  }
+
   const vehicles = await prisma.vehicles.findMany({
-    where: {
-      OR: [
-        { id: hint },
-        { fleet_no: { contains: hint } },
-        { plate_no: { contains: hint } },
-        { display_name: { contains: hint } },
-      ],
-    },
+    where,
     select: {
       id: true,
     },
@@ -24,6 +33,7 @@ async function resolveVehicleIdsByHint(vehicleHint) {
   });
 
   const ids = vehicles.map((v) => v.id).filter(Boolean);
+
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
