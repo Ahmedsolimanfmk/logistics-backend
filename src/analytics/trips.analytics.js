@@ -4,36 +4,33 @@ function normalizeHint(v) {
   return String(v || "").trim();
 }
 
-function isUUID(v) {
-  return /^[0-9a-fA-F-]{36}$/.test(String(v || ""));
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim()
+  );
 }
 
 async function resolveVehicleIdsByHint(vehicleHint) {
   const hint = normalizeHint(vehicleHint);
   if (!hint) return null;
 
-  const where = {
-    OR: [
-      { fleet_no: { contains: hint, mode: "insensitive" } },
-      { plate_no: { contains: hint, mode: "insensitive" } },
-      { display_name: { contains: hint, mode: "insensitive" } },
-    ],
-  };
+  const or = [
+    { fleet_no: { contains: hint, mode: "insensitive" } },
+    { plate_no: { contains: hint, mode: "insensitive" } },
+    { display_name: { contains: hint, mode: "insensitive" } },
+  ];
 
-  if (isUUID(hint)) {
-    where.OR.push({ id: hint });
+  if (isUuid(hint)) {
+    or.unshift({ id: hint });
   }
 
   const vehicles = await prisma.vehicles.findMany({
-    where,
-    select: {
-      id: true,
-    },
+    where: { OR: or },
+    select: { id: true },
     take: 20,
   });
 
   const ids = vehicles.map((v) => v.id).filter(Boolean);
-
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
@@ -41,13 +38,15 @@ async function resolveClientIdsByHint(clientHint) {
   const hint = normalizeHint(clientHint);
   if (!hint) return null;
 
+  const or = [{ name: { contains: hint, mode: "insensitive" } }];
+
+  if (isUuid(hint)) {
+    or.unshift({ id: hint });
+  }
+
   const clients = await prisma.clients.findMany({
-    where: {
-      OR: [{ id: hint }, { name: { contains: hint } }],
-    },
-    select: {
-      id: true,
-    },
+    where: { OR: or },
+    select: { id: true },
     take: 20,
   });
 
@@ -59,13 +58,15 @@ async function resolveSiteIdsByHint(siteHint) {
   const hint = normalizeHint(siteHint);
   if (!hint) return null;
 
+  const or = [{ name: { contains: hint, mode: "insensitive" } }];
+
+  if (isUuid(hint)) {
+    or.unshift({ id: hint });
+  }
+
   const sites = await prisma.sites.findMany({
-    where: {
-      OR: [{ id: hint }, { name: { contains: hint } }],
-    },
-    select: {
-      id: true,
-    },
+    where: { OR: or },
+    select: { id: true },
     take: 20,
   });
 
@@ -120,78 +121,6 @@ async function resolveTripIdsByVehicleHint({ range, vehicleHint }) {
 
   const tripIds = assignments.map((a) => a.trip_id).filter(Boolean);
   return tripIds.length ? tripIds : ["__NO_MATCH__"];
-}
-
-function mapTripRow(row) {
-  return {
-    id: row.id,
-    status: row.status,
-    financial_status: row.financial_status,
-    scheduled_at: row.scheduled_at,
-    created_at: row.created_at,
-    client_name: row.clients?.name || "عميل غير معروف",
-    site_name: row.sites?.name || "موقع غير معروف",
-  };
-}
-
-async function getTripsList({ range, scope, limit = 10, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
-
-  if (query?.vehicle_hint) {
-    const tripIds = await resolveTripIdsByVehicleHint({
-      range,
-      vehicleHint: query.vehicle_hint,
-    });
-    where.id = { in: tripIds };
-  }
-
-  const rows = await prisma.trips.findMany({
-    where,
-    select: {
-      id: true,
-      status: true,
-      financial_status: true,
-      scheduled_at: true,
-      created_at: true,
-      clients: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
-      sites: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
-    },
-    orderBy: [{ scheduled_at: "desc" }, { created_at: "desc" }],
-    take: limit,
-  });
-
-  return {
-    metric: "trips_list",
-    range: {
-      from: range.from,
-      to: range.to,
-      key: range.key,
-    },
-    filters: {
-      role: scope?.role || null,
-      limit,
-      vehicle_hint: query?.vehicle_hint || null,
-      client_hint: query?.client_hint || null,
-      site_hint: query?.site_hint || null,
-      status: query?.status || null,
-    },
-    data: {
-      items: rows.map(mapTripRow),
-    },
-    summary: {
-      count: rows.length,
-    },
-  };
 }
 
 async function getTripsSummary({ range, scope, query = {} }) {
@@ -328,7 +257,15 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
       site_hint: query?.site_hint || null,
     },
     data: {
-      items: rows.map(mapTripRow),
+      items: rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        financial_status: row.financial_status,
+        scheduled_at: row.scheduled_at,
+        created_at: row.created_at,
+        client_name: row.clients?.name || "عميل غير معروف",
+        site_name: row.sites?.name || "موقع غير معروف",
+      })),
     },
     summary: {
       active_count: rows.length,
@@ -397,7 +334,15 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
       site_hint: query?.site_hint || null,
     },
     data: {
-      items: rows.map(mapTripRow),
+      items: rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        financial_status: row.financial_status,
+        scheduled_at: row.scheduled_at,
+        created_at: row.created_at,
+        client_name: row.clients?.name || "عميل غير معروف",
+        site_name: row.sites?.name || "موقع غير معروف",
+      })),
       total_need_financial_closure: rows.length,
     },
     summary: {},
@@ -650,7 +595,6 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
 }
 
 module.exports = {
-  getTripsList,
   getTripsSummary,
   getActiveTrips,
   getTripsNeedingFinancialClosure,
