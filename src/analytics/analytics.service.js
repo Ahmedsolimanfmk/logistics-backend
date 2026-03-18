@@ -6,6 +6,7 @@ const arAnalytics = require("./ar.analytics");
 const maintenanceAnalytics = require("./maintenance.analytics");
 const inventoryAnalytics = require("./inventory.analytics");
 const tripsAnalytics = require("./trips.analytics");
+const profitAnalytics = require("./profit.analytics");
 
 // =======================
 // Finance
@@ -18,6 +19,7 @@ async function getFinanceExpenseSummary({ user, query }) {
   return financeAnalytics.getExpenseSummary({
     range,
     scope,
+    query,
   });
 }
 
@@ -30,6 +32,7 @@ async function getFinanceExpenseByType({ user, query }) {
     range,
     scope,
     limit,
+    query,
   });
 }
 
@@ -42,6 +45,7 @@ async function getFinanceExpenseByVehicle({ user, query }) {
     range,
     scope,
     limit,
+    query,
   });
 }
 
@@ -52,6 +56,7 @@ async function getFinanceExpenseByPaymentSource({ user, query }) {
   return financeAnalytics.getExpenseByPaymentSource({
     range,
     scope,
+    query,
   });
 }
 
@@ -64,6 +69,7 @@ async function getFinanceTopVendors({ user, query }) {
     range,
     scope,
     limit,
+    query,
   });
 }
 
@@ -74,6 +80,7 @@ async function getFinanceExpenseApprovalBreakdown({ user, query }) {
   return financeAnalytics.getExpenseApprovalBreakdown({
     range,
     scope,
+    query,
   });
 }
 
@@ -88,6 +95,7 @@ async function getArOutstandingSummary({ user, query }) {
   return arAnalytics.getOutstandingSummary({
     range,
     scope,
+    query,
   });
 }
 
@@ -100,6 +108,7 @@ async function getArTopDebtors({ user, query }) {
     range,
     scope,
     limit,
+    query,
   });
 }
 
@@ -114,6 +123,7 @@ async function getMaintenanceOpenWorkOrders({ user, query }) {
   return maintenanceAnalytics.getOpenWorkOrders({
     range,
     scope,
+    query,
   });
 }
 
@@ -126,6 +136,7 @@ async function getMaintenanceCostByVehicle({ user, query }) {
     range,
     scope,
     limit,
+    query,
   });
 }
 
@@ -236,6 +247,21 @@ async function getTopVehiclesByTrips({ user, query }) {
 }
 
 // =======================
+// Profit
+// =======================
+
+async function getEntityProfitSummary({ user, query }) {
+  const range = resolveTimeRange(query);
+  const scope = buildScopeFilters(user, query);
+
+  return profitAnalytics.getClientProfitSummary({
+    range,
+    scope,
+    query,
+  });
+}
+
+// =======================
 // EXPORTS
 // =======================
 
@@ -262,4 +288,6 @@ module.exports = {
   getTopClientsByTrips,
   getTopSitesByTrips,
   getTopVehiclesByTrips,
+
+  getEntityProfitSummary,
 };

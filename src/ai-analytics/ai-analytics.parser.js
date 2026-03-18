@@ -788,16 +788,16 @@ function parsePossessiveFollowUp(question, base, body = {}) {
 
   if (!ownerType || !ownerLabel) return null;
 
-  if (includesAny(text, ["مديونيته", "مديونيتها", "مستحقاته", "مستحقاتها"])) {
+    if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها", "هل هو مربح", "هل هي مربحة"])) {
     if (ownerType !== "client") {
       return {
         ...base,
         mode: "unsupported_followup",
-        module: "ar",
-        domain: "ar",
+        module: "finance",
+        domain: "finance",
         intent: "unsupported_possessive_relation",
         confidence: 0.8,
-        unsupported_reason: "receivables_requires_client",
+        unsupported_reason: "profit_requires_client",
         options: {
           ...base.options,
           response_type: "summary",
@@ -808,15 +808,11 @@ function parsePossessiveFollowUp(question, base, body = {}) {
     return {
       ...base,
       mode: "query",
-      module: "ar",
-      domain: "ar",
-      intent: "outstanding_summary",
+      module: "finance",
+      domain: "finance",
+      intent: "entity_profit_summary",
       confidence: 0.9,
-      metric: "total_outstanding",
-      filters: {
-        ...base.filters,
-        focus: "summary",
-      },
+      metric: "profit",
       entities: {
         ...base.entities,
         client_hint: base.entities.client_hint || ownerLabel,
