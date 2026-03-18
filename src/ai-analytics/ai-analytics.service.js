@@ -1,1344 +1,994 @@
-const { SYNONYMS } = require("./ai-analytics.synonyms");
+const analyticsService = require("../analytics/analytics.service");
+const { parseAiQuestion } = require("./ai-analytics.parser");
+const { buildArabicAnswer } = require("./ai-analytics.answer");
+const { getSuggestedQuestions } = require("./ai-analytics.suggestions");
+const { buildInsightsByContext } = require("./ai-analytics.insights");
+const { getFollowUpQuestions } = require("./ai-analytics.followups");
+const { executeAiAction } = require("./ai-analytics.actions");
 const {
-  normalizeArabicText,
-  includesAny,
-} = require("./ai-analytics.normalize");
-
-const { resolveTimeFilters } = require("./ai-analytics.time-parser");
+  buildSessionSnapshot,
+  resolveReferenceFollowUp,
+} = require("./ai-analytics.session");
 const {
-  extractVehicleHint,
-  extractClientHint,
-  extractSiteHint,
-  extractTripHint,
-  extractWorkOrderHint,
-  extractAmount,
-  extractExpenseType,
-  extractTitle,
-  extractVendorName,
-  extractPaidMethod,
-} = require("./ai-analytics.extractors");
+  handleEntityIntelligenceFollowUp,
+  enrichSessionSnapshotWithEntities,
+} = require("./entity/entity-intelligence");
 
-function roleUpper(role) {
-  return String(role || "").trim().toUpperCase();
-}
+async function buildExpenseCompareResult({ user }) {
+  const [thisMonth, lastMonth] = await Promise.all([
+    analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "this_month" },
+    }),
+    analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "last_month" },
+    }),
+  ]);
 
-function allowedModulesByRole(role) {
-  const r = roleUpper(role);
+  const thisMonthTotal = Number(
+    thisMonth?.data?.total_expense ??
+      thisMonth?.total_expense ??
+      thisMonth?.data?.total ??
+      thisMonth?.total ??
+      0
+  );
 
-  if (r === "ADMIN") return ["finance", "ar", "maintenance", "inventory", "trips"];
-  if (r === "ACCOUNTANT") return ["finance", "ar", "trips"];
-  if (r === "STOREKEEPER") return ["inventory"];
-  if (r === "FIELD_SUPERVISOR") return ["finance", "maintenance", "trips"];
-  if (r === "HR") return ["maintenance", "trips"];
-
-  return ["maintenance", "inventory", "trips"];
-}
-
-function detectLimit(question) {
-  const text = normalizeArabicText(question);
-  const m = text.match(/\b(\d+)\b/);
-
-  if (!m) return undefined;
-
-  const n = Number(m[1]);
-  if (!Number.isFinite(n)) return undefined;
-
-  return Math.max(1, Math.min(50, n));
-}
-
-function detectQuestionType(question) {
-  const text = normalizeArabicText(question);
-
-  if (includesAny(text, ["اعلي", "اعلى", "اكبر", "اكثر", "top"])) return "top";
-  if (includesAny(text, ["كم", "كام", "عدد", "اجمالي", "إجمالي"])) return "summary";
-
-  return "general";
-}
-
-function detectModule(question, context, user) {
-  const normalizedContext = String(context || "").trim().toLowerCase();
-  const allowed = allowedModulesByRole(user?.role);
-
-  if (normalizedContext && allowed.includes(normalizedContext)) {
-    return normalizedContext;
-  }
-
-  const text = normalizeArabicText(question);
-  const scores = {
-    finance: 0,
-    ar: 0,
-    maintenance: 0,
-    inventory: 0,
-    trips: 0,
-  };
-
-  for (const mod of Object.keys(SYNONYMS.modules || {})) {
-    for (const term of SYNONYMS.modules[mod] || []) {
-      if (text.includes(normalizeArabicText(term))) {
-        scores[mod] += 1;
-      }
-    }
-  }
-
-  const ranked = Object.entries(scores)
-    .filter(([mod]) => allowed.includes(mod))
-    .sort((a, b) => b[1] - a[1]);
-
-  if (ranked.length && ranked[0][1] > 0) {
-    return ranked[0][0];
-  }
-
-  return allowed[0] || null;
-}
-
-function buildBaseParsed({ question, context, user, body }) {
-  const moduleName = detectModule(question, context, user);
-  const timeFilters = resolveTimeFilters(question);
-  const limit = detectLimit(question);
-  const qType = detectQuestionType(question);
+  const lastMonthTotal = Number(
+    lastMonth?.data?.total_expense ??
+      lastMonth?.total_expense ??
+      lastMonth?.data?.total ??
+      lastMonth?.total ??
+      0
+  );
 
   return {
-    mode: "unknown",
-    module: moduleName || "unknown",
-    domain: moduleName || "unknown",
-    intent: "unknown",
-    confidence: 0,
-    raw_question: String(question || "").trim(),
-    normalized_question: normalizeArabicText(question),
-    entities: {
-      vehicle_hint: extractVehicleHint(question) || null,
-      trip_hint: extractTripHint(question) || null,
-      work_order_hint: extractWorkOrderHint(question) || null,
-      client_hint: extractClientHint(question) || null,
-      part_hint: null,
-      site_hint: extractSiteHint(question) || null,
-      expense_type: extractExpenseType(question) || null,
-      vendor_name: extractVendorName(question) || null,
-      paid_method: extractPaidMethod(question) || null,
-      ordinal_ref: null,
-      same_as_previous: false,
-      possessive_owner_type: null,
-      possessive_owner_label: null,
+    data: {
+      this_month_total: thisMonthTotal,
+      last_month_total: lastMonthTotal,
+      difference: thisMonthTotal - lastMonthTotal,
     },
-    metric: null,
-    group_by: null,
-    filters: {
-      range: timeFilters.range,
-      date_from: timeFilters.date_from,
-      date_to: timeFilters.date_to,
-      status: null,
-      focus: null,
+  };
+}
+
+function buildUnknownResponse(parsed) {
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    ui: {
+      mode: "unknown",
+      title: "سؤال غير مدعوم حاليًا",
+      summary:
+        "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
+      badges: ["غير مدعوم"],
+      result_type: "summary",
+      has_items: false,
     },
-    options: {
-      limit: limit || undefined,
-      question_type: qType,
-      response_type: "summary",
-    },
-    action_payload: null,
-    auto_execute: Boolean(body?.auto_execute),
+    result: null,
+    answer:
+      "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
+    followUps: [
+      "كم إجمالي المصروفات هذا الشهر؟",
+      "من أعلى عميل مديونية؟",
+      "كم عدد أوامر العمل المفتوحة؟",
+      "ما الأصناف القريبة من النفاد؟",
+      "كم عدد الرحلات هذا الشهر؟",
+    ],
+    insights: [],
+    session_snapshot: null,
   };
 }
 
-function applySnapshotEntityHints(base, body = {}) {
-  const snapshot = body?.session_snapshot || null;
-  const applied = snapshot?.applied_entities || {};
-  const firstEntity = snapshot?.first_entity || null;
-  const primaryEntity = snapshot?.entity_context?.primary_entity || null;
-
-  const merged = {
-    ...base,
-    entities: {
-      ...base.entities,
-      vehicle_hint:
-        base?.entities?.vehicle_hint ||
-        applied?.vehicle_hint ||
-        firstEntity?.vehicle_hint ||
-        (primaryEntity?.type === "vehicle" ? primaryEntity?.label : null) ||
-        null,
-      client_hint:
-        base?.entities?.client_hint ||
-        applied?.client_hint ||
-        firstEntity?.client_hint ||
-        (primaryEntity?.type === "client" ? primaryEntity?.label : null) ||
-        null,
-      site_hint:
-        base?.entities?.site_hint ||
-        applied?.site_hint ||
-        firstEntity?.site_hint ||
-        (primaryEntity?.type === "site" ? primaryEntity?.label : null) ||
-        null,
-      possessive_owner_type: primaryEntity?.type || null,
-      possessive_owner_label: primaryEntity?.label || null,
-    },
-  };
-
-  return merged;
-}
-
-function detectAction(question, body = {}, base) {
-  const text = normalizeArabicText(question);
-
-  if (includesAny(text, SYNONYMS.actions?.createWorkOrder || [])) {
-    return {
-      ...base,
-      mode: "action",
-      intent: "create_work_order",
-      confidence: 0.95,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
-      action_payload: {
-        vehicle_hint: extractVehicleHint(question),
-        title: extractTitle(question),
-        notes: String(question || "").trim(),
-      },
-    };
-  }
-
-  if (includesAny(text, SYNONYMS.actions?.createMaintenanceRequest || [])) {
-    return {
-      ...base,
-      mode: "action",
-      intent: "create_maintenance_request",
-      confidence: 0.95,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
-      action_payload: {
-        vehicle_hint: extractVehicleHint(question),
-        description: extractTitle(question) || String(question || "").trim(),
-        title: extractTitle(question),
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.actions?.createExpense || []) ||
-    (text.includes("مصروف") &&
-      includesAny(text, ["وقود", "صيانه", "صيانة", "زيت", "كاوتش", "شراء", "نثريه", "نثرية"]))
-  ) {
-    return {
-      ...base,
-      mode: "action",
-      module: "finance",
-      domain: "finance",
-      intent: "create_expense",
-      confidence: 0.94,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
-      action_payload: {
-        amount: extractAmount(question),
-        expense_type: extractExpenseType(question),
-        vehicle_hint: extractVehicleHint(question),
-        trip_hint: extractTripHint(question),
-        work_order_hint: extractWorkOrderHint(question),
-        vendor_name: extractVendorName(question),
-        paid_method: extractPaidMethod(question),
-        payment_source: body?.payment_source || null,
-        cash_advance_id: body?.cash_advance_id || null,
-        trip_id: body?.trip_id || null,
-        maintenance_work_order_id: body?.maintenance_work_order_id || null,
-        receipt_url: body?.receipt_url || null,
-        invoice_no: body?.invoice_no || null,
-        invoice_date: body?.invoice_date || null,
-        vat_amount: body?.vat_amount || null,
-        invoice_total: body?.invoice_total || null,
-        notes: String(question || "").trim(),
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseFinance(question, base) {
-  const text = base.normalized_question;
-  const limit = base.options.limit;
-  const qType = base.options.question_type;
-
-  if (
-    (
-      includesAny(text, SYNONYMS.finance?.expense || []) &&
-      includesAny(text, SYNONYMS.finance?.compare || []) &&
-      includesAny(text, SYNONYMS.time?.thisMonth || []) &&
-      includesAny(text, SYNONYMS.time?.lastMonth || [])
-    ) ||
-    includesAny(text, [
-      "قارن مصروفات هذا الشهر بالشهر الماضي",
-      "مقارنه مصروفات هذا الشهر بالشهر الماضي",
-      "فرق المصروفات بين هذا الشهر والشهر الماضي",
-      "قارن الصرف هذا الشهر بالشهر الماضي",
-    ])
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_summary_compare",
-      confidence: 0.95,
-      metric: "total_expense",
-      group_by: null,
-      filters: {
-        ...base.filters,
-        range: "compare_this_vs_last_month",
-        date_from: null,
-        date_to: null,
-      },
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, [
-      "اجمالي المصروفات",
-      "كم المصروفات",
-      "كام المصروفات",
-      "صرفنا كام",
-      "الصرف كام",
-      "مصروفاتنا كام",
-      "تكلفه هذا الشهر",
-      "تكلفة هذا الشهر",
-      "مصروفات هذا الشهر",
-      "اجمالي الصرف",
-    ]) ||
-    (text.includes("مصروفات") && includesAny(text, ["اجمالي", "كم", "كام"])) ||
-    (text.includes("الصرف") && includesAny(text, ["اجمالي", "كم", "كام"]))
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_summary",
-      confidence: 0.92,
-      metric: "total_expense",
-      group_by: null,
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.finance?.byType || []) ||
-    (text.includes("مصروفات") && includesAny(text, ["النوع", "بند"])) ||
-    (text.includes("مصروف") && includesAny(text, ["نوع", "بند", "اعلى", "اكثر", "اكبر"]))
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_by_type",
-      confidence: 0.92,
-      metric: "expense_amount",
-      group_by: "expense_type",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    (
-      includesAny(text, ["مركبه", "مركبات", "العربيه", "العربية", "سياره", "سيارات"]) &&
-      includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "انهي", "أي"])
-    ) ||
-    includesAny(text, [
-      "اعلى مركبه صرفا",
-      "اعلى مركبة صرفا",
-      "اكثر مركبه صرفا",
-      "اكثر مركبة صرفا",
-      "اكبر مركبه صرفا",
-      "اكبر مركبة صرفا",
-      "اعرض اعلى 5 مركبات صرفا",
-      "اعرض اعلى 5 مركبات مصروفات",
-      "اعلى المركبات صرفا",
-      "المصروفات حسب المركبه",
-      "المصروفات حسب المركبة",
-    ])
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_by_vehicle",
-      confidence: 0.93,
-      metric: "expense_amount",
-      group_by: "vehicle",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    (
-      includesAny(text, ["مصدر", "مصادر", "طريقه", "طريقة", "وسيله", "وسيلة"]) &&
-      includesAny(text, ["الدفع", "سداد"]) &&
-      includesAny(text, ["مصروف", "مصروفات", "صرف"])
-    ) ||
-    includesAny(text, [
-      "المصروفات حسب مصدر الدفع",
-      "المصروفات حسب طريقة الدفع",
-      "الصرف حسب مصدر الدفع",
-      "الصرف من العهده ولا الشركه",
-      "الصرف من العهده ولا الشركة",
-      "كم من العهده وكم من الشركه",
-      "كم من العهدة وكم من الشركة",
-    ])
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_by_payment_source",
-      confidence: 0.92,
-      metric: "expense_amount",
-      group_by: "payment_source",
-      options: {
-        ...base.options,
-        response_type: "table",
-      },
-    };
-  }
-
-  if (
-    (
-      includesAny(text, ["مورد", "المورد", "موردين", "الموردين", "vendor", "supplier"]) &&
-      includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
-    ) ||
-    includesAny(text, [
-      "اعلى مورد مصروفات",
-      "اكبر مورد مصروفات",
-      "اكثر مورد مصروفات",
-      "اعرض اعلى 5 موردين مصروفات",
-      "اعرض اعلى 5 موردين",
-      "اعلى الموردين مصروفات",
-    ])
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "top_vendors",
-      confidence: 0.91,
-      metric: "expense_amount",
-      group_by: "vendor",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    (
-      includesAny(text, ["مصروف", "مصروفات"]) &&
-      includesAny(text, ["معلق", "معلقه", "معلقة", "بانتظار", "pending"])
-    ) ||
-    includesAny(text, [
-      "كم المصروفات المعلقه",
-      "كم المصروفات المعلقة",
-      "كام المصروفات المعلقه",
-      "كام المصروفات المعلقة",
-      "اعرض حالات اعتماد المصروفات",
-      "المصروفات حسب حالة الاعتماد",
-      "حالات المصروفات",
-    ])
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "expense_approval_breakdown",
-      confidence: 0.9,
-      metric: "expense_amount",
-      group_by: "approval_status",
-      options: {
-        ...base.options,
-        response_type: "table",
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseAr(question, base) {
-  const text = base.normalized_question;
-  const limit = base.options.limit;
-  const qType = base.options.question_type;
-
-  if (
-    includesAny(text, SYNONYMS.ar?.outstanding || []) ||
-    (text.includes("مستحقات") && includesAny(text, ["العملاء", "عملاء"])) ||
-    (text.includes("مديوني") && includesAny(text, ["العملاء", "عملاء"]))
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "outstanding_summary",
-      confidence: 0.9,
-      metric: "total_outstanding",
-      group_by: null,
-      filters: {
-        ...base.filters,
-        focus: "summary",
-      },
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.ar?.overdue || []) ||
-    (text.includes("متاخر") && includesAny(text, ["العملاء", "عملاء", "مستحقات"]))
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "outstanding_summary",
-      confidence: 0.9,
-      metric: "overdue_amount",
-      group_by: null,
-      filters: {
-        ...base.filters,
-        focus: "overdue_only",
-      },
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.ar?.topDebtors || []) ||
-    (
-      includesAny(text, ["عميل", "العملاء", "عملاء"]) &&
-      includesAny(text, ["مديونيه", "مديونية", "المديونيات", "مستحقات"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "top_debtors",
-      confidence: 0.9,
-      metric: "outstanding_amount",
-      group_by: "client",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseMaintenance(question, base) {
-  const text = base.normalized_question;
-  const limit = base.options.limit;
-  const qType = base.options.question_type;
-
-  if (
-    includesAny(text, SYNONYMS.maintenance?.openWorkOrders || []) ||
-    (
-      (text.includes("امر") || text.includes("اوامر")) &&
-      includesAny(text, ["عمل", "صيانه", "صيانة"]) &&
-      includesAny(text, ["مفتوح", "مفتوحه", "مفتوحة"])
-    )
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      intent: "open_work_orders",
-      confidence: 0.9,
-      metric: "open_work_orders_count",
-      group_by: null,
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.maintenance?.costByVehicle || []) ||
-    (
-      includesAny(text, ["تكلفه", "تكلفة", "صيانه", "صيانة"]) &&
-      includesAny(text, ["مركبه", "مركبات", "عربيه", "عربيات", "سياره", "سيارات"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "ايه", "انهي"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "maintenance_cost_by_vehicle",
-      confidence: 0.9,
-      metric: "maintenance_cost",
-      group_by: "vehicle",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseInventory(question, base) {
-  const text = base.normalized_question;
-  const limit = base.options.limit;
-  const qType = base.options.question_type;
-
-  if (
-    includesAny(text, SYNONYMS.inventory?.topIssuedParts || []) ||
-    (
-      includesAny(text, ["قطع", "قطع الغيار", "اصناف", "الصنف"]) &&
-      includesAny(text, ["صرف", "الصرف", "بتتصرف", "المصروف"]) &&
-      includesAny(text, ["اكثر", "اعلى", "اعلي", "اكبر", "top", "مين", "ايه"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "top_issued_parts",
-      confidence: 0.9,
-      metric: "issued_qty",
-      group_by: "part",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.inventory?.lowStock || []) ||
-    (
-      includesAny(text, ["نفاد", "مخزون", "تخلص", "ناقص"]) &&
-      includesAny(text, ["قطع", "اصناف", "الصنف"])
-    )
-  ) {
-    const focus = includesAny(text, ["كم", "كام", "عدد"]) ? "count_only" : "list";
-
-    return {
-      ...base,
-      mode: "query",
-      intent: "low_stock_items",
-      confidence: 0.9,
-      metric: "low_stock_count",
-      group_by: "part",
-      filters: {
-        ...base.filters,
-        range: null,
-        focus,
-      },
-      options: {
-        ...base.options,
-        limit: limit || 10,
-        response_type: focus === "count_only" ? "summary" : "table",
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseTripsFollowup(question, base, body = {}) {
-  const text = base.normalized_question;
-  const snapshot = body?.session_snapshot || null;
-  const hasClient = Boolean(base?.entities?.client_hint || snapshot?.applied_entities?.client_hint);
-  const hasSite = Boolean(base?.entities?.site_hint || snapshot?.applied_entities?.site_hint);
-  const hasVehicle = Boolean(base?.entities?.vehicle_hint || snapshot?.applied_entities?.vehicle_hint);
-
-  if (
-    includesAny(text, [
-      "رحلاته هذا الشهر",
-      "رحلاتها هذا الشهر",
-      "رحلات العميل هذا الشهر",
-      "رحلات المركبة هذا الشهر",
-      "رحلات الموقع هذا الشهر",
-      "اعرض رحلاته",
-      "اعرض رحلاتها",
-      "الرحلات الخاصة به",
-      "الرحلات الخاصة بها",
-      "رحلاته",
-      "رحلاتها",
-    ])
-  ) {
-    if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
-        module: "trips",
-        domain: "trips",
-        intent: "trips_summary",
-        confidence: 0.88,
-        metric: "total_trips",
-        group_by: null,
-        options: {
-          ...base.options,
-          response_type: "summary",
-        },
-      };
-    }
-  }
-
-  if (
-    includesAny(text, [
-      "الرحلات النشطة له",
-      "الرحلات النشطة لها",
-      "الرحلات النشطة للمركبة",
-      "الرحلات النشطة للعميل",
-      "الرحلات النشطة للموقع",
-      "النشطة فقط",
-      "رحلاته النشطة",
-      "رحلاتها النشطة",
-    ])
-  ) {
-    if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
-        module: "trips",
-        domain: "trips",
-        intent: "active_trips",
-        confidence: 0.9,
-        metric: "active_trips_count",
-        group_by: "trip",
-        options: {
-          ...base.options,
-          limit: base.options.limit || 5,
-          response_type: "table",
-        },
-      };
-    }
-  }
-
-  if (
-    includesAny(text, [
-      "التي تحتاج إغلاق مالي",
-      "التي تحتاج اغلاق مالي",
-      "رحلاته التي تحتاج إغلاق مالي",
-      "رحلاتها التي تحتاج إغلاق مالي",
-      "الرحلات التي تحتاج إغلاق مالي له",
-      "الرحلات التي تحتاج إغلاق مالي للمركبة",
-      "الرحلات التي تحتاج إغلاق مالي للموقع",
-      "اغلاق مالي فقط",
-      "إغلاق مالي فقط",
-    ])
-  ) {
-    if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
-        module: "trips",
-        domain: "trips",
-        intent: "trips_need_financial_closure",
-        confidence: 0.9,
-        metric: "need_financial_closure_count",
-        group_by: "trip",
-        options: {
-          ...base.options,
-          limit: base.options.limit || 5,
-          response_type: "table",
-        },
-      };
-    }
-  }
-
-  return null;
-}
-
-function parsePossessiveFollowUp(question, base, body = {}) {
-  const text = base.normalized_question;
-  const snapshot = body?.session_snapshot || null;
-  const primaryEntity = snapshot?.entity_context?.primary_entity || null;
-
-  const ownerType = primaryEntity?.type || null;
-  const ownerLabel = primaryEntity?.label || null;
-
-  if (!ownerType || !ownerLabel) return null;
-
-    if (includesAny(text, ["مصروفاته", "مصروفاتها", "مصاريفه", "مصاريفها"])) {
-    if (!["vehicle", "client", "site"].includes(ownerType)) {
-      return {
-        ...base,
-        mode: "unsupported_followup",
-        module: "finance",
-        domain: "finance",
-        intent: "unsupported_possessive_relation",
-        confidence: 0.8,
-        unsupported_reason: "expenses_requires_supported_owner",
-        options: {
-          ...base.options,
-          response_type: "summary",
-        },
-      };
-    }
-
-    const entities = { ...base.entities };
-
-    if (ownerType === "vehicle") {
-      entities.vehicle_hint = entities.vehicle_hint || ownerLabel;
-    } else if (ownerType === "client") {
-      entities.client_hint = entities.client_hint || ownerLabel;
-    } else if (ownerType === "site") {
-      entities.site_hint = entities.site_hint || ownerLabel;
-    }
-
-    return {
-      ...base,
-      mode: "query",
-      module: "finance",
-      domain: "finance",
-      intent: "expense_summary",
-      confidence: 0.9,
-      metric: "total_expense",
-      entities,
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (includesAny(text, ["رحلاته", "رحلاتها"])) {
-    if (!["client", "vehicle", "site"].includes(ownerType)) {
-      return {
-        ...base,
-        mode: "unsupported_followup",
-        module: "trips",
-        domain: "trips",
-        intent: "unsupported_possessive_relation",
-        confidence: 0.8,
-        unsupported_reason: "trips_requires_client_vehicle_site",
-        options: {
-          ...base.options,
-          response_type: "summary",
-        },
-      };
-    }
-
-    const entities = { ...base.entities };
-
-    if (ownerType === "client") {
-      entities.client_hint = entities.client_hint || ownerLabel;
-    } else if (ownerType === "vehicle") {
-      entities.vehicle_hint = entities.vehicle_hint || ownerLabel;
-    } else if (ownerType === "site") {
-      entities.site_hint = entities.site_hint || ownerLabel;
-    }
-
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "trips_summary",
-      confidence: 0.9,
-      metric: "total_trips",
-      entities,
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (includesAny(text, ["صيانته", "صيانتها"])) {
-    if (ownerType !== "vehicle") {
-      return {
-        ...base,
-        mode: "unsupported_followup",
-        module: "maintenance",
-        domain: "maintenance",
-        intent: "unsupported_possessive_relation",
-        confidence: 0.8,
-        unsupported_reason: "maintenance_requires_vehicle",
-        options: {
-          ...base.options,
-          response_type: "summary",
-        },
-      };
-    }
-
-    return {
-      ...base,
-      mode: "query",
-      module: "maintenance",
-      domain: "maintenance",
-      intent: "maintenance_cost_by_vehicle",
-      confidence: 0.9,
-      metric: "maintenance_cost",
-      group_by: "vehicle",
-      entities: {
-        ...base.entities,
-        vehicle_hint: base.entities.vehicle_hint || ownerLabel,
-      },
-      options: {
-        ...base.options,
-        limit: 1,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (includesAny(text, ["مصروفاته", "مصروفاتها", "مصاريفه", "مصاريفها"])) {
-    if (ownerType === "vehicle") {
-      return {
-        ...base,
-        mode: "query",
-        module: "finance",
-        domain: "finance",
-        intent: "expense_by_vehicle",
-        confidence: 0.9,
-        metric: "expense_amount",
-        group_by: "vehicle",
-        entities: {
-          ...base.entities,
-          vehicle_hint: base.entities.vehicle_hint || ownerLabel,
-        },
-        options: {
-          ...base.options,
-          limit: 1,
-          response_type: "summary",
-        },
-      };
-    }
-
-    if (ownerType === "client") {
-      return {
-        ...base,
-        mode: "unsupported_followup",
-        module: "finance",
-        domain: "finance",
-        intent: "client_expense_followup_pending",
-        confidence: 0.8,
-        unsupported_reason: "client_expense_intent_not_implemented",
-        entities: {
-          ...base.entities,
-          client_hint: base.entities.client_hint || ownerLabel,
-        },
-        options: {
-          ...base.options,
-          response_type: "summary",
-        },
-      };
-    }
-
-    return {
-      ...base,
-      mode: "unsupported_followup",
-      module: "finance",
-      domain: "finance",
-      intent: "unsupported_possessive_relation",
-      confidence: 0.8,
-      unsupported_reason: "expenses_requires_supported_owner",
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها"])) {
-    return {
-      ...base,
-      mode: "unsupported_followup",
-      module: "finance",
-      domain: "finance",
-      intent: "profit_followup_pending",
-      confidence: 0.8,
-      unsupported_reason: "profit_intent_not_implemented",
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  return null;
-}
-
-function parseTrips(question, base) {
-  const text = base.normalized_question;
-  const limit = base.options.limit;
-  const qType = base.options.question_type;
-
-  if (
-    includesAny(text, SYNONYMS.trips?.summary || []) ||
-    (
-      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
-      includesAny(text, ["اجمالي", "إجمالي", "عدد", "كم", "كام"])
-    )
-  ) {
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "trips_summary",
-      confidence: 0.91,
-      metric: "total_trips",
-      group_by: null,
-      options: {
-        ...base.options,
-        response_type: "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.trips?.active || []) ||
-    (
-      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
-      includesAny(text, ["نشطه", "نشطة", "جاريه", "جارية", "فعاله", "فعالة"])
-    )
-  ) {
-    const finalLimit = limit || 5;
-
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "active_trips",
-      confidence: 0.9,
-      metric: "active_trips_count",
-      group_by: "trip",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, SYNONYMS.trips?.needFinancialClosure || []) ||
-    (
-      includesAny(text, ["رحله", "رحلة", "رحلات", "الرحلات"]) &&
-      includesAny(text, ["اغلاق مالي", "إغلاق مالي", "مغلقه ماليا", "مغلقة ماليًا", "closure"])
-    )
-  ) {
-    const finalLimit = limit || 5;
-
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "trips_need_financial_closure",
-      confidence: 0.91,
-      metric: "need_financial_closure_count",
-      group_by: "trip",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, [
-      "اعرض اعلى 5 عملاء حسب الرحلات",
+function buildUnsupportedFollowupResponse({ parsed, body }) {
+  let title = "الطلب مفهوم لكن غير مكتمل التنفيذ حاليًا";
+  let summary =
+    "تم فهم المقصود من السؤال، لكن هذا النوع من المتابعة غير مدعوم بالكامل في النسخة الحالية.";
+  let answer = summary;
+  let followUps = ["اعرض أعلى 5 عملاء مديونية", "اعرض أعلى 5 مركبات حسب الرحلات"];
+
+  if (parsed?.intent === "profit_followup_pending") {
+    title = "تحليل الربحية غير متاح بعد";
+    summary =
+      "تم فهم طلب الربحية، لكن حساب الربح يحتاج intent تحليلي مخصص لم يتم إضافته بعد.";
+    answer =
+      "فهمت أنك تريد الربحية، لكن حساب الربح لم يُفعَّل بعد داخل محرك التحليلات. يمكننا إضافته في المرحلة التالية.";
+    followUps = ["رحلاته", "مصروفاته", "مديونيته"];
+  } else if (parsed?.unsupported_reason === "maintenance_requires_vehicle") {
+    title = "الصيانة ترتبط بالمركبات";
+    summary = "لا يمكن عرض الصيانة إلا إذا كان المرجع الحالي مركبة.";
+    answer = "الصيانة ترتبط بالمركبات، وليس بالعميل أو الموقع الحالي.";
+    followUps = ["اعرض أعلى 5 مركبات تكلفة صيانة", "اعرض أعلى 5 مركبات حسب الرحلات"];
+  } else if (parsed?.unsupported_reason === "receivables_requires_client") {
+    title = "المديونية ترتبط بالعملاء";
+    summary = "لا يمكن عرض المديونية إلا إذا كان المرجع الحالي عميلًا.";
+    answer = "المديونية ترتبط بالعملاء، وليس بالمركبة أو الموقع الحالي.";
+    followUps = ["اعرض أعلى 5 عملاء مديونية"];
+  } else if (parsed?.unsupported_reason === "trips_requires_client_vehicle_site") {
+    title = "الرحلات تحتاج مرجعًا صالحًا";
+    summary = "الرحلات يمكن ربطها بعميل أو مركبة أو موقع.";
+    answer =
+      "أحتاج أن يكون المرجع الحالي عميلًا أو مركبة أو موقعًا حتى أعرض الرحلات المرتبطة به.";
+    followUps = [
       "اعرض أعلى 5 عملاء حسب الرحلات",
-      "اعلى 5 عملاء حسب الرحلات",
-      "أعلى 5 عملاء حسب الرحلات",
-      "اعرض اعلى 5 عملاء في عدد الرحلات",
-      "اعرض أعلى 5 عملاء في عدد الرحلات",
-      "اعلى عميل من حيث الرحلات",
-      "أعلى عميل من حيث الرحلات",
-      "من اعلى عميل من حيث الرحلات",
-      "من أعلى عميل من حيث الرحلات",
-      "ما اعلى عميل من حيث الرحلات",
-      "ما أعلى عميل من حيث الرحلات",
-    ]) ||
-    includesAny(text, SYNONYMS.trips?.topClients || []) ||
-    (
-      includesAny(text, ["عميل", "العملاء", "عملاء"]) &&
-      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "top_clients_by_trips",
-      confidence: 0.95,
-      metric: "trips_count",
-      group_by: "client",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, [
-      "اعرض اعلى 5 مواقع حسب الرحلات",
-      "اعرض أعلى 5 مواقع حسب الرحلات",
-      "اعلى 5 مواقع حسب الرحلات",
-      "أعلى 5 مواقع حسب الرحلات",
-      "اعرض اعلى 5 مواقع في عدد الرحلات",
-      "اعرض أعلى 5 مواقع في عدد الرحلات",
-      "اعرض اعلى المواقع حسب الرحلات",
-      "اعرض أعلى المواقع حسب الرحلات",
-      "اعلى موقع من حيث الرحلات",
-      "أعلى موقع من حيث الرحلات",
-      "من اعلى موقع من حيث الرحلات",
-      "من أعلى موقع من حيث الرحلات",
-      "ما اعلى موقع من حيث الرحلات",
-      "ما أعلى موقع من حيث الرحلات",
-    ]) ||
-    includesAny(text, SYNONYMS.trips?.topSites || []) ||
-    (
-      includesAny(text, ["موقع", "الموقع", "المواقع", "site", "sites"]) &&
-      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
-
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "top_sites_by_trips",
-      confidence: 0.95,
-      metric: "trips_count",
-      group_by: "site",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, [
-      "اعرض اعلى 5 مركبات حسب الرحلات",
       "اعرض أعلى 5 مركبات حسب الرحلات",
-      "اعلى 5 مركبات حسب الرحلات",
-      "أعلى 5 مركبات حسب الرحلات",
-      "اعرض اعلى 5 مركبات في عدد الرحلات",
-      "اعرض أعلى 5 مركبات في عدد الرحلات",
-      "اعلى مركبة من حيث الرحلات",
-      "أعلى مركبة من حيث الرحلات",
-      "من اعلى مركبة من حيث الرحلات",
-      "من أعلى مركبة من حيث الرحلات",
-      "ما اعلى مركبة من حيث الرحلات",
-      "ما أعلى مركبة من حيث الرحلات",
-    ]) ||
-    includesAny(text, SYNONYMS.trips?.topVehicles || []) ||
-    (
-      includesAny(text, ["مركبه", "مركبة", "مركبات", "عربيه", "عربية", "سياره", "سيارة", "سيارات"]) &&
-      includesAny(text, ["رحله", "رحلة", "رحلات"]) &&
-      includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
-    )
-  ) {
-    const finalLimit = limit || (qType === "top" ? 5 : 1);
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ];
+  } else if (parsed?.unsupported_reason === "expenses_requires_supported_owner") {
+    title = "لا يمكن تحديد المصروفات لهذا المرجع";
+    summary = "المصروفات الحالية يمكن ربطها بعميل أو موقع أو مركبة فقط.";
+    answer =
+      "أحتاج أن يكون المرجع الحالي عميلًا أو موقعًا أو مركبة حتى أعرض المصروفات المرتبطة به.";
+    followUps = [
+      "اعرض أعلى 5 عملاء مديونية",
+      "اعرض أعلى 5 مركبات صرفًا",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ];
+  }
 
-    return {
-      ...base,
-      mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "top_vehicles_by_trips",
-      confidence: 0.95,
-      metric: "trips_count",
-      group_by: "vehicle",
-      options: {
-        ...base.options,
-        limit: finalLimit,
-        response_type: finalLimit > 1 ? "table" : "summary",
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "unsupported_followup",
+    ui: {
+      mode: "unsupported_followup",
+      title,
+      summary,
+      badges: ["Entity Intelligence", "قيد التطوير"],
+      result_type: "summary",
+      has_items: false,
+    },
+    result: null,
+    answer,
+    followUps,
+    insights: [],
+    session_snapshot: body?.session_snapshot || null,
+  };
+}
+
+function parsedToAnalyticsQuery(parsed) {
+  return {
+    range: parsed?.filters?.range || "this_month",
+    limit: parsed?.options?.limit || undefined,
+    focus: parsed?.filters?.focus || null,
+    date_from: parsed?.filters?.date_from || null,
+    date_to: parsed?.filters?.date_to || null,
+    status: parsed?.filters?.status || null,
+
+    vehicle_hint: parsed?.entities?.vehicle_hint || null,
+    client_hint: parsed?.entities?.client_hint || null,
+    site_hint: parsed?.entities?.site_hint || null,
+    trip_hint: parsed?.entities?.trip_hint || null,
+    work_order_hint: parsed?.entities?.work_order_hint || null,
+
+    expense_type: parsed?.entities?.expense_type || null,
+    vendor_name: parsed?.entities?.vendor_name || null,
+    paid_method: parsed?.entities?.paid_method || null,
+  };
+}
+
+async function executeParsedQuery({ user, parsed }) {
+  const intent = parsed?.intent;
+  const query = parsedToAnalyticsQuery(parsed);
+
+  if (intent === "expense_summary_compare") {
+    return buildExpenseCompareResult({ user });
+  }
+
+  if (intent === "expense_summary") {
+    return analyticsService.getFinanceExpenseSummary({ user, query });
+  }
+
+  if (intent === "expense_by_type") {
+    return analyticsService.getFinanceExpenseByType({ user, query });
+  }
+
+  if (intent === "expense_by_vehicle") {
+    return analyticsService.getFinanceExpenseByVehicle({ user, query });
+  }
+
+  if (intent === "expense_by_payment_source") {
+    return analyticsService.getFinanceExpenseByPaymentSource({ user, query });
+  }
+
+  if (intent === "top_vendors") {
+    return analyticsService.getFinanceTopVendors({ user, query });
+  }
+
+  if (intent === "expense_approval_breakdown") {
+    return analyticsService.getFinanceExpenseApprovalBreakdown({ user, query });
+  }
+
+  if (intent === "outstanding_summary") {
+    return analyticsService.getArOutstandingSummary({ user, query });
+  }
+
+  if (intent === "top_debtors") {
+    return analyticsService.getArTopDebtors({ user, query });
+  }
+
+  if (intent === "open_work_orders") {
+    return analyticsService.getMaintenanceOpenWorkOrders({ user, query });
+  }
+
+  if (intent === "maintenance_cost_by_vehicle") {
+    return analyticsService.getMaintenanceCostByVehicle({ user, query });
+  }
+
+  if (intent === "top_issued_parts") {
+    return analyticsService.getInventoryTopIssuedParts({ user, query });
+  }
+
+  if (intent === "low_stock_items") {
+    return analyticsService.getInventoryLowStockItems({ user, query });
+  }
+
+  if (intent === "trips_summary") {
+    return analyticsService.getTripsSummary({ user, query });
+  }
+
+  if (intent === "active_trips") {
+    return analyticsService.getActiveTrips({ user, query });
+  }
+
+  if (intent === "trips_need_financial_closure") {
+    return analyticsService.getTripsNeedingFinancialClosure({ user, query });
+  }
+
+  if (intent === "top_clients_by_trips") {
+    return analyticsService.getTopClientsByTrips({ user, query });
+  }
+
+  if (intent === "top_sites_by_trips") {
+    return analyticsService.getTopSitesByTrips({ user, query });
+  }
+
+  if (intent === "top_vehicles_by_trips") {
+    return analyticsService.getTopVehiclesByTrips({ user, query });
+  }
+
+  return null;
+}
+
+async function buildInlineInsights({ user, parsed, result }) {
+  const moduleName = parsed?.module || parsed?.domain;
+
+  if (moduleName === "finance") {
+    const expenseSummary =
+      parsed?.intent === "expense_summary"
+        ? result
+        : await analyticsService.getFinanceExpenseSummary({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const expenseByType =
+      parsed?.intent === "expense_by_type"
+        ? result
+        : await analyticsService.getFinanceExpenseByType({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const expenseByVehicle =
+      parsed?.intent === "expense_by_vehicle"
+        ? result
+        : await analyticsService.getFinanceExpenseByVehicle({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const expenseByPaymentSource =
+      parsed?.intent === "expense_by_payment_source"
+        ? result
+        : await analyticsService.getFinanceExpenseByPaymentSource({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const topVendors =
+      parsed?.intent === "top_vendors"
+        ? result
+        : await analyticsService.getFinanceTopVendors({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const expenseApprovalBreakdown =
+      parsed?.intent === "expense_approval_breakdown"
+        ? result
+        : await analyticsService.getFinanceExpenseApprovalBreakdown({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "last_month" },
+    });
+
+    return buildInsightsByContext({
+      context: "finance",
+      data: {
+        expenseSummary,
+        expenseByType,
+        expenseByVehicle,
+        expenseByPaymentSource,
+        topVendors,
+        expenseApprovalBreakdown,
+        expenseSummaryLastMonth,
       },
+    }).slice(0, 5);
+  }
+
+  if (moduleName === "ar") {
+    const outstandingSummary =
+      parsed?.intent === "outstanding_summary"
+        ? result
+        : await analyticsService.getArOutstandingSummary({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const topDebtors =
+      parsed?.intent === "top_debtors"
+        ? result
+        : await analyticsService.getArTopDebtors({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    return buildInsightsByContext({
+      context: "ar",
+      data: {
+        outstandingSummary,
+        topDebtors,
+      },
+    }).slice(0, 3);
+  }
+
+  if (moduleName === "maintenance") {
+    const openWorkOrders =
+      parsed?.intent === "open_work_orders"
+        ? result
+        : await analyticsService.getMaintenanceOpenWorkOrders({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const costByVehicle =
+      parsed?.intent === "maintenance_cost_by_vehicle"
+        ? result
+        : await analyticsService.getMaintenanceCostByVehicle({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    return buildInsightsByContext({
+      context: "maintenance",
+      data: {
+        openWorkOrders,
+        costByVehicle,
+      },
+    }).slice(0, 3);
+  }
+
+  if (moduleName === "inventory") {
+    const topIssuedParts =
+      parsed?.intent === "top_issued_parts"
+        ? result
+        : await analyticsService.getInventoryTopIssuedParts({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const lowStockItems =
+      parsed?.intent === "low_stock_items"
+        ? result
+        : await analyticsService.getInventoryLowStockItems({
+            user,
+            query: { limit: 10 },
+          });
+
+    return buildInsightsByContext({
+      context: "inventory",
+      data: {
+        topIssuedParts,
+        lowStockItems,
+      },
+    }).slice(0, 3);
+  }
+
+  if (moduleName === "trips") {
+    const tripsSummary =
+      parsed?.intent === "trips_summary"
+        ? result
+        : await analyticsService.getTripsSummary({
+            user,
+            query: { range: "this_month" },
+          });
+
+    const activeTrips =
+      parsed?.intent === "active_trips"
+        ? result
+        : await analyticsService.getActiveTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const tripsNeedFinancialClosure =
+      parsed?.intent === "trips_need_financial_closure"
+        ? result
+        : await analyticsService.getTripsNeedingFinancialClosure({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topClientsByTrips =
+      parsed?.intent === "top_clients_by_trips"
+        ? result
+        : await analyticsService.getTopClientsByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topSitesByTrips =
+      parsed?.intent === "top_sites_by_trips"
+        ? result
+        : await analyticsService.getTopSitesByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    const topVehiclesByTrips =
+      parsed?.intent === "top_vehicles_by_trips"
+        ? result
+        : await analyticsService.getTopVehiclesByTrips({
+            user,
+            query: { range: "this_month", limit: 5 },
+          });
+
+    return buildInsightsByContext({
+      context: "trips",
+      data: {
+        tripsSummary,
+        activeTrips,
+        tripsNeedFinancialClosure,
+        topClientsByTrips,
+        topSitesByTrips,
+        topVehiclesByTrips,
+      },
+    }).slice(0, 5);
+  }
+
+  return [];
+}
+
+function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
+  const item = referenceResult?.resolved_item || null;
+  const entity = referenceResult?.resolved_entity || null;
+
+  if (!item) {
+    return {
+      ok: true,
+      parsed,
+      intent: parsed,
+      mode: "unknown",
+      ui: {
+        mode: "unknown",
+        title: "تعذر تحديد المرجع السابق",
+        summary: "لم أتمكن من تحديد العنصر المقصود من النتائج السابقة.",
+        badges: ["متابعة"],
+        result_type: "summary",
+        has_items: false,
+      },
+      result: null,
+      answer: "لم أتمكن من تحديد العنصر المقصود من النتائج السابقة.",
+      followUps: [
+        "اعرض أعلى 5 عملاء مديونية",
+        "اعرض أعلى 5 مركبات تكلفة صيانة",
+        "اعرض أعلى 5 أصناف صرفًا",
+        "اعرض أعلى 5 مركبات حسب الرحلات",
+      ],
+      insights: [],
+      session_snapshot: null,
     };
   }
 
-  if (
-    includesAny(text, ["اعرض", "هات", "طلع"]) &&
-    includesAny(text, ["5", "خمسه", "خمسة"]) &&
-    includesAny(text, ["عملاء", "العملاء"])
-  ) {
-    return {
-      ...base,
+  const snapshot = buildSessionSnapshot({
+    parsed,
+    result: {
+      data: {
+        items: [item],
+      },
+    },
+  });
+
+  if (entity?.client_hint) {
+    snapshot.applied_entities.client_hint = entity.client_hint;
+  }
+  if (entity?.site_hint) {
+    snapshot.applied_entities.site_hint = entity.site_hint;
+  }
+  if (entity?.vehicle_hint) {
+    snapshot.applied_entities.vehicle_hint = entity.vehicle_hint;
+  }
+
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "query",
+    ui: {
       mode: "query",
-      module: "trips",
-      domain: "trips",
-      intent: "top_clients_by_trips",
-      confidence: 0.85,
-      metric: "trips_count",
-      group_by: "client",
-      options: {
-        ...base.options,
+      title: "العنصر المشار إليه من النتيجة السابقة",
+      summary: entity?.entity_label
+        ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
+        : "تم تحديد العنصر المقصود من النتائج السابقة.",
+      badges: ["متابعة", "مرجع سابق"],
+      result_type: "table",
+      has_items: true,
+    },
+    result: {
+      data: {
+        items: [item],
+      },
+    },
+    answer: entity?.entity_label
+      ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
+      : "هذا هو العنصر المقصود من النتائج السابقة.",
+    followUps: getFollowUpQuestions({
+      parsed,
+      result: {
+        data: {
+          items: [item],
+        },
+      },
+    }),
+    insights: [],
+    session_snapshot: snapshot,
+  };
+}
+
+function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
+  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+  const limit = Number(parsed?.options?.limit || 10);
+  const sliced = items.slice(0, limit);
+
+  if (!items.length) {
+    return {
+      ok: true,
+      parsed,
+      intent: parsed,
+      mode: "unknown",
+      ui: {
+        mode: "unknown",
+        title: "لا توجد نتائج سابقة للتوسيع",
+        summary: "لم أجد نتائج سابقة يمكن توسيعها.",
+        badges: ["متابعة"],
+        result_type: "summary",
+        has_items: false,
+      },
+      result: null,
+      answer: "لم أجد نتائج سابقة يمكن توسيعها.",
+      followUps: [
+        "اعرض أعلى 5 عملاء مديونية",
+        "اعرض أعلى 5 مركبات تكلفة صيانة",
+        "اعرض أعلى 5 أصناف صرفًا",
+        "اعرض أعلى 5 مركبات حسب الرحلات",
+      ],
+      insights: [],
+      session_snapshot: null,
+    };
+  }
+
+  const newSnapshot = {
+    ...snapshot,
+    items: sliced,
+    first_item: sliced[0] || null,
+    count: sliced.length,
+    created_at: new Date().toISOString(),
+  };
+
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "query",
+    ui: {
+      mode: "query",
+      title: `توسيع النتائج السابقة إلى ${limit}`,
+      summary: `تم عرض أول ${sliced.length} عنصر من النتائج السابقة.`,
+      badges: ["متابعة", "توسيع النتائج"],
+      result_type: "table",
+      has_items: true,
+    },
+    result: {
+      data: {
+        items: sliced,
+      },
+    },
+    answer: `تم عرض أول ${sliced.length} عنصر من النتائج السابقة.`,
+    followUps: getFollowUpQuestions({
+      parsed,
+      result: {
+        data: {
+          items: sliced,
+        },
+      },
+    }),
+    insights: [],
+    session_snapshot: newSnapshot,
+  };
+}
+
+function buildActionPreviewResponse({ parsed }) {
+  let message = "الأمر جاهز للتنفيذ.";
+
+  if (parsed?.intent === "create_work_order") {
+    message = "تم فهم أمر إنشاء أمر عمل وهو جاهز للتنفيذ. اضغط تنفيذ الآن.";
+  } else if (parsed?.intent === "create_maintenance_request") {
+    message = "تم فهم طلب إنشاء طلب صيانة وهو جاهز للتنفيذ. اضغط تنفيذ الآن.";
+  } else if (parsed?.intent === "create_expense") {
+    message = "تم فهم أمر تسجيل المصروف وهو جاهز للتنفيذ. اضغط تنفيذ الآن.";
+  }
+
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "action",
+    action: parsed.intent,
+    ui: {
+      mode: "action",
+      title: "معاينة الأمر قبل التنفيذ",
+      summary: message,
+      badges: ["أمر تنفيذي", "جاهز للتنفيذ"],
+      result_type: "summary",
+      has_items: false,
+    },
+    execution: {
+      status: "ready_to_execute",
+      ready_to_execute: true,
+      executed: false,
+      payload: parsed.action_payload || null,
+      missing_fields: [],
+    },
+    result: null,
+    answer: message,
+    followUps: ["نفذ الآن"],
+    insights: [],
+    session_snapshot: null,
+  };
+}
+
+async function queryAiAnalytics({ user, body }) {
+  const question = String(body?.question || "").trim();
+
+  if (!question) {
+    const err = new Error("question is required");
+    err.status = 400;
+    throw err;
+  }
+
+  const parsed = parseAiQuestion({
+    question,
+    context: body?.context || null,
+    user,
+    body,
+  });
+
+  if (parsed?.mode === "unsupported_followup") {
+    return buildUnsupportedFollowupResponse({
+      parsed,
+      body,
+    });
+  }
+
+  if (!parsed || parsed.mode === "unknown" || parsed.intent === "unknown") {
+    const entityFollowUpResponse = handleEntityIntelligenceFollowUp({
+      parsed: parsed || { mode: "unknown", intent: "unknown" },
+      question,
+      snapshot: body?.session_snapshot || null,
+    });
+
+    if (entityFollowUpResponse) {
+      return entityFollowUpResponse;
+    }
+
+    return buildUnknownResponse(parsed);
+  }
+
+  if (parsed.mode === "reference_followup") {
+    if (parsed.intent === "reference_previous_expand_limit") {
+      return buildReferenceExpandLimitResponse({
+        parsed,
+        snapshot: body?.session_snapshot || null,
+      });
+    }
+
+    const referenceResult = resolveReferenceFollowUp({
+      parsed,
+      body,
+    });
+
+    return buildReferenceFollowUpResponse({
+      parsed,
+      referenceResult,
+    });
+  }
+
+  if (parsed.mode === "action" && !body?.auto_execute) {
+    return buildActionPreviewResponse({ parsed });
+  }
+
+  if (parsed.mode === "action") {
+    const execution = await executeAiAction({
+      interpreted: {
+        mode: "action",
+        domain: parsed.domain,
+        action: parsed.intent,
+        confidence: parsed.confidence,
+        auto_execute: parsed.auto_execute,
+        payload: parsed.action_payload || {},
+      },
+      user,
+    });
+
+    const built = buildArabicAnswer({
+      parsed,
+      execution,
+      result: execution,
+    });
+
+    const followUps = getFollowUpQuestions({
+      parsed,
+      execution,
+      result: execution,
+    });
+
+    return {
+      ok: true,
+      parsed,
+      intent: parsed,
+      mode: "action",
+      action: parsed.intent,
+      ui: built.ui,
+      execution: {
+        status: execution?.executed ? "executed" : "execution_failed",
+        ready_to_execute: false,
+        executed: Boolean(execution?.executed),
+        payload: parsed.action_payload || null,
+        missing_fields: [],
+      },
+      result: execution,
+      answer: built.answer,
+      followUps,
+      insights: [],
+      session_snapshot: null,
+    };
+  }
+
+  const result = await executeParsedQuery({ user, parsed });
+
+  if (!result) {
+    const entityFollowUpResponse = handleEntityIntelligenceFollowUp({
+      parsed,
+      question,
+      snapshot: body?.session_snapshot || null,
+    });
+
+    if (entityFollowUpResponse) {
+      return entityFollowUpResponse;
+    }
+
+    return buildUnknownResponse(parsed);
+  }
+
+  const built = buildArabicAnswer({
+    parsed,
+    result,
+  });
+
+  const followUps = getFollowUpQuestions({
+    parsed,
+    result,
+  });
+
+  const insights = await buildInlineInsights({
+    user,
+    parsed,
+    result,
+  });
+
+  const baseSessionSnapshot = buildSessionSnapshot({
+    parsed,
+    result,
+  });
+
+  const sessionSnapshot = enrichSessionSnapshotWithEntities({
+    parsed,
+    result,
+    snapshot: baseSessionSnapshot,
+  });
+
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "query",
+    ui: built.ui,
+    result,
+    answer: built.answer,
+    followUps,
+    insights,
+    session_snapshot: sessionSnapshot,
+  };
+}
+
+async function getAiSuggestedQuestions({ user, query }) {
+  const context = String(query?.context || "").trim().toLowerCase() || null;
+
+  const questions = getSuggestedQuestions({
+    user,
+    context,
+  });
+
+  return {
+    ok: true,
+    context,
+    questions,
+  };
+}
+
+async function getAiInsights({ user, query }) {
+  const context = String(query?.context || "").trim().toLowerCase() || null;
+
+  const data = {};
+
+  if (!context || context === "finance") {
+    data.expenseSummary = await analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "this_month" },
+    });
+
+    data.expenseByType = await analyticsService.getFinanceExpenseByType({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.expenseByVehicle = await analyticsService.getFinanceExpenseByVehicle({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.expenseByPaymentSource =
+      await analyticsService.getFinanceExpenseByPaymentSource({
+        user,
+        query: { range: "this_month" },
+      });
+
+    data.topVendors = await analyticsService.getFinanceTopVendors({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
+
+    data.expenseApprovalBreakdown =
+      await analyticsService.getFinanceExpenseApprovalBreakdown({
+        user,
+        query: { range: "this_month" },
+      });
+
+    data.expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
+      user,
+      query: { range: "last_month" },
+    });
+  }
+
+  if (!context || context === "ar") {
+    data.outstandingSummary = await analyticsService.getArOutstandingSummary({
+      user,
+      query: { range: "this_month" },
+    });
+
+    data.topDebtors = await analyticsService.getArTopDebtors({
+      user,
+      query: {
+        range: "this_month",
         limit: 5,
-        response_type: "table",
       },
-    };
+    });
   }
 
-  return null;
-}
+  if (!context || context === "maintenance") {
+    data.openWorkOrders = await analyticsService.getMaintenanceOpenWorkOrders({
+      user,
+      query: { range: "this_month" },
+    });
 
-function parseReferenceFollowUp(question, base) {
-  const text = base.normalized_question;
-
-  if (includesAny(text, ["الاول", "الأول", "اول واحد", "اول عميل", "اول مركبه", "اول صنف"])) {
-    return {
-      ...base,
-      mode: "reference_followup",
-      intent: "reference_previous_item",
-      confidence: 0.85,
-      entities: {
-        ...base.entities,
-        ordinal_ref: 1,
+    data.costByVehicle = await analyticsService.getMaintenanceCostByVehicle({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
       },
-      options: {
-        ...base.options,
-        response_type: "table",
-      },
-    };
+    });
   }
 
-  if (includesAny(text, ["الثاني", "تاني واحد", "العميل الثاني", "المركبه الثانيه"])) {
-    return {
-      ...base,
-      mode: "reference_followup",
-      intent: "reference_previous_item",
-      confidence: 0.8,
-      entities: {
-        ...base.entities,
-        ordinal_ref: 2,
+  if (!context || context === "inventory") {
+    data.topIssuedParts = await analyticsService.getInventoryTopIssuedParts({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
       },
-      options: {
-        ...base.options,
-        response_type: "table",
-      },
-    };
-  }
+    });
 
-  if (includesAny(text, ["نفس العميل", "نفس المركبه", "نفس العربية", "نفس الصنف", "نفسه", "نفسها"])) {
-    return {
-      ...base,
-      mode: "reference_followup",
-      intent: "reference_previous_entity",
-      confidence: 0.78,
-      entities: {
-        ...base.entities,
-        same_as_previous: true,
-      },
-      options: {
-        ...base.options,
-        response_type: "table",
-      },
-    };
-  }
-
-  if (
-    includesAny(text, [
-      "اعرض اعلى 10",
-      "اعرض اعلي 10",
-      "اعرض 10",
-      "هات 10",
-      "طلع 10",
-      "top 10",
-    ])
-  ) {
-    return {
-      ...base,
-      mode: "reference_followup",
-      intent: "reference_previous_expand_limit",
-      confidence: 0.82,
-      options: {
-        ...base.options,
+    data.lowStockItems = await analyticsService.getInventoryLowStockItems({
+      user,
+      query: {
         limit: 10,
-        response_type: "table",
       },
-    };
+    });
   }
 
-  return null;
-}
+  if (!context || context === "trips") {
+    data.tripsSummary = await analyticsService.getTripsSummary({
+      user,
+      query: { range: "this_month" },
+    });
 
-function parseAiQuestion({ question, context = null, user, body = {} }) {
-  let base = buildBaseParsed({ question, context, user, body });
-  base = applySnapshotEntityHints(base, body);
+    data.activeTrips = await analyticsService.getActiveTrips({
+      user,
+      query: { range: "this_month", limit: 5 },
+    });
 
-  const action = detectAction(question, body, base);
-  if (action) return action;
+    data.tripsNeedFinancialClosure =
+      await analyticsService.getTripsNeedingFinancialClosure({
+        user,
+        query: { range: "this_month", limit: 5 },
+      });
 
-  const refFollowup = parseReferenceFollowUp(question, base);
-  if (refFollowup) return refFollowup;
+    data.topClientsByTrips = await analyticsService.getTopClientsByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
+      },
+    });
 
-  const possessiveFollowup = parsePossessiveFollowUp(question, base, body);
-  if (possessiveFollowup) return possessiveFollowup;
+    data.topSitesByTrips = await analyticsService.getTopSitesByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
+      },
+    });
 
-  const tripsFollowup = parseTripsFollowup(question, base, body);
-  if (tripsFollowup) return tripsFollowup;
+    data.topVehiclesByTrips = await analyticsService.getTopVehiclesByTrips({
+      user,
+      query: {
+        range: "this_month",
+        limit: 5,
+      },
+    });
+  }
 
-  const moduleName = base.module;
-  let parsed = null;
+  const insights = buildInsightsByContext({
+    context,
+    data,
+  });
 
-  if (moduleName === "finance") parsed = parseFinance(question, base);
-  if (!parsed && moduleName === "ar") parsed = parseAr(question, base);
-  if (!parsed && moduleName === "maintenance") parsed = parseMaintenance(question, base);
-  if (!parsed && moduleName === "inventory") parsed = parseInventory(question, base);
-  if (!parsed && moduleName === "trips") parsed = parseTrips(question, base);
-
-  if (parsed) return parsed;
-
-  parsed =
-    parseFinance(question, base) ||
-    parseAr(question, base) ||
-    parseMaintenance(question, base) ||
-    parseInventory(question, base) ||
-    parseTrips(question, base);
-
-  if (parsed) return parsed;
-
-  return base;
+  return {
+    ok: true,
+    context,
+    insights,
+  };
 }
 
 module.exports = {
-  parseAiQuestion,
-  allowedModulesByRole,
+  queryAiAnalytics,
+  getAiSuggestedQuestions,
+  getAiInsights,
 };
