@@ -114,6 +114,11 @@ function buildUnsupportedFollowupResponse({ parsed, body }) {
       "اعرض أعلى 5 مركبات حسب الرحلات",
       "اعرض أعلى 5 مواقع حسب الرحلات",
     ];
+      } else if (parsed?.unsupported_reason === "profit_requires_client") {
+    title = "الربحية الحالية متاحة للعملاء فقط";
+    summary = "لا يمكن حساب الربحية حاليًا إلا إذا كان المرجع الحالي عميلًا.";
+    answer = "حساب الربحية متاح حاليًا للعملاء فقط، وليس للمركبة أو الموقع أو الرحلة.";
+    followUps = ["اعرض أعلى 5 عملاء حسب الرحلات", "اعرض أعلى 5 عملاء مديونية"];
   } else if (parsed?.unsupported_reason === "expenses_requires_supported_owner") {
     title = "لا يمكن تحديد المصروفات لهذا المرجع";
     summary = "المصروفات الحالية يمكن ربطها بعميل أو موقع أو مركبة فقط.";
@@ -246,6 +251,10 @@ async function executeParsedQuery({ user, parsed }) {
 
   if (intent === "top_vehicles_by_trips") {
     return analyticsService.getTopVehiclesByTrips({ user, query });
+  }
+
+    if (intent === "entity_profit_summary") {
+    return analyticsService.getEntityProfitSummary({ user, query });
   }
 
   return null;
