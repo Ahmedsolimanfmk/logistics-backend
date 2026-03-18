@@ -117,6 +117,8 @@ function buildBaseParsed({ question, context, user, body }) {
       paid_method: extractPaidMethod(question) || null,
       ordinal_ref: null,
       same_as_previous: false,
+      possessive_owner_type: null,
+      possessive_owner_label: null,
     },
     metric: null,
     group_by: null,
@@ -141,6 +143,7 @@ function applySnapshotEntityHints(base, body = {}) {
   const snapshot = body?.session_snapshot || null;
   const applied = snapshot?.applied_entities || {};
   const firstEntity = snapshot?.first_entity || null;
+  const primaryEntity = snapshot?.entity_context?.primary_entity || null;
 
   const merged = {
     ...base,
@@ -150,17 +153,22 @@ function applySnapshotEntityHints(base, body = {}) {
         base?.entities?.vehicle_hint ||
         applied?.vehicle_hint ||
         firstEntity?.vehicle_hint ||
+        (primaryEntity?.type === "vehicle" ? primaryEntity?.label : null) ||
         null,
       client_hint:
         base?.entities?.client_hint ||
         applied?.client_hint ||
         firstEntity?.client_hint ||
+        (primaryEntity?.type === "client" ? primaryEntity?.label : null) ||
         null,
       site_hint:
         base?.entities?.site_hint ||
         applied?.site_hint ||
         firstEntity?.site_hint ||
+        (primaryEntity?.type === "site" ? primaryEntity?.label : null) ||
         null,
+      possessive_owner_type: primaryEntity?.type || null,
+      possessive_owner_label: primaryEntity?.label || null,
     },
   };
 
@@ -682,6 +690,8 @@ function parseTripsFollowup(question, base, body = {}) {
       "اعرض رحلاتها",
       "الرحلات الخاصة به",
       "الرحلات الخاصة بها",
+      "رحلاته",
+      "رحلاتها",
     ])
   ) {
     if (hasClient || hasSite || hasVehicle) {
@@ -763,6 +773,214 @@ function parseTripsFollowup(question, base, body = {}) {
         },
       };
     }
+  }
+
+  return null;
+}
+
+function parsePossessiveFollowUp(question, base, body = {}) {
+  const text = base.normalized_question;
+  const snapshot = body?.session_snapshot || null;
+  const primaryEntity = snapshot?.entity_context?.primary_entity || null;
+
+  const ownerType = primaryEntity?.type || null;
+  const ownerLabel = primaryEntity?.label || null;
+
+  if (!ownerType || !ownerLabel) return null;
+
+  if (includesAny(text, ["مديونيته", "مديونيتها", "مستحقاته", "مستحقاتها"])) {
+    if (ownerType !== "client") {
+      return {
+        ...base,
+        mode: "unsupported_followup",
+        module: "ar",
+        domain: "ar",
+        intent: "unsupported_possessive_relation",
+        confidence: 0.8,
+        unsupported_reason: "receivables_requires_client",
+        options: {
+          ...base.options,
+          response_type: "summary",
+        },
+      };
+    }
+
+    return {
+      ...base,
+      mode: "query",
+      module: "ar",
+      domain: "ar",
+      intent: "outstanding_summary",
+      confidence: 0.9,
+      metric: "total_outstanding",
+      filters: {
+        ...base.filters,
+        focus: "summary",
+      },
+      entities: {
+        ...base.entities,
+        client_hint: base.entities.client_hint || ownerLabel,
+      },
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    };
+  }
+
+  if (includesAny(text, ["رحلاته", "رحلاتها"])) {
+    if (!["client", "vehicle", "site"].includes(ownerType)) {
+      return {
+        ...base,
+        mode: "unsupported_followup",
+        module: "trips",
+        domain: "trips",
+        intent: "unsupported_possessive_relation",
+        confidence: 0.8,
+        unsupported_reason: "trips_requires_client_vehicle_site",
+        options: {
+          ...base.options,
+          response_type: "summary",
+        },
+      };
+    }
+
+    const entities = { ...base.entities };
+
+    if (ownerType === "client") {
+      entities.client_hint = entities.client_hint || ownerLabel;
+    } else if (ownerType === "vehicle") {
+      entities.vehicle_hint = entities.vehicle_hint || ownerLabel;
+    } else if (ownerType === "site") {
+      entities.site_hint = entities.site_hint || ownerLabel;
+    }
+
+    return {
+      ...base,
+      mode: "query",
+      module: "trips",
+      domain: "trips",
+      intent: "trips_summary",
+      confidence: 0.9,
+      metric: "total_trips",
+      entities,
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    };
+  }
+
+  if (includesAny(text, ["صيانته", "صيانتها"])) {
+    if (ownerType !== "vehicle") {
+      return {
+        ...base,
+        mode: "unsupported_followup",
+        module: "maintenance",
+        domain: "maintenance",
+        intent: "unsupported_possessive_relation",
+        confidence: 0.8,
+        unsupported_reason: "maintenance_requires_vehicle",
+        options: {
+          ...base.options,
+          response_type: "summary",
+        },
+      };
+    }
+
+    return {
+      ...base,
+      mode: "query",
+      module: "maintenance",
+      domain: "maintenance",
+      intent: "maintenance_cost_by_vehicle",
+      confidence: 0.9,
+      metric: "maintenance_cost",
+      group_by: "vehicle",
+      entities: {
+        ...base.entities,
+        vehicle_hint: base.entities.vehicle_hint || ownerLabel,
+      },
+      options: {
+        ...base.options,
+        limit: 1,
+        response_type: "summary",
+      },
+    };
+  }
+
+  if (includesAny(text, ["مصروفاته", "مصروفاتها", "مصاريفه", "مصاريفها"])) {
+    if (ownerType === "vehicle") {
+      return {
+        ...base,
+        mode: "query",
+        module: "finance",
+        domain: "finance",
+        intent: "expense_by_vehicle",
+        confidence: 0.9,
+        metric: "expense_amount",
+        group_by: "vehicle",
+        entities: {
+          ...base.entities,
+          vehicle_hint: base.entities.vehicle_hint || ownerLabel,
+        },
+        options: {
+          ...base.options,
+          limit: 1,
+          response_type: "summary",
+        },
+      };
+    }
+
+    if (ownerType === "client") {
+      return {
+        ...base,
+        mode: "unsupported_followup",
+        module: "finance",
+        domain: "finance",
+        intent: "client_expense_followup_pending",
+        confidence: 0.8,
+        unsupported_reason: "client_expense_intent_not_implemented",
+        entities: {
+          ...base.entities,
+          client_hint: base.entities.client_hint || ownerLabel,
+        },
+        options: {
+          ...base.options,
+          response_type: "summary",
+        },
+      };
+    }
+
+    return {
+      ...base,
+      mode: "unsupported_followup",
+      module: "finance",
+      domain: "finance",
+      intent: "unsupported_possessive_relation",
+      confidence: 0.8,
+      unsupported_reason: "expenses_requires_supported_owner",
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    };
+  }
+
+  if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها"])) {
+    return {
+      ...base,
+      mode: "unsupported_followup",
+      module: "finance",
+      domain: "finance",
+      intent: "profit_followup_pending",
+      confidence: 0.8,
+      unsupported_reason: "profit_intent_not_implemented",
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    };
   }
 
   return null;
@@ -1087,6 +1305,9 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
 
   const refFollowup = parseReferenceFollowUp(question, base);
   if (refFollowup) return refFollowup;
+
+  const possessiveFollowup = parsePossessiveFollowUp(question, base, body);
+  if (possessiveFollowup) return possessiveFollowup;
 
   const tripsFollowup = parseTripsFollowup(question, base, body);
   if (tripsFollowup) return tripsFollowup;
