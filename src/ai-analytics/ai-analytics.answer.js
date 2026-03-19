@@ -78,6 +78,8 @@ function approvalStatusLabel(v) {
   if (s === "APPROVED") return "معتمد";
   if (s === "PENDING") return "معلق";
   if (s === "REJECTED") return "مرفوض";
+  if (s === "REAPPROVED") return "معاد اعتماده";
+  if (s === "APPEALED") return "تم التظلم عليه";
   return v || "غير محدد";
 }
 
@@ -173,6 +175,96 @@ function buildReferenceFollowupAnswer({ parsed, result }) {
   return `تم الرجوع إلى النتائج السابقة وتحديد: "${renderEntityLabel(item)}".`;
 }
 
+function buildProfitAnswer(parsed, result) {
+  const revenue = Number(
+    pickValue(result, [
+      ["data", "revenue"],
+      ["revenue"],
+    ]) || 0
+  );
+
+  const expense = Number(
+    pickValue(result, [
+      ["data", "expense"],
+      ["expense"],
+    ]) || 0
+  );
+
+  const profit = Number(
+    pickValue(result, [
+      ["data", "profit"],
+      ["profit"],
+    ]) || 0
+  );
+
+  const marginPct = Number(
+    pickValue(result, [
+      ["data", "margin_pct"],
+      ["margin_pct"],
+    ]) || 0
+  );
+
+  const invoicesCount = Number(
+    pickValue(result, [
+      ["data", "invoices_count"],
+      ["invoices_count"],
+    ]) || 0
+  );
+
+  const expensesCount = Number(
+    pickValue(result, [
+      ["data", "expenses_count"],
+      ["expenses_count"],
+    ]) || 0
+  );
+
+  const matchedClients =
+    pickValue(result, [
+      ["data", "matched_clients"],
+      ["matched_clients"],
+    ]) || [];
+
+  const reasoning =
+    pickValue(result, [
+      ["reasoning"],
+    ]) || null;
+
+  const clientLabel =
+    parsed?.entities?.client_hint ||
+    (Array.isArray(matchedClients) && matchedClients[0]) ||
+    "العميل المحدد";
+
+  if (revenue === 0 && expense === 0) {
+    return `لا توجد حركة مالية كافية للعميل "${clientLabel}" خلال ${labelRange(
+      parsed?.filters?.range
+    )} للحكم على الربحية.`;
+  }
+
+  let verdict = "";
+  if (reasoning?.verdict) {
+    verdict = `${reasoning.verdict} `;
+  } else if (profit > 0) {
+    verdict = "العميل مربح. ";
+  } else if (profit < 0) {
+    verdict = "العميل غير مربح حاليًا. ";
+  } else {
+    verdict = "العميل عند نقطة التعادل تقريبًا. ";
+  }
+
+  let note = "";
+  if (reasoning?.note) {
+    note = ` ${reasoning.note}`;
+  }
+
+  return `${verdict}إيراده خلال ${labelRange(
+    parsed?.filters?.range
+  )} هو ${money(revenue)} جنيه، ومصروفاته ${money(expense)} جنيه، وصافي الربح ${money(
+    profit
+  )} جنيه، بهامش ربح ${money(marginPct)}%. عدد الفواتير ${Number(
+    invoicesCount
+  )} وعدد المصروفات ${Number(expensesCount)}.${note}`;
+}
+
 function buildUiMeta({ parsed, result, answer }) {
   const intent = parsed?.intent;
   const range = parsed?.filters?.range;
@@ -214,6 +306,7 @@ function buildUiMeta({ parsed, result, answer }) {
   else if (intent === "top_clients_by_trips") title = limit > 1 ? "أعلى العملاء حسب الرحلات" : "أعلى عميل حسب الرحلات";
   else if (intent === "top_sites_by_trips") title = limit > 1 ? "أعلى المواقع حسب الرحلات" : "أعلى موقع حسب الرحلات";
   else if (intent === "top_vehicles_by_trips") title = limit > 1 ? "أعلى المركبات حسب الرحلات" : "أعلى مركبة حسب الرحلات";
+  else if (intent === "entity_profit_summary") title = "ربحية العميل";
   else if (intent === "create_work_order") title = "إنشاء أمر عمل";
   else if (intent === "create_maintenance_request") title = "إنشاء طلب صيانة";
   else if (intent === "create_expense") title = "تسجيل مصروف";
@@ -274,6 +367,14 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
 
     if (parsed?.entities?.vehicle_hint) {
       answer = `إجمالي مصروفات المركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${money(totalExpense)} جنيه مصري.`;
+    } else if (parsed?.entities?.client_hint) {
+      answer = `إجمالي مصروفات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${money(totalExpense)} جنيه مصري.`;
+    } else if (parsed?.entities?.site_hint) {
+      answer = `إجمالي مصروفات الموقع "${parsed.entities.site_hint}" خلال ${labelRange(
         parsed?.filters?.range
       )} هو ${money(totalExpense)} جنيه مصري.`;
     }
@@ -447,6 +548,18 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       )} هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`;
     }
 
+    if (parsed?.entities?.client_hint) {
+      if (focus === "overdue_only") {
+        answer = `قيمة متأخرات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
+          parsed?.filters?.range
+        )} هي ${money(overdueAmount)} جنيه.`;
+      } else {
+        answer = `إجمالي مستحقات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
+          parsed?.filters?.range
+        )} هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`;
+      }
+    }
+
     return {
       answer,
       ui: buildUiMeta({ parsed, result, answer }),
@@ -494,9 +607,15 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       ["total"],
     ]);
 
-    const answer = `عدد أوامر العمل المفتوحة خلال ${labelRange(
+    let answer = `عدد أوامر العمل المفتوحة خلال ${labelRange(
       parsed?.filters?.range
     )} هو ${Number(totalOpen || 0)}.`;
+
+    if (parsed?.entities?.vehicle_hint) {
+      answer = `عدد أوامر العمل المفتوحة للمركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
+        parsed?.filters?.range
+      )} هو ${Number(totalOpen || 0)}.`;
+    }
 
     return {
       answer,
@@ -810,6 +929,14 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       }" بعدد ${Number(top.trips_count || 0)} رحلة.`;
     }
 
+    return {
+      answer,
+      ui: buildUiMeta({ parsed, result, answer }),
+    };
+  }
+
+  if (intent === "entity_profit_summary") {
+    const answer = buildProfitAnswer(parsed, result);
     return {
       answer,
       ui: buildUiMeta({ parsed, result, answer }),
