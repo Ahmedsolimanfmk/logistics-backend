@@ -1,22 +1,22 @@
 const prisma = require("../prisma");
 
 // =======================
-// Helpers
+// Generic Helpers
 // =======================
 function roleUpper(role) {
-  return String(role || "").toUpperCase();
+  return String(role || "").trim().toUpperCase();
 }
 
 function isAdminOrAccountant(role) {
   return ["ADMIN", "ACCOUNTANT"].includes(roleUpper(role));
 }
 
-function cleanText(v) {
-  return String(v || "").trim();
+function cleanText(value) {
+  return String(value || "").trim();
 }
 
-function normalizeText(v) {
-  return cleanText(v)
+function normalizeText(value) {
+  return cleanText(value)
     .toLowerCase()
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
@@ -30,20 +30,66 @@ function getUserId(user) {
   return user?.sub || user?.id || user?.userId || null;
 }
 
-function isUuid(v) {
+function isUuid(value) {
   return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
   );
 }
 
-function normalizePaymentSource(v) {
-  const s = String(v || "ADVANCE").toUpperCase();
-  if (["COMPANY", "CO", "DIRECT"].includes(s)) return "COMPANY";
-  if (["CASH", "ADVANCE", "ADV"].includes(s)) return "ADVANCE";
+function normalizePaymentSource(value) {
+  const source = String(value || "ADVANCE").toUpperCase();
+
+  if (["COMPANY", "CO", "DIRECT"].includes(source)) return "COMPANY";
+  if (["CASH", "ADVANCE", "ADV"].includes(source)) return "ADVANCE";
+
   return "ADVANCE";
 }
 
+function buildError(message, payload, extra = {}) {
+  return {
+    ok: false,
+    executed: false,
+    message,
+    payload,
+    ...extra,
+  };
+}
+
+function buildSuccess(executor, data) {
+  return {
+    ok: true,
+    executed: true,
+    executor,
+    data,
+  };
+}
+
+function buildVehicleSummary(vehicle) {
+  if (!vehicle) return null;
+
+  return {
+    id: vehicle.id,
+    fleet_no: vehicle.fleet_no || null,
+    plate_no: vehicle.plate_no || null,
+    display_name: vehicle.display_name || null,
+  };
+}
+
+function buildOptionalRef(id) {
+  return id ? { id } : null;
+}
+
+function isTripFinancialLocked(financial_status) {
+  const status = String(financial_status || "OPEN").toUpperCase();
+  return ["IN_REVIEW", "CLOSED"].includes(status);
+}
+
+// =======================
+// Permission Helpers
+// =======================
 async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
@@ -58,8 +104,14 @@ async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
 }
 
 async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
-  const where = { trip_id, field_supervisor_id: userId };
-  if (vehicle_id) where.vehicle_id = vehicle_id;
+  const where = {
+    trip_id,
+    field_supervisor_id: userId,
+  };
+
+  if (vehicle_id) {
+    where.vehicle_id = vehicle_id;
+  }
 
   const row = await prisma.trip_assignments.findFirst({
     where,
@@ -70,11 +122,33 @@ async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   return !!row;
 }
 
-function isTripFinancialLocked(financial_status) {
-  const s = String(financial_status || "OPEN").toUpperCase();
-  return ["IN_REVIEW", "CLOSED"].includes(s);
+async function assertVehicleAccessForUser({ user, vehicleId, payload }) {
+  const userId = getUserId(user);
+  const role = user?.role || null;
+
+  if (!userId) {
+    return buildError("Unauthorized", payload);
+  }
+
+  if (isAdminOrAccountant(role)) {
+    return null;
+  }
+
+  const allowed = await assertVehicleInSupervisorPortfolio({
+    vehicle_id: vehicleId,
+    userId,
+  });
+
+  if (!allowed) {
+    return buildError("Forbidden: vehicle not in your portfolio", payload);
+  }
+
+  return null;
 }
 
+// =======================
+// Resolvers
+// =======================
 async function resolveVehicleByHint(vehicleHint) {
   const hint = cleanText(vehicleHint);
   if (!hint) return null;
@@ -108,10 +182,10 @@ async function resolveVehicleByHint(vehicleHint) {
   });
 
   const scored = candidates
-    .map((v) => {
-      const fleet = normalizeText(v.fleet_no || "");
-      const plate = normalizeText(v.plate_no || "");
-      const display = normalizeText(v.display_name || "");
+    .map((vehicle) => {
+      const fleet = normalizeText(vehicle.fleet_no || "");
+      const plate = normalizeText(vehicle.plate_no || "");
+      const display = normalizeText(vehicle.display_name || "");
 
       let score = 0;
 
@@ -127,9 +201,9 @@ async function resolveVehicleByHint(vehicleHint) {
       if (normalizedHint.includes(plate) && plate) score = Math.max(score, 70);
       if (normalizedHint.includes(display) && display) score = Math.max(score, 70);
 
-      return { vehicle: v, score };
+      return { vehicle, score };
     })
-    .filter((x) => x.score > 0)
+    .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
 
   return scored[0]?.vehicle || null;
@@ -147,44 +221,43 @@ async function resolveTripByHint(tripHint) {
         financial_status: true,
       },
     });
+
     if (byId) return byId;
   }
 
   const numericId = Number(hint);
-  if (Number.isFinite(numericId)) {
-    const candidates = await prisma.trips.findMany({
-      take: 20,
-      orderBy: { created_at: "desc" },
-      select: {
-        id: true,
-        financial_status: true,
-      },
-    });
-
-    const found = candidates.find((x) => String(x.id).includes(String(hint)));
-    if (found) return found;
+  if (!Number.isFinite(numericId)) {
+    return null;
   }
 
-  return null;
+  const candidates = await prisma.trips.findMany({
+    take: 20,
+    orderBy: { created_at: "desc" },
+    select: {
+      id: true,
+      financial_status: true,
+    },
+  });
+
+  return candidates.find((item) => String(item.id).includes(String(hint))) || null;
 }
 
 async function resolveWorkOrderByHint(workOrderHint) {
   const hint = cleanText(workOrderHint);
   if (!hint) return null;
 
-  if (isUuid(hint)) {
-    const byId = await prisma.maintenance_work_orders.findUnique({
-      where: { id: hint },
-      select: {
-        id: true,
-        vehicle_id: true,
-        status: true,
-      },
-    });
-    if (byId) return byId;
+  if (!isUuid(hint)) {
+    return null;
   }
 
-  return null;
+  return prisma.maintenance_work_orders.findUnique({
+    where: { id: hint },
+    select: {
+      id: true,
+      vehicle_id: true,
+      status: true,
+    },
+  });
 }
 
 async function resolveOpenAdvanceForSupervisor(userId) {
@@ -203,18 +276,240 @@ async function resolveOpenAdvanceForSupervisor(userId) {
   });
 }
 
+async function resolveTripById(tripId) {
+  if (!tripId) return null;
+
+  return prisma.trips.findUnique({
+    where: { id: tripId },
+    select: {
+      id: true,
+      financial_status: true,
+    },
+  });
+}
+
+async function resolveAdvanceById(advanceId) {
+  if (!advanceId) return null;
+
+  return prisma.cash_advances.findUnique({
+    where: { id: advanceId },
+    select: {
+      id: true,
+      status: true,
+      field_supervisor_id: true,
+    },
+  });
+}
+
+// =======================
+// Expense Helpers
+// =======================
+async function resolveExpenseReferences(payload) {
+  const vehicleHint = cleanText(payload?.vehicle_hint || "");
+  const tripHint = cleanText(payload?.trip_hint || "");
+  const workOrderHint = cleanText(payload?.work_order_hint || "");
+
+  const vehicle = vehicleHint ? await resolveVehicleByHint(vehicleHint) : null;
+  const trip = tripHint ? await resolveTripByHint(tripHint) : null;
+
+  const workOrder = workOrderHint
+    ? await resolveWorkOrderByHint(workOrderHint)
+    : payload?.maintenance_work_order_id
+    ? await resolveWorkOrderByHint(payload.maintenance_work_order_id)
+    : null;
+
+  const finalTripId =
+    payload?.trip_id && isUuid(payload.trip_id)
+      ? payload.trip_id
+      : trip?.id || null;
+
+  const finalWorkOrderId =
+    payload?.maintenance_work_order_id && isUuid(payload.maintenance_work_order_id)
+      ? payload.maintenance_work_order_id
+      : workOrder?.id || null;
+
+  const finalVehicleId =
+    vehicle?.id || workOrder?.vehicle_id || payload?.vehicle_id || null;
+
+  return {
+    vehicle,
+    trip,
+    workOrder,
+    finalTripId,
+    finalWorkOrderId,
+    finalVehicleId,
+  };
+}
+
+async function validateTripForExpense({ trip, finalTripId, payload }) {
+  if (!finalTripId) return null;
+
+  const tripRow = trip || (await resolveTripById(finalTripId));
+
+  if (!tripRow) {
+    return buildError("Invalid trip reference", payload);
+  }
+
+  if (isTripFinancialLocked(tripRow.financial_status)) {
+    return buildError(
+      `Trip is financially locked (${tripRow.financial_status})`,
+      payload
+    );
+  }
+
+  return null;
+}
+
+function buildCompanyExpenseCreateData({
+  userId,
+  payload,
+  expenseType,
+  amount,
+  notes,
+  finalTripId,
+  finalVehicleId,
+  finalWorkOrderId,
+}) {
+  return {
+    payment_source: "COMPANY",
+
+    trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
+    vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
+    maintenance_work_orders: finalWorkOrderId
+      ? { connect: { id: finalWorkOrderId } }
+      : undefined,
+
+    expense_type: expenseType,
+    amount,
+    notes: notes || null,
+    receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
+
+    vendor_name: cleanText(payload?.vendor_name || "AI Created Expense"),
+    invoice_no: payload?.invoice_no ? String(payload.invoice_no) : null,
+    invoice_date: payload?.invoice_date ? new Date(payload.invoice_date) : null,
+    paid_method: payload?.paid_method
+      ? String(payload.paid_method).toUpperCase()
+      : null,
+    payment_ref: payload?.payment_ref ? String(payload.payment_ref) : null,
+    vat_amount:
+      payload?.vat_amount !== undefined && payload?.vat_amount !== null
+        ? Number(payload.vat_amount)
+        : null,
+    invoice_total:
+      payload?.invoice_total !== undefined && payload?.invoice_total !== null
+        ? Number(payload.invoice_total)
+        : null,
+
+    approval_status: "PENDING",
+    users_cash_expenses_created_byTousers: {
+      connect: { id: userId },
+    },
+  };
+}
+
+function buildAdvanceExpenseCreateData({
+  userId,
+  payload,
+  cashAdvanceId,
+  expenseType,
+  amount,
+  notes,
+  finalTripId,
+  finalVehicleId,
+  finalWorkOrderId,
+}) {
+  return {
+    payment_source: "ADVANCE",
+    cash_advances: { connect: { id: cashAdvanceId } },
+
+    trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
+    vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
+    maintenance_work_orders: finalWorkOrderId
+      ? { connect: { id: finalWorkOrderId } }
+      : undefined,
+
+    expense_type: expenseType,
+    amount,
+    notes: notes || null,
+    receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
+
+    approval_status: "PENDING",
+    users_cash_expenses_created_byTousers: {
+      connect: { id: userId },
+    },
+  };
+}
+
+function buildExpenseResponseData({
+  expense,
+  vehicle,
+  advance,
+  finalTripId,
+  finalWorkOrderId,
+}) {
+  return {
+    expense,
+    vehicle: buildVehicleSummary(vehicle),
+    cash_advance: advance ? { id: advance.id } : undefined,
+    trip: buildOptionalRef(finalTripId),
+    work_order: buildOptionalRef(finalWorkOrderId),
+  };
+}
+
+async function validateAdvanceExpensePermissions({
+  userId,
+  advance,
+  finalTripId,
+  finalVehicleId,
+  payload,
+}) {
+  if (!advance || String(advance.status || "").toUpperCase() !== "OPEN") {
+    return buildError("Cash advance not found or not OPEN", payload);
+  }
+
+  if (advance.field_supervisor_id !== userId) {
+    return buildError(
+      "Only the assigned field supervisor can add ADVANCE expenses",
+      payload
+    );
+  }
+
+  if (finalTripId) {
+    const allowedTrip = await assertTripBelongsToSupervisor({
+      trip_id: finalTripId,
+      userId,
+      vehicle_id: finalVehicleId || null,
+    });
+
+    if (!allowedTrip) {
+      return buildError("You are not allowed to add expenses to this trip", payload);
+    }
+  }
+
+  if (!finalTripId && finalVehicleId) {
+    const allowedVehicle = await assertVehicleInSupervisorPortfolio({
+      vehicle_id: finalVehicleId,
+      userId,
+    });
+
+    if (!allowedVehicle) {
+      return buildError(
+        "You are not allowed to add expenses to this vehicle",
+        payload
+      );
+    }
+  }
+
+  return null;
+}
+
 // =======================
 // REAL Executor: Create Maintenance Request
 // =======================
 async function createMaintenanceRequestExecutor({ user, payload }) {
   const userId = getUserId(user);
   if (!userId) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Unauthorized",
-      payload,
-    };
+    return buildError("Unauthorized", payload);
   }
 
   const vehicleHint = cleanText(payload?.vehicle_hint);
@@ -224,36 +519,23 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
   );
 
   const vehicle = await resolveVehicleByHint(vehicleHint);
-
   if (!vehicle) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Vehicle not found from provided hint",
-      payload,
-    };
+    return buildError("Vehicle not found from provided hint", payload);
   }
 
-  const role = user?.role || null;
-  if (!isAdminOrAccountant(role)) {
-    const ok = await assertVehicleInSupervisorPortfolio({
-      vehicle_id: vehicle.id,
-      userId,
-    });
+  const accessError = await assertVehicleAccessForUser({
+    user,
+    vehicleId: vehicle.id,
+    payload,
+  });
 
-    if (!ok) {
-      return {
-        ok: false,
-        executed: false,
-        message: "Forbidden: vehicle not in your portfolio",
-        payload,
-      };
-    }
+  if (accessError) {
+    return accessError;
   }
 
   const now = new Date();
 
-  const row = await prisma.maintenance_requests.create({
+  const request = await prisma.maintenance_requests.create({
     data: {
       vehicle_id: vehicle.id,
       problem_title: problemTitle || "طلب صيانة",
@@ -276,20 +558,10 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
     },
   });
 
-  return {
-    ok: true,
-    executed: true,
-    executor: "createMaintenanceRequestExecutor",
-    data: {
-      request: row,
-      vehicle: {
-        id: vehicle.id,
-        fleet_no: vehicle.fleet_no || null,
-        plate_no: vehicle.plate_no || null,
-        display_name: vehicle.display_name || null,
-      },
-    },
-  };
+  return buildSuccess("createMaintenanceRequestExecutor", {
+    request,
+    vehicle: buildVehicleSummary(vehicle),
+  });
 }
 
 // =======================
@@ -298,12 +570,7 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
 async function createWorkOrderExecutor({ user, payload }) {
   const userId = getUserId(user);
   if (!userId) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Unauthorized",
-      payload,
-    };
+    return buildError("Unauthorized", payload);
   }
 
   const vehicleHint = cleanText(payload?.vehicle_hint);
@@ -311,37 +578,24 @@ async function createWorkOrderExecutor({ user, payload }) {
   const notes = cleanText(payload?.notes || title);
 
   const vehicle = await resolveVehicleByHint(vehicleHint);
-
   if (!vehicle) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Vehicle not found from provided hint",
-      payload,
-    };
+    return buildError("Vehicle not found from provided hint", payload);
   }
 
-  const role = user?.role || null;
-  if (!isAdminOrAccountant(role)) {
-    const ok = await assertVehicleInSupervisorPortfolio({
-      vehicle_id: vehicle.id,
-      userId,
-    });
+  const accessError = await assertVehicleAccessForUser({
+    user,
+    vehicleId: vehicle.id,
+    payload,
+  });
 
-    if (!ok) {
-      return {
-        ok: false,
-        executed: false,
-        message: "Forbidden: vehicle not in your portfolio",
-        payload,
-      };
-    }
+  if (accessError) {
+    return accessError;
   }
 
   const now = new Date();
 
   const workOrder = await prisma.$transaction(async (tx) => {
-    const wo = await tx.maintenance_work_orders.create({
+    const createdWorkOrder = await tx.maintenance_work_orders.create({
       data: {
         vehicle_id: vehicle.id,
         status: "OPEN",
@@ -376,7 +630,7 @@ async function createWorkOrderExecutor({ user, payload }) {
     if (tx.maintenance_work_order_events?.create) {
       await tx.maintenance_work_order_events.create({
         data: {
-          work_order_id: wo.id,
+          work_order_id: createdWorkOrder.id,
           event_type: "CREATE",
           actor_id: userId,
           notes,
@@ -386,23 +640,13 @@ async function createWorkOrderExecutor({ user, payload }) {
       });
     }
 
-    return wo;
+    return createdWorkOrder;
   });
 
-  return {
-    ok: true,
-    executed: true,
-    executor: "createWorkOrderExecutor",
-    data: {
-      work_order: workOrder,
-      vehicle: {
-        id: vehicle.id,
-        fleet_no: vehicle.fleet_no || null,
-        plate_no: vehicle.plate_no || null,
-        display_name: vehicle.display_name || null,
-      },
-    },
-  };
+  return buildSuccess("createWorkOrderExecutor", {
+    work_order: workOrder,
+    vehicle: buildVehicleSummary(vehicle),
+  });
 }
 
 // =======================
@@ -411,12 +655,7 @@ async function createWorkOrderExecutor({ user, payload }) {
 async function createExpenseExecutor({ user, payload }) {
   const userId = getUserId(user);
   if (!userId) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Unauthorized",
-      payload,
-    };
+    return buildError("Unauthorized", payload);
   }
 
   const role = user?.role || null;
@@ -425,133 +664,56 @@ async function createExpenseExecutor({ user, payload }) {
   const amount = Number(payload?.amount || 0);
   const expenseType = cleanText(payload?.expense_type);
   const notes = cleanText(payload?.notes || "");
-  const vehicleHint = cleanText(payload?.vehicle_hint || "");
-  const tripHint = cleanText(payload?.trip_hint || "");
-  const workOrderHint = cleanText(payload?.work_order_hint || "");
   const paymentSource = normalizePaymentSource(
     payload?.payment_source || (isPrivileged ? "COMPANY" : "ADVANCE")
   );
 
   if (!expenseType) {
-    return {
-      ok: false,
-      executed: false,
-      message: "expense_type is required",
-      payload,
-    };
+    return buildError("expense_type is required", payload);
   }
 
   if (!amount || amount <= 0) {
-    return {
-      ok: false,
-      executed: false,
-      message: "amount must be > 0",
-      payload,
-    };
+    return buildError("amount must be > 0", payload);
   }
 
-  const vehicle = vehicleHint ? await resolveVehicleByHint(vehicleHint) : null;
-  const trip = tripHint ? await resolveTripByHint(tripHint) : null;
-  const workOrder = workOrderHint
-    ? await resolveWorkOrderByHint(workOrderHint)
-    : payload?.maintenance_work_order_id
-    ? await resolveWorkOrderByHint(payload.maintenance_work_order_id)
-    : null;
+  const {
+    vehicle,
+    trip,
+    workOrder,
+    finalTripId,
+    finalWorkOrderId,
+    finalVehicleId,
+  } = await resolveExpenseReferences(payload);
 
-  const finalTripId =
-    payload?.trip_id && isUuid(payload.trip_id) ? payload.trip_id : trip?.id || null;
+  const tripValidationError = await validateTripForExpense({
+    trip,
+    finalTripId,
+    payload,
+  });
 
-  const finalWorkOrderId =
-    payload?.maintenance_work_order_id && isUuid(payload.maintenance_work_order_id)
-      ? payload.maintenance_work_order_id
-      : workOrder?.id || null;
-
-  const finalVehicleId =
-    vehicle?.id ||
-    workOrder?.vehicle_id ||
-    payload?.vehicle_id ||
-    null;
-
-  if (finalTripId) {
-    const tripRow =
-      trip ||
-      (await prisma.trips.findUnique({
-        where: { id: finalTripId },
-        select: { id: true, financial_status: true },
-      }));
-
-    if (!tripRow) {
-      return {
-        ok: false,
-        executed: false,
-        message: "Invalid trip reference",
-        payload,
-      };
-    }
-
-    if (isTripFinancialLocked(tripRow.financial_status)) {
-      return {
-        ok: false,
-        executed: false,
-        message: `Trip is financially locked (${tripRow.financial_status})`,
-        payload,
-      };
-    }
+  if (tripValidationError) {
+    return tripValidationError;
   }
 
-  // =======================
-  // COMPANY expense
-  // =======================
   if (paymentSource === "COMPANY") {
     if (!isPrivileged) {
-      return {
-        ok: false,
-        executed: false,
-        message: "Only ADMIN or ACCOUNTANT can create COMPANY expenses",
-        payload,
-      };
+      return buildError(
+        "Only ADMIN or ACCOUNTANT can create COMPANY expenses",
+        payload
+      );
     }
 
-    const vendorName = cleanText(payload?.vendor_name || "AI Created Expense");
-
     const created = await prisma.cash_expenses.create({
-      data: {
-        payment_source: "COMPANY",
-
-        trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
-
-        vehicles: finalVehicleId
-          ? { connect: { id: finalVehicleId } }
-          : undefined,
-
-        maintenance_work_orders: finalWorkOrderId
-          ? { connect: { id: finalWorkOrderId } }
-          : undefined,
-
-        expense_type: expenseType,
+      data: buildCompanyExpenseCreateData({
+        userId,
+        payload,
+        expenseType,
         amount,
-        notes: notes || null,
-        receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
-
-        vendor_name: vendorName,
-        invoice_no: payload?.invoice_no ? String(payload.invoice_no) : null,
-        invoice_date: payload?.invoice_date ? new Date(payload.invoice_date) : null,
-        paid_method: payload?.paid_method
-          ? String(payload.paid_method).toUpperCase()
-          : null,
-        payment_ref: payload?.payment_ref ? String(payload.payment_ref) : null,
-        vat_amount:
-          payload?.vat_amount !== undefined && payload?.vat_amount !== null
-            ? Number(payload.vat_amount)
-            : null,
-        invoice_total:
-          payload?.invoice_total !== undefined && payload?.invoice_total !== null
-            ? Number(payload.invoice_total)
-            : null,
-
-        approval_status: "PENDING",
-        users_cash_expenses_created_byTousers: { connect: { id: userId } },
-      },
+        notes,
+        finalTripId,
+        finalVehicleId,
+        finalWorkOrderId,
+      }),
       select: {
         id: true,
         payment_source: true,
@@ -568,137 +730,59 @@ async function createExpenseExecutor({ user, payload }) {
       },
     });
 
-    return {
-      ok: true,
-      executed: true,
-      executor: "createExpenseExecutor",
-      data: {
-        expense: created,
-        vehicle: vehicle
-          ? {
-              id: vehicle.id,
-              fleet_no: vehicle.fleet_no || null,
-              plate_no: vehicle.plate_no || null,
-              display_name: vehicle.display_name || null,
-            }
-          : null,
-        trip: finalTripId ? { id: finalTripId } : null,
-        work_order: finalWorkOrderId ? { id: finalWorkOrderId } : null,
-      },
-    };
+    return buildSuccess("createExpenseExecutor", {
+      expense: created,
+      vehicle: buildVehicleSummary(vehicle),
+      trip: buildOptionalRef(finalTripId),
+      work_order: buildOptionalRef(finalWorkOrderId),
+    });
   }
 
-  // =======================
-  // ADVANCE expense
-  // =======================
   let cashAdvanceId = payload?.cash_advance_id || null;
 
   if (!cashAdvanceId) {
     const openAdvance = await resolveOpenAdvanceForSupervisor(userId);
+
     if (!openAdvance) {
-      return {
-        ok: false,
-        executed: false,
-        message:
-          "لا يوجد cash advance مفتوح لهذا المستخدم. يجب تحديد cash_advance_id أو فتح عهدة أولًا.",
-        payload,
-      };
+      return buildError(
+        "لا يوجد cash advance مفتوح لهذا المستخدم. يجب تحديد cash_advance_id أو فتح عهدة أولًا.",
+        payload
+      );
     }
+
     cashAdvanceId = openAdvance.id;
   }
 
   if (!isUuid(cashAdvanceId)) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Invalid cash_advance_id",
-      payload,
-    };
+    return buildError("Invalid cash_advance_id", payload);
   }
 
-  const advance = await prisma.cash_advances.findUnique({
-    where: { id: cashAdvanceId },
-    select: {
-      id: true,
-      status: true,
-      field_supervisor_id: true,
-    },
+  const advance = await resolveAdvanceById(cashAdvanceId);
+
+  const advancePermissionError = await validateAdvanceExpensePermissions({
+    userId,
+    advance,
+    finalTripId,
+    finalVehicleId,
+    payload,
   });
 
-  if (!advance || String(advance.status || "").toUpperCase() !== "OPEN") {
-    return {
-      ok: false,
-      executed: false,
-      message: "Cash advance not found or not OPEN",
-      payload,
-    };
-  }
-
-  if (advance.field_supervisor_id !== userId) {
-    return {
-      ok: false,
-      executed: false,
-      message: "Only the assigned field supervisor can add ADVANCE expenses",
-      payload,
-    };
-  }
-
-  if (finalTripId) {
-    const okTrip = await assertTripBelongsToSupervisor({
-      trip_id: finalTripId,
-      userId,
-      vehicle_id: finalVehicleId || null,
-    });
-
-    if (!okTrip) {
-      return {
-        ok: false,
-        executed: false,
-        message: "You are not allowed to add expenses to this trip",
-        payload,
-      };
-    }
-  }
-
-  if (!finalTripId && finalVehicleId) {
-    const okVehicle = await assertVehicleInSupervisorPortfolio({
-      vehicle_id: finalVehicleId,
-      userId,
-    });
-
-    if (!okVehicle) {
-      return {
-        ok: false,
-        executed: false,
-        message: "You are not allowed to add expenses to this vehicle",
-        payload,
-      };
-    }
+  if (advancePermissionError) {
+    return advancePermissionError;
   }
 
   const created = await prisma.cash_expenses.create({
-    data: {
-      payment_source: "ADVANCE",
-      cash_advances: { connect: { id: cashAdvanceId } },
-
-      trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
-
-      vehicles: finalVehicleId
-        ? { connect: { id: finalVehicleId } }
-        : undefined,
-
-      maintenance_work_orders: finalWorkOrderId
-        ? { connect: { id: finalWorkOrderId } }
-        : undefined,
-
-      expense_type: expenseType,
+    data: buildAdvanceExpenseCreateData({
+      userId,
+      payload,
+      cashAdvanceId,
+      expenseType,
       amount,
-      notes: notes || null,
-      receipt_url: payload?.receipt_url ? String(payload.receipt_url) : null,
-
-      approval_status: "PENDING",
-      users_cash_expenses_created_byTousers: { connect: { id: userId } },
-    },
+      notes,
+      finalTripId,
+      finalVehicleId,
+      finalWorkOrderId,
+    }),
     select: {
       id: true,
       payment_source: true,
@@ -714,48 +798,32 @@ async function createExpenseExecutor({ user, payload }) {
     },
   });
 
-  return {
-    ok: true,
-    executed: true,
-    executor: "createExpenseExecutor",
-    data: {
-      expense: created,
-      vehicle: vehicle
-        ? {
-            id: vehicle.id,
-            fleet_no: vehicle.fleet_no || null,
-            plate_no: vehicle.plate_no || null,
-            display_name: vehicle.display_name || null,
-          }
-        : null,
-      cash_advance: {
-        id: advance.id,
-      },
-      trip: finalTripId ? { id: finalTripId } : null,
-      work_order: finalWorkOrderId ? { id: finalWorkOrderId } : null,
-    },
-  };
+  return buildSuccess("createExpenseExecutor", buildExpenseResponseData({
+    expense: created,
+    vehicle,
+    advance,
+    finalTripId,
+    finalWorkOrderId,
+  }));
 }
 
+// =======================
+// Dispatcher
+// =======================
 async function runAiExecutor({ action, user, payload }) {
-  if (action === "create_maintenance_request") {
-    return createMaintenanceRequestExecutor({ user, payload });
-  }
-
-  if (action === "create_work_order") {
-    return createWorkOrderExecutor({ user, payload });
-  }
-
-  if (action === "create_expense") {
-    return createExpenseExecutor({ user, payload });
-  }
-
-  return {
-    ok: false,
-    executed: false,
-    message: `Unsupported executor action: ${action}`,
-    payload,
+  const executors = {
+    create_maintenance_request: createMaintenanceRequestExecutor,
+    create_work_order: createWorkOrderExecutor,
+    create_expense: createExpenseExecutor,
   };
+
+  const executor = executors[action];
+
+  if (!executor) {
+    return buildError(`Unsupported executor action: ${action}`, payload);
+  }
+
+  return executor({ user, payload });
 }
 
 async function executeAiAction({ interpreted, user }) {

@@ -1,5 +1,8 @@
 const { labelRange } = require("./ai-analytics.time-labels");
 
+// =======================
+// Generic helpers
+// =======================
 function money(n) {
   return new Intl.NumberFormat("ar-EG", {
     maximumFractionDigits: 2,
@@ -37,6 +40,7 @@ function renderTopList(items, getLabel, getValue, unit = "جنيه") {
     .map((item, idx) => {
       const label = getLabel(item) || "غير محدد";
       const value = getValue(item);
+
       return `${idx + 1}) ${label} — ${
         unit === "عدد" ? Number(value || 0) : `${money(value)} ${unit}`
       }`;
@@ -75,14 +79,91 @@ function paymentSourceLabel(v) {
 
 function approvalStatusLabel(v) {
   const s = String(v || "").toUpperCase();
+
   if (s === "APPROVED") return "معتمد";
   if (s === "PENDING") return "معلق";
   if (s === "REJECTED") return "مرفوض";
   if (s === "REAPPROVED") return "معاد اعتماده";
   if (s === "APPEALED") return "تم التظلم عليه";
+
   return v || "غير محدد";
 }
 
+function answerWithUi({ parsed, result, answer }) {
+  return {
+    answer,
+    ui: buildUiMeta({ parsed, result, answer }),
+  };
+}
+
+// =======================
+// Common extractors
+// =======================
+function getRangeLabel(parsed) {
+  return labelRange(parsed?.filters?.range);
+}
+
+function getLimit(parsed) {
+  return parsed?.options?.limit || 1;
+}
+
+function getFocus(parsed) {
+  return parsed?.filters?.focus;
+}
+
+function getEntityHints(parsed) {
+  return {
+    client: parsed?.entities?.client_hint || null,
+    site: parsed?.entities?.site_hint || null,
+    vehicle: parsed?.entities?.vehicle_hint || null,
+  };
+}
+
+function buildTopOrSingleAnswer({
+  parsed,
+  result,
+  emptyText,
+  topText,
+  singleText,
+  getLabel,
+  getValue,
+  unit = "جنيه",
+}) {
+  const items = pickItems(result);
+  const limit = getLimit(parsed);
+  const rangeLabel = getRangeLabel(parsed);
+
+  if (!items.length) {
+    return answerWithUi({
+      parsed,
+      result,
+      answer: emptyText(rangeLabel),
+    });
+  }
+
+  if (limit > 1) {
+    return answerWithUi({
+      parsed,
+      result,
+      answer: topText(
+        rangeLabel,
+        Math.min(limit, items.length),
+        renderTopList(items.slice(0, limit), getLabel, getValue, unit)
+      ),
+    });
+  }
+
+  const top = items[0];
+  return answerWithUi({
+    parsed,
+    result,
+    answer: singleText(rangeLabel, top),
+  });
+}
+
+// =======================
+// Action / reference answers
+// =======================
 function buildExpenseCompareAnswer(result) {
   const current = Number(result?.data?.this_month_total || 0);
   const last = Number(result?.data?.last_month_total || 0);
@@ -175,6 +256,9 @@ function buildReferenceFollowupAnswer({ parsed, result }) {
   return `تم الرجوع إلى النتائج السابقة وتحديد: "${renderEntityLabel(item)}".`;
 }
 
+// =======================
+// Profit answer
+// =======================
 function buildProfitAnswer(parsed, result) {
   const revenue = Number(
     pickValue(result, [
@@ -235,8 +319,8 @@ function buildProfitAnswer(parsed, result) {
     "العميل المحدد";
 
   if (revenue === 0 && expense === 0) {
-    return `لا توجد حركة مالية كافية للعميل "${clientLabel}" خلال ${labelRange(
-      parsed?.filters?.range
+    return `لا توجد حركة مالية كافية للعميل "${clientLabel}" خلال ${getRangeLabel(
+      parsed
     )} للحكم على الربحية.`;
   }
 
@@ -256,8 +340,8 @@ function buildProfitAnswer(parsed, result) {
     note = ` ${reasoning.note}`;
   }
 
-  return `${verdict}إيراده خلال ${labelRange(
-    parsed?.filters?.range
+  return `${verdict}إيراده خلال ${getRangeLabel(
+    parsed
   )} هو ${money(revenue)} جنيه، ومصروفاته ${money(expense)} جنيه، وصافي الربح ${money(
     profit
   )} جنيه، بهامش ربح ${money(marginPct)}%. عدد الفواتير ${Number(
@@ -265,10 +349,14 @@ function buildProfitAnswer(parsed, result) {
   )} وعدد المصروفات ${Number(expensesCount)}.${note}`;
 }
 
+// =======================
+// UI meta
+// =======================
 function buildUiMeta({ parsed, result, answer }) {
   const intent = parsed?.intent;
   const range = parsed?.filters?.range;
-  const limit = parsed?.options?.limit || 1;
+  const limit = getLimit(parsed);
+  const hints = getEntityHints(parsed);
 
   let title = "TREX AI Response";
   const badges = [];
@@ -279,9 +367,9 @@ function buildUiMeta({ parsed, result, answer }) {
   if (parsed?.module === "inventory") badges.push("المخازن");
   if (parsed?.module === "trips") badges.push("الرحلات");
 
-  if (parsed?.entities?.client_hint) badges.push(`عميل: ${parsed.entities.client_hint}`);
-  if (parsed?.entities?.site_hint) badges.push(`موقع: ${parsed.entities.site_hint}`);
-  if (parsed?.entities?.vehicle_hint) badges.push(`مركبة: ${parsed.entities.vehicle_hint}`);
+  if (hints.client) badges.push(`عميل: ${hints.client}`);
+  if (hints.site) badges.push(`موقع: ${hints.site}`);
+  if (hints.vehicle) badges.push(`مركبة: ${hints.vehicle}`);
 
   if (parsed?.mode === "reference_followup") badges.push("متابعة");
   if (range) badges.push(labelRange(range));
@@ -324,630 +412,540 @@ function buildUiMeta({ parsed, result, answer }) {
   };
 }
 
-function buildArabicAnswer({ parsed, result, execution = null }) {
-  const intent = parsed?.intent;
-  const limit = parsed?.options?.limit || 1;
-  const focus = parsed?.filters?.focus;
+// =======================
+// Intent handlers
+// =======================
+function handleExpenseSummary(parsed, result) {
+  const totalExpense = pickValue(result, [
+    ["data", "total_expense"],
+    ["total_expense"],
+    ["data", "total"],
+    ["total"],
+  ]);
 
-  if (parsed?.mode === "action") {
-    const answer = buildActionAnswer({ parsed, execution });
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result: execution, answer }),
-    };
+  const { vehicle, client, site } = getEntityHints(parsed);
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = `إجمالي المصروفات خلال ${rangeLabel} هو ${money(totalExpense)} جنيه مصري.`;
+
+  if (vehicle) {
+    answer = `إجمالي مصروفات المركبة "${vehicle}" خلال ${rangeLabel} هو ${money(
+      totalExpense
+    )} جنيه مصري.`;
+  } else if (client) {
+    answer = `إجمالي مصروفات العميل "${client}" خلال ${rangeLabel} هو ${money(
+      totalExpense
+    )} جنيه مصري.`;
+  } else if (site) {
+    answer = `إجمالي مصروفات الموقع "${site}" خلال ${rangeLabel} هو ${money(
+      totalExpense
+    )} جنيه مصري.`;
   }
 
-  if (parsed?.mode === "reference_followup") {
-    const answer = buildReferenceFollowupAnswer({ parsed, result });
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
+  return answerWithUi({ parsed, result, answer });
+}
 
-  if (intent === "expense_summary_compare") {
-    const answer = buildExpenseCompareAnswer(result);
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
+function handleExpenseByType(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات مصروفات حسب النوع خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} أنواع مصروف خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى نوع مصروف خلال ${rangeLabel} هو "${
+        top.expense_type || top.type_name || top.name || "غير محدد"
+      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`,
+    getLabel: (x) => x.expense_type || x.type_name || x.name,
+    getValue: (x) => x.total_amount || x.amount || 0,
+  });
+}
 
-  if (intent === "expense_summary") {
-    const totalExpense = pickValue(result, [
-      ["data", "total_expense"],
-      ["total_expense"],
-      ["data", "total"],
-      ["total"],
-    ]);
-
-    let answer = `إجمالي المصروفات خلال ${labelRange(
-      parsed?.filters?.range
-    )} هو ${money(totalExpense)} جنيه مصري.`;
-
-    if (parsed?.entities?.vehicle_hint) {
-      answer = `إجمالي مصروفات المركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${money(totalExpense)} جنيه مصري.`;
-    } else if (parsed?.entities?.client_hint) {
-      answer = `إجمالي مصروفات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${money(totalExpense)} جنيه مصري.`;
-    } else if (parsed?.entities?.site_hint) {
-      answer = `إجمالي مصروفات الموقع "${parsed.entities.site_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${money(totalExpense)} جنيه مصري.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
-
-  if (intent === "expense_by_type") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات مصروفات حسب النوع خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} أنواع مصروف خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.expense_type || x.type_name || x.name,
-        (x) => x.total_amount || x.amount || 0
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى نوع مصروف خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو "${top.expense_type || top.type_name || top.name || "غير محدد"}" بإجمالي ${money(
-        top.total_amount || top.amount || 0
-      )} جنيه.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
-
-  if (intent === "expense_by_vehicle") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات مصروفات حسب المركبة خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} مركبات من حيث المصروفات خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
-        (x) => x.total_amount || x.amount || 0
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى مركبة من حيث المصروفات خلال ${labelRange(
-        parsed?.filters?.range
-      )} هي "${
+function handleExpenseByVehicle(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات مصروفات حسب المركبة خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} مركبات من حيث المصروفات خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى مركبة من حيث المصروفات خلال ${rangeLabel} هي "${
         top.display_name || top.fleet_no || top.plate_no || "غير محددة"
-      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`;
-    }
+      }" بإجمالي ${money(top.total_amount || top.amount || 0)} جنيه.`,
+    getLabel: (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
+    getValue: (x) => x.total_amount || x.amount || 0,
+  });
+}
 
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
-
-  if (intent === "expense_by_payment_source") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات مصروفات حسب مصدر الدفع خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else {
-      answer = `توزيع المصروفات حسب مصدر الدفع خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
+function handleExpenseByPaymentSource(parsed, result) {
+  const items = pickItems(result);
+  const answer = !items.length
+    ? `لا توجد بيانات مصروفات حسب مصدر الدفع خلال ${getRangeLabel(parsed)}.`
+    : `توزيع المصروفات حسب مصدر الدفع خلال ${getRangeLabel(parsed)}:\n${renderTopList(
         items,
         (x) => paymentSourceLabel(x.payment_source),
         (x) => x.total_amount || 0
       )}`;
-    }
 
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
+  return answerWithUi({ parsed, result, answer });
+}
 
-  if (intent === "top_vendors") {
-    const items = pickItems(result);
+function handleTopVendors(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات موردين خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} موردين من حيث المصروفات خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى مورد من حيث المصروفات خلال ${rangeLabel} هو "${
+        top.vendor_name || "مورد غير معروف"
+      }" بإجمالي ${money(top.total_amount || 0)} جنيه.`,
+    getLabel: (x) => x.vendor_name || "مورد غير معروف",
+    getValue: (x) => x.total_amount || 0,
+  });
+}
 
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات موردين خلال ${labelRange(parsed?.filters?.range)}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} موردين من حيث المصروفات خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.vendor_name || "مورد غير معروف",
-        (x) => x.total_amount || 0
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى مورد من حيث المصروفات خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو "${top.vendor_name || "مورد غير معروف"}" بإجمالي ${money(
-        top.total_amount || 0
-      )} جنيه.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
-  }
-
-  if (intent === "expense_approval_breakdown") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات لحالات اعتماد المصروفات خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else {
-      answer = `توزيع المصروفات حسب حالة الاعتماد خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
+function handleExpenseApprovalBreakdown(parsed, result) {
+  const items = pickItems(result);
+  const answer = !items.length
+    ? `لا توجد بيانات لحالات اعتماد المصروفات خلال ${getRangeLabel(parsed)}.`
+    : `توزيع المصروفات حسب حالة الاعتماد خلال ${getRangeLabel(parsed)}:\n${renderTopList(
         items,
         (x) => approvalStatusLabel(x.approval_status),
         (x) => x.total_amount || 0
       )}`;
-    }
 
-    return {
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleOutstandingSummary(parsed, result) {
+  const totalOutstanding = pickValue(result, [
+    ["data", "total_outstanding"],
+    ["total_outstanding"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  const overdueAmount = pickValue(result, [
+    ["data", "overdue_amount"],
+    ["overdue_amount"],
+  ]);
+
+  const focus = getFocus(parsed);
+  const clientHint = parsed?.entities?.client_hint;
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = "";
+
+  if (focus === "overdue_only") {
+    answer = `قيمة متأخرات العملاء خلال ${rangeLabel} هي ${money(overdueAmount)} جنيه.`;
+  } else {
+    answer = `إجمالي مستحقات العملاء خلال ${rangeLabel} هو ${money(
+      totalOutstanding
+    )} جنيه، منها ${money(overdueAmount)} متأخرات.`;
+  }
+
+  if (clientHint) {
+    if (focus === "overdue_only") {
+      answer = `قيمة متأخرات العميل "${clientHint}" خلال ${rangeLabel} هي ${money(
+        overdueAmount
+      )} جنيه.`;
+    } else {
+      answer = `إجمالي مستحقات العميل "${clientHint}" خلال ${rangeLabel} هو ${money(
+        totalOutstanding
+      )} جنيه، منها ${money(overdueAmount)} متأخرات.`;
+    }
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleTopDebtors(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات عملاء مديونية خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} عملاء مديونية خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى عميل مديونية خلال ${rangeLabel} هو "${
+        top.client_name || top.name || "غير محدد"
+      }" بإجمالي ${money(top.total_outstanding || top.amount || 0)} جنيه.`,
+    getLabel: (x) => x.client_name || x.name,
+    getValue: (x) => x.total_outstanding || x.amount || 0,
+  });
+}
+
+function handleOpenWorkOrders(parsed, result) {
+  const totalOpen = pickValue(result, [
+    ["data", "total_open_work_orders"],
+    ["total_open_work_orders"],
+    ["data", "count"],
+    ["count"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  const vehicleHint = parsed?.entities?.vehicle_hint;
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = `عدد أوامر العمل المفتوحة خلال ${rangeLabel} هو ${Number(totalOpen || 0)}.`;
+
+  if (vehicleHint) {
+    answer = `عدد أوامر العمل المفتوحة للمركبة "${vehicleHint}" خلال ${rangeLabel} هو ${Number(
+      totalOpen || 0
+    )}.`;
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleMaintenanceCostByVehicle(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات تكلفة صيانة للمركبات خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} مركبات من حيث تكلفة الصيانة خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى مركبة من حيث تكلفة الصيانة خلال ${rangeLabel} هي "${
+        top.vehicle_name || top.display_name || top.plate_no || top.name || "غير محددة"
+      }" بإجمالي ${money(top.total_cost || top.total_amount || top.amount || 0)} جنيه.`,
+    getLabel: (x) => x.vehicle_name || x.display_name || x.plate_no || x.name,
+    getValue: (x) => x.total_cost || x.total_amount || x.amount || 0,
+  });
+}
+
+function handleTopIssuedParts(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات صرف أصناف خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أكثر ${count} أصناف صرفًا خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أكثر صنف تم صرفه خلال ${rangeLabel} هو "${
+        top.part_name || top.item_name || top.name || "غير محدد"
+      }" بعدد ${Number(top.total_issued_qty || top.issued_qty || top.qty || 0)}.`,
+    getLabel: (x) => x.part_name || x.item_name || x.name,
+    getValue: (x) => x.total_issued_qty || x.issued_qty || x.qty || 0,
+    unit: "عدد",
+  });
+}
+
+function handleLowStockItems(parsed, result) {
+  const items = pickItems(result);
+  const focus = getFocus(parsed);
+
+  let answer = "";
+
+  if (!items.length) {
+    answer = "لا توجد أصناف منخفضة المخزون حاليًا.";
+  } else if (focus === "count_only") {
+    answer = `عدد الأصناف منخفضة المخزون حاليًا هو ${items.length}.`;
+  } else {
+    const top = items[0];
+    answer = `يوجد ${items.length} أصناف منخفضة المخزون حاليًا. أقربها للنفاد هو "${
+      top.part_name || top.item_name || top.name || "غير محدد"
+    }".`;
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleTripsSummary(parsed, result) {
+  const totalTrips = pickValue(result, [
+    ["data", "total_trips"],
+    ["total_trips"],
+    ["data", "count"],
+    ["count"],
+    ["data", "total"],
+    ["total"],
+  ]);
+
+  const activeCount = pickValue(result, [
+    ["data", "active_count"],
+    ["active_count"],
+  ]);
+
+  const completedCount = pickValue(result, [
+    ["data", "completed_count"],
+    ["completed_count"],
+  ]);
+
+  const { client, site, vehicle } = getEntityHints(parsed);
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = `إجمالي الرحلات خلال ${rangeLabel} هو ${Number(
+    totalTrips || 0
+  )} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+    completedCount || 0
+  )} مكتملة.`;
+
+  if (client) {
+    answer = `إجمالي رحلات العميل "${client}" خلال ${rangeLabel} هو ${Number(
+      totalTrips || 0
+    )} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+      completedCount || 0
+    )} مكتملة.`;
+  } else if (site) {
+    answer = `إجمالي رحلات الموقع "${site}" خلال ${rangeLabel} هو ${Number(
+      totalTrips || 0
+    )} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+      completedCount || 0
+    )} مكتملة.`;
+  } else if (vehicle) {
+    answer = `إجمالي رحلات المركبة "${vehicle}" خلال ${rangeLabel} هو ${Number(
+      totalTrips || 0
+    )} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
+      completedCount || 0
+    )} مكتملة.`;
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleActiveTrips(parsed, result) {
+  const items = pickItems(result);
+  const limit = getLimit(parsed);
+  const { client, site, vehicle } = getEntityHints(parsed);
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = "";
+
+  if (!items.length) {
+    if (client) {
+      answer = `لا توجد رحلات نشطة للعميل "${client}" خلال ${rangeLabel}.`;
+    } else if (site) {
+      answer = `لا توجد رحلات نشطة للموقع "${site}" خلال ${rangeLabel}.`;
+    } else if (vehicle) {
+      answer = `لا توجد رحلات نشطة للمركبة "${vehicle}" خلال ${rangeLabel}.`;
+    } else {
+      answer = `لا توجد رحلات نشطة خلال ${rangeLabel}.`;
+    }
+  } else if (limit > 1) {
+    answer = `أول ${Math.min(limit, items.length)} رحلات نشطة خلال ${rangeLabel}:\n${renderTopList(
+      items.slice(0, limit),
+      (x) => `${x.client_name || "عميل غير معروف"} — ${x.site_name || "موقع غير معروف"}`,
+      () => 1,
+      "عدد"
+    )}`;
+  } else {
+    const top = items[0];
+    answer = `هناك رحلة نشطة تخص العميل "${top.client_name || "عميل غير معروف"}" في "${
+      top.site_name || "موقع غير معروف"
+    }".`;
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleTripsNeedFinancialClosure(parsed, result) {
+  const items = pickItems(result);
+  const totalNeed = pickValue(result, [
+    ["data", "total_need_financial_closure"],
+    ["total_need_financial_closure"],
+    ["data", "count"],
+    ["count"],
+  ]);
+
+  const { client, site, vehicle } = getEntityHints(parsed);
+  const rangeLabel = getRangeLabel(parsed);
+
+  let answer = "";
+
+  if (!items.length) {
+    if (client) {
+      answer = `لا توجد رحلات للعميل "${client}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else if (site) {
+      answer = `لا توجد رحلات للموقع "${site}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else if (vehicle) {
+      answer = `لا توجد رحلات للمركبة "${vehicle}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else {
+      answer = `لا توجد رحلات تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    }
+  } else {
+    const count = Number(totalNeed || items.length);
+
+    if (client) {
+      answer = `يوجد ${count} رحلة للعميل "${client}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else if (site) {
+      answer = `يوجد ${count} رحلة للموقع "${site}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else if (vehicle) {
+      answer = `يوجد ${count} رحلة للمركبة "${vehicle}" تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    } else {
+      answer = `يوجد ${count} رحلة تحتاج إغلاقًا ماليًا خلال ${rangeLabel}.`;
+    }
+  }
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleTopClientsByTrips(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات عملاء للرحلات خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} عملاء من حيث عدد الرحلات خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى عميل من حيث عدد الرحلات خلال ${rangeLabel} هو "${
+        top.client_name || "عميل غير معروف"
+      }" بعدد ${Number(top.trips_count || 0)} رحلة.`,
+    getLabel: (x) => x.client_name || "عميل غير معروف",
+    getValue: (x) => x.trips_count || 0,
+    unit: "عدد",
+  });
+}
+
+function handleTopSitesByTrips(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات مواقع للرحلات خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} مواقع من حيث عدد الرحلات خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى موقع من حيث عدد الرحلات خلال ${rangeLabel} هو "${
+        top.site_name || "موقع غير معروف"
+      }" بعدد ${Number(top.trips_count || 0)} رحلة.`,
+    getLabel: (x) => x.site_name || "موقع غير معروف",
+    getValue: (x) => x.trips_count || 0,
+    unit: "عدد",
+  });
+}
+
+function handleTopVehiclesByTrips(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد بيانات مركبات للرحلات خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} مركبات من حيث عدد الرحلات خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى مركبة من حيث عدد الرحلات خلال ${rangeLabel} هي "${
+        top.display_name || top.fleet_no || top.plate_no || "مركبة غير معروفة"
+      }" بعدد ${Number(top.trips_count || 0)} رحلة.`,
+    getLabel: (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
+    getValue: (x) => x.trips_count || 0,
+    unit: "عدد",
+  });
+}
+
+// =======================
+// Main
+// =======================
+function buildArabicAnswer({ parsed, result, execution = null }) {
+  const intent = parsed?.intent;
+
+  if (parsed?.mode === "action") {
+    const answer = buildActionAnswer({ parsed, execution });
+    return answerWithUi({
+      parsed,
+      result: execution,
       answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    });
+  }
+
+  if (parsed?.mode === "reference_followup") {
+    const answer = buildReferenceFollowupAnswer({ parsed, result });
+    return answerWithUi({ parsed, result, answer });
+  }
+
+  if (intent === "expense_summary_compare") {
+    return answerWithUi({
+      parsed,
+      result,
+      answer: buildExpenseCompareAnswer(result),
+    });
+  }
+
+  if (intent === "expense_summary") {
+    return handleExpenseSummary(parsed, result);
+  }
+
+  if (intent === "expense_by_type") {
+    return handleExpenseByType(parsed, result);
+  }
+
+  if (intent === "expense_by_vehicle") {
+    return handleExpenseByVehicle(parsed, result);
+  }
+
+  if (intent === "expense_by_payment_source") {
+    return handleExpenseByPaymentSource(parsed, result);
+  }
+
+  if (intent === "top_vendors") {
+    return handleTopVendors(parsed, result);
+  }
+
+  if (intent === "expense_approval_breakdown") {
+    return handleExpenseApprovalBreakdown(parsed, result);
   }
 
   if (intent === "outstanding_summary") {
-    const totalOutstanding = pickValue(result, [
-      ["data", "total_outstanding"],
-      ["total_outstanding"],
-      ["data", "total"],
-      ["total"],
-    ]);
-
-    const overdueAmount = pickValue(result, [
-      ["data", "overdue_amount"],
-      ["overdue_amount"],
-    ]);
-
-    let answer = "";
-    if (focus === "overdue_only") {
-      answer = `قيمة متأخرات العملاء خلال ${labelRange(
-        parsed?.filters?.range
-      )} هي ${money(overdueAmount)} جنيه.`;
-    } else {
-      answer = `إجمالي مستحقات العملاء خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`;
-    }
-
-    if (parsed?.entities?.client_hint) {
-      if (focus === "overdue_only") {
-        answer = `قيمة متأخرات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
-          parsed?.filters?.range
-        )} هي ${money(overdueAmount)} جنيه.`;
-      } else {
-        answer = `إجمالي مستحقات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
-          parsed?.filters?.range
-        )} هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`;
-      }
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleOutstandingSummary(parsed, result);
   }
 
   if (intent === "top_debtors") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات عملاء مديونية خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} عملاء مديونية خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.client_name || x.name,
-        (x) => x.total_outstanding || x.amount || 0
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى عميل مديونية خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو "${top.client_name || top.name || "غير محدد"}" بإجمالي ${money(
-        top.total_outstanding || top.amount || 0
-      )} جنيه.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTopDebtors(parsed, result);
   }
 
   if (intent === "open_work_orders") {
-    const totalOpen = pickValue(result, [
-      ["data", "total_open_work_orders"],
-      ["total_open_work_orders"],
-      ["data", "count"],
-      ["count"],
-      ["data", "total"],
-      ["total"],
-    ]);
-
-    let answer = `عدد أوامر العمل المفتوحة خلال ${labelRange(
-      parsed?.filters?.range
-    )} هو ${Number(totalOpen || 0)}.`;
-
-    if (parsed?.entities?.vehicle_hint) {
-      answer = `عدد أوامر العمل المفتوحة للمركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${Number(totalOpen || 0)}.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleOpenWorkOrders(parsed, result);
   }
 
   if (intent === "maintenance_cost_by_vehicle") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات تكلفة صيانة للمركبات خلال ${labelRange(
-        parsed?.filters?.range
-      )}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} مركبات من حيث تكلفة الصيانة خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.vehicle_name || x.display_name || x.plate_no || x.name,
-        (x) => x.total_cost || x.total_amount || x.amount || 0
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى مركبة من حيث تكلفة الصيانة خلال ${labelRange(
-        parsed?.filters?.range
-      )} هي "${
-        top.vehicle_name || top.display_name || top.plate_no || top.name || "غير محددة"
-      }" بإجمالي ${money(top.total_cost || top.total_amount || top.amount || 0)} جنيه.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleMaintenanceCostByVehicle(parsed, result);
   }
 
   if (intent === "top_issued_parts") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات صرف أصناف خلال ${labelRange(parsed?.filters?.range)}.`;
-    } else if (limit > 1) {
-      answer = `أكثر ${Math.min(limit, items.length)} أصناف صرفًا خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.part_name || x.item_name || x.name,
-        (x) => x.total_issued_qty || x.issued_qty || x.qty || 0,
-        "عدد"
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أكثر صنف تم صرفه خلال ${labelRange(parsed?.filters?.range)} هو "${
-        top.part_name || top.item_name || top.name || "غير محدد"
-      }" بعدد ${Number(top.total_issued_qty || top.issued_qty || top.qty || 0)}.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTopIssuedParts(parsed, result);
   }
 
   if (intent === "low_stock_items") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = "لا توجد أصناف منخفضة المخزون حاليًا.";
-    } else if (focus === "count_only") {
-      answer = `عدد الأصناف منخفضة المخزون حاليًا هو ${items.length}.`;
-    } else {
-      const top = items[0];
-      answer = `يوجد ${items.length} أصناف منخفضة المخزون حاليًا. أقربها للنفاد هو "${
-        top.part_name || top.item_name || top.name || "غير محدد"
-      }".`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleLowStockItems(parsed, result);
   }
 
   if (intent === "trips_summary") {
-    const totalTrips = pickValue(result, [
-      ["data", "total_trips"],
-      ["total_trips"],
-      ["data", "count"],
-      ["count"],
-      ["data", "total"],
-      ["total"],
-    ]);
-
-    const activeCount = pickValue(result, [
-      ["data", "active_count"],
-      ["active_count"],
-    ]);
-
-    const completedCount = pickValue(result, [
-      ["data", "completed_count"],
-      ["completed_count"],
-    ]);
-
-    let answer = `إجمالي الرحلات خلال ${labelRange(
-      parsed?.filters?.range
-    )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
-      completedCount || 0
-    )} مكتملة.`;
-
-    if (parsed?.entities?.client_hint) {
-      answer = `إجمالي رحلات العميل "${parsed.entities.client_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
-        completedCount || 0
-      )} مكتملة.`;
-    } else if (parsed?.entities?.site_hint) {
-      answer = `إجمالي رحلات الموقع "${parsed.entities.site_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
-        completedCount || 0
-      )} مكتملة.`;
-    } else if (parsed?.entities?.vehicle_hint) {
-      answer = `إجمالي رحلات المركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو ${Number(totalTrips || 0)} رحلة، منها ${Number(activeCount || 0)} نشطة و${Number(
-        completedCount || 0
-      )} مكتملة.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTripsSummary(parsed, result);
   }
 
   if (intent === "active_trips") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      if (parsed?.entities?.client_hint) {
-        answer = `لا توجد رحلات نشطة للعميل "${parsed.entities.client_hint}" خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.site_hint) {
-        answer = `لا توجد رحلات نشطة للموقع "${parsed.entities.site_hint}" خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.vehicle_hint) {
-        answer = `لا توجد رحلات نشطة للمركبة "${parsed.entities.vehicle_hint}" خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else {
-        answer = `لا توجد رحلات نشطة خلال ${labelRange(parsed?.filters?.range)}.`;
-      }
-    } else if (limit > 1) {
-      answer = `أول ${Math.min(limit, items.length)} رحلات نشطة خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => `${x.client_name || "عميل غير معروف"} — ${x.site_name || "موقع غير معروف"}`,
-        () => 1,
-        "عدد"
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `هناك رحلة نشطة تخص العميل "${top.client_name || "عميل غير معروف"}" في "${
-        top.site_name || "موقع غير معروف"
-      }".`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleActiveTrips(parsed, result);
   }
 
   if (intent === "trips_need_financial_closure") {
-    const items = pickItems(result);
-    const totalNeed = pickValue(result, [
-      ["data", "total_need_financial_closure"],
-      ["total_need_financial_closure"],
-      ["data", "count"],
-      ["count"],
-    ]);
-
-    let answer = "";
-    if (!items.length) {
-      if (parsed?.entities?.client_hint) {
-        answer = `لا توجد رحلات للعميل "${parsed.entities.client_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.site_hint) {
-        answer = `لا توجد رحلات للموقع "${parsed.entities.site_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.vehicle_hint) {
-        answer = `لا توجد رحلات للمركبة "${parsed.entities.vehicle_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else {
-        answer = `لا توجد رحلات تحتاج إغلاقًا ماليًا خلال ${labelRange(parsed?.filters?.range)}.`;
-      }
-    } else {
-      if (parsed?.entities?.client_hint) {
-        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للعميل "${parsed.entities.client_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.site_hint) {
-        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للموقع "${parsed.entities.site_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else if (parsed?.entities?.vehicle_hint) {
-        answer = `يوجد ${Number(totalNeed || items.length)} رحلة للمركبة "${parsed.entities.vehicle_hint}" تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      } else {
-        answer = `يوجد ${Number(totalNeed || items.length)} رحلة تحتاج إغلاقًا ماليًا خلال ${labelRange(
-          parsed?.filters?.range
-        )}.`;
-      }
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTripsNeedFinancialClosure(parsed, result);
   }
 
   if (intent === "top_clients_by_trips") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات عملاء للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} عملاء من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.client_name || "عميل غير معروف",
-        (x) => x.trips_count || 0,
-        "عدد"
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى عميل من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو "${top.client_name || "عميل غير معروف"}" بعدد ${Number(top.trips_count || 0)} رحلة.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTopClientsByTrips(parsed, result);
   }
 
   if (intent === "top_sites_by_trips") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات مواقع للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} مواقع من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.site_name || "موقع غير معروف",
-        (x) => x.trips_count || 0,
-        "عدد"
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى موقع من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )} هو "${top.site_name || "موقع غير معروف"}" بعدد ${Number(top.trips_count || 0)} رحلة.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTopSitesByTrips(parsed, result);
   }
 
   if (intent === "top_vehicles_by_trips") {
-    const items = pickItems(result);
-
-    let answer = "";
-    if (!items.length) {
-      answer = `لا توجد بيانات مركبات للرحلات خلال ${labelRange(parsed?.filters?.range)}.`;
-    } else if (limit > 1) {
-      answer = `أعلى ${Math.min(limit, items.length)} مركبات من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )}:\n${renderTopList(
-        items.slice(0, limit),
-        (x) => x.display_name || x.fleet_no || x.plate_no || "مركبة غير معروفة",
-        (x) => x.trips_count || 0,
-        "عدد"
-      )}`;
-    } else {
-      const top = items[0];
-      answer = `أعلى مركبة من حيث عدد الرحلات خلال ${labelRange(
-        parsed?.filters?.range
-      )} هي "${
-        top.display_name || top.fleet_no || top.plate_no || "مركبة غير معروفة"
-      }" بعدد ${Number(top.trips_count || 0)} رحلة.`;
-    }
-
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return handleTopVehiclesByTrips(parsed, result);
   }
 
   if (intent === "entity_profit_summary") {
-    const answer = buildProfitAnswer(parsed, result);
-    return {
-      answer,
-      ui: buildUiMeta({ parsed, result, answer }),
-    };
+    return answerWithUi({
+      parsed,
+      result,
+      answer: buildProfitAnswer(parsed, result),
+    });
   }
 
-  const answer = "لم أتمكن من فهم السؤال بشكل كافٍ في النسخة الحالية.";
-  return {
-    answer,
-    ui: buildUiMeta({ parsed, result, answer }),
-  };
+  return answerWithUi({
+    parsed,
+    result,
+    answer: "لم أتمكن من فهم السؤال بشكل كافٍ في النسخة الحالية.",
+  });
 }
 
 module.exports = {

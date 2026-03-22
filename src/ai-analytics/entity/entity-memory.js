@@ -1,45 +1,90 @@
-function getEntityContext(snapshot) {
-  const safeSnapshot = snapshot && typeof snapshot === "object" ? snapshot : {};
+function buildEmptyEntityContext() {
+  return {
+    primary_entity: null,
+    last_entities: [],
+    selected_index: null,
+    selected_entity_type: null,
+    history_refs: {
+      client: null,
+      vehicle: null,
+      trip: null,
+      site: null,
+      work_order: null,
+    },
+  };
+}
 
-  if (!safeSnapshot.entity_context) {
-    safeSnapshot.entity_context = {
-      primary_entity: null,
-      last_entities: [],
-      selected_index: null,
-      selected_entity_type: null,
-      history_refs: {
-        client: null,
-        vehicle: null,
-        trip: null,
-        site: null,
-        work_order: null,
-      },
+function ensureObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function getEntityContext(snapshot) {
+  const safeSnapshot = ensureObject(snapshot);
+
+  if (!safeSnapshot.entity_context || typeof safeSnapshot.entity_context !== "object") {
+    safeSnapshot.entity_context = buildEmptyEntityContext();
+    return safeSnapshot.entity_context;
+  }
+
+  const ctx = safeSnapshot.entity_context;
+
+  ctx.primary_entity = ctx.primary_entity || null;
+  ctx.last_entities = Array.isArray(ctx.last_entities) ? ctx.last_entities : [];
+  ctx.selected_index =
+    typeof ctx.selected_index === "number" ? ctx.selected_index : null;
+  ctx.selected_entity_type = ctx.selected_entity_type || null;
+
+  if (!ctx.history_refs || typeof ctx.history_refs !== "object") {
+    ctx.history_refs = buildEmptyEntityContext().history_refs;
+  } else {
+    ctx.history_refs = {
+      client: ctx.history_refs.client || null,
+      vehicle: ctx.history_refs.vehicle || null,
+      trip: ctx.history_refs.trip || null,
+      site: ctx.history_refs.site || null,
+      work_order: ctx.history_refs.work_order || null,
     };
   }
 
-  return safeSnapshot.entity_context;
+  safeSnapshot.entity_context = ctx;
+  return ctx;
 }
 
 function ensureSnapshot(snapshot) {
-  const safeSnapshot = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const safeSnapshot = ensureObject(snapshot);
   getEntityContext(safeSnapshot);
   return safeSnapshot;
+}
+
+function normalizeEntity(entity, index = null) {
+  if (!entity || typeof entity !== "object") return null;
+  if (!entity.type || !entity.id) return null;
+
+  return {
+    type: entity.type || null,
+    id: entity.id || null,
+    label: entity.label || null,
+    raw: entity.raw || null,
+    index: typeof index === "number" ? index : entity.index ?? null,
+  };
 }
 
 function setPrimaryEntity(snapshot, entity) {
   const safeSnapshot = ensureSnapshot(snapshot);
   const ctx = getEntityContext(safeSnapshot);
 
-  ctx.primary_entity = entity || null;
-  ctx.selected_entity_type = entity?.type || null;
-  ctx.selected_index =
-    typeof entity?.index === "number" ? entity.index : ctx.selected_index;
+  const normalized = normalizeEntity(entity);
 
-  if (entity?.type) {
-    ctx.history_refs[entity.type] = {
-      id: entity.id || null,
-      label: entity.label || null,
-      index: typeof entity.index === "number" ? entity.index : null,
+  ctx.primary_entity = normalized;
+  ctx.selected_entity_type = normalized?.type || null;
+  ctx.selected_index =
+    typeof normalized?.index === "number" ? normalized.index : null;
+
+  if (normalized?.type) {
+    ctx.history_refs[normalized.type] = {
+      id: normalized.id || null,
+      label: normalized.label || null,
+      index: typeof normalized.index === "number" ? normalized.index : null,
     };
   }
 
@@ -52,15 +97,8 @@ function setLastEntities(snapshot, entities = []) {
   const ctx = getEntityContext(safeSnapshot);
 
   ctx.last_entities = (Array.isArray(entities) ? entities : [])
-    .filter(Boolean)
-    .map((entity, index) => ({
-      type: entity.type || null,
-      id: entity.id || null,
-      label: entity.label || null,
-      raw: entity.raw || null,
-      index,
-    }))
-    .filter((item) => item.type && item.id);
+    .map((entity, index) => normalizeEntity(entity, index))
+    .filter(Boolean);
 
   safeSnapshot.entity_context = ctx;
   return safeSnapshot;
@@ -73,8 +111,8 @@ function attachEntityContextToSnapshot(snapshot, meta = {}) {
   safeSnapshot.entity_context = ctx;
   safeSnapshot.entity_context_meta = {
     updated_at: new Date().toISOString(),
-    source_module: meta.source_module || null,
-    source_intent: meta.source_intent || null,
+    source_module: meta?.source_module || null,
+    source_intent: meta?.source_intent || null,
   };
 
   return safeSnapshot;

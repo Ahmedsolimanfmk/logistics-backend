@@ -14,6 +14,125 @@ const {
   enrichSessionSnapshotWithEntities,
 } = require("./entity/entity-intelligence");
 
+// =======================
+// Small helpers
+// =======================
+function buildSimpleResponse({
+  parsed,
+  mode = "unknown",
+  title,
+  summary,
+  badges = [],
+  result = null,
+  answer,
+  followUps = [],
+  insights = [],
+  session_snapshot = null,
+  result_type = "summary",
+  has_items = false,
+  extra = {},
+}) {
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode,
+    ui: {
+      mode,
+      title,
+      summary,
+      badges,
+      result_type,
+      has_items,
+    },
+    result,
+    answer,
+    followUps,
+    insights,
+    session_snapshot,
+    ...extra,
+  };
+}
+
+function buildDefaultFollowUps() {
+  return [
+    "كم إجمالي المصروفات هذا الشهر؟",
+    "من أعلى عميل مديونية؟",
+    "كم عدد أوامر العمل المفتوحة؟",
+    "ما الأصناف القريبة من النفاد؟",
+    "كم عدد الرحلات هذا الشهر؟",
+  ];
+}
+
+function buildReferenceFallbackFollowUps() {
+  return [
+    "اعرض أعلى 5 عملاء مديونية",
+    "اعرض أعلى 5 مركبات تكلفة صيانة",
+    "اعرض أعلى 5 أصناف صرفًا",
+    "اعرض أعلى 5 مركبات حسب الرحلات",
+  ];
+}
+
+function buildEntityUnsupportedFollowUps(reason) {
+  if (reason === "profit_followup_pending") {
+    return ["رحلاته", "مصروفاته", "مديونيته"];
+  }
+
+  if (reason === "maintenance_requires_vehicle") {
+    return ["اعرض أعلى 5 مركبات تكلفة صيانة", "اعرض أعلى 5 مركبات حسب الرحلات"];
+  }
+
+  if (reason === "receivables_requires_client") {
+    return ["اعرض أعلى 5 عملاء مديونية"];
+  }
+
+  if (reason === "trips_requires_client_vehicle_site") {
+    return [
+      "اعرض أعلى 5 عملاء حسب الرحلات",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ];
+  }
+
+  if (reason === "profit_requires_client") {
+    return ["اعرض أعلى 5 عملاء حسب الرحلات", "اعرض أعلى 5 عملاء مديونية"];
+  }
+
+  if (reason === "expenses_requires_supported_owner") {
+    return [
+      "اعرض أعلى 5 عملاء مديونية",
+      "اعرض أعلى 5 مركبات صرفًا",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ];
+  }
+
+  return ["اعرض أعلى 5 عملاء مديونية", "اعرض أعلى 5 مركبات حسب الرحلات"];
+}
+
+function parsedToAnalyticsQuery(parsed) {
+  return {
+    range: parsed?.filters?.range || "this_month",
+    limit: parsed?.options?.limit || undefined,
+    focus: parsed?.filters?.focus || null,
+    date_from: parsed?.filters?.date_from || null,
+    date_to: parsed?.filters?.date_to || null,
+    status: parsed?.filters?.status || null,
+
+    vehicle_hint: parsed?.entities?.vehicle_hint || null,
+    client_hint: parsed?.entities?.client_hint || null,
+    site_hint: parsed?.entities?.site_hint || null,
+    trip_hint: parsed?.entities?.trip_hint || null,
+    work_order_hint: parsed?.entities?.work_order_hint || null,
+
+    expense_type: parsed?.entities?.expense_type || null,
+    vendor_name: parsed?.entities?.vendor_name || null,
+    paid_method: parsed?.entities?.paid_method || null,
+  };
+}
+
+// =======================
+// Compare helper
+// =======================
 async function buildExpenseCompareResult({ user }) {
   const [thisMonth, lastMonth] = await Promise.all([
     analyticsService.getFinanceExpenseSummary({
@@ -51,33 +170,22 @@ async function buildExpenseCompareResult({ user }) {
   };
 }
 
+// =======================
+// Response builders
+// =======================
 function buildUnknownResponse(parsed) {
-  return {
-    ok: true,
+  const answer =
+    "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.";
+
+  return buildSimpleResponse({
     parsed,
-    intent: parsed,
-    ui: {
-      mode: "unknown",
-      title: "سؤال غير مدعوم حاليًا",
-      summary:
-        "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
-      badges: ["غير مدعوم"],
-      result_type: "summary",
-      has_items: false,
-    },
-    result: null,
-    answer:
-      "السؤال غير مدعوم حاليًا في النسخة الحالية من المساعد الذكي. استخدم أحد الأسئلة المدعومة الظاهرة داخل القسم.",
-    followUps: [
-      "كم إجمالي المصروفات هذا الشهر؟",
-      "من أعلى عميل مديونية؟",
-      "كم عدد أوامر العمل المفتوحة؟",
-      "ما الأصناف القريبة من النفاد؟",
-      "كم عدد الرحلات هذا الشهر؟",
-    ],
-    insights: [],
-    session_snapshot: null,
-  };
+    mode: "unknown",
+    title: "سؤال غير مدعوم حاليًا",
+    summary: answer,
+    badges: ["غير مدعوم"],
+    answer,
+    followUps: buildDefaultFollowUps(),
+  });
 }
 
 function buildUnsupportedFollowupResponse({ parsed, body }) {
@@ -85,7 +193,6 @@ function buildUnsupportedFollowupResponse({ parsed, body }) {
   let summary =
     "تم فهم المقصود من السؤال، لكن هذا النوع من المتابعة غير مدعوم بالكامل في النسخة الحالية.";
   let answer = summary;
-  let followUps = ["اعرض أعلى 5 عملاء مديونية", "اعرض أعلى 5 مركبات حسب الرحلات"];
 
   if (parsed?.intent === "profit_followup_pending") {
     title = "تحليل الربحية غير متاح بعد";
@@ -93,385 +200,42 @@ function buildUnsupportedFollowupResponse({ parsed, body }) {
       "تم فهم طلب الربحية، لكن حساب الربح يحتاج intent تحليلي مخصص لم يتم إضافته بعد.";
     answer =
       "فهمت أنك تريد الربحية، لكن حساب الربح لم يُفعَّل بعد داخل محرك التحليلات. يمكننا إضافته في المرحلة التالية.";
-    followUps = ["رحلاته", "مصروفاته", "مديونيته"];
   } else if (parsed?.unsupported_reason === "maintenance_requires_vehicle") {
     title = "الصيانة ترتبط بالمركبات";
     summary = "لا يمكن عرض الصيانة إلا إذا كان المرجع الحالي مركبة.";
     answer = "الصيانة ترتبط بالمركبات، وليس بالعميل أو الموقع الحالي.";
-    followUps = ["اعرض أعلى 5 مركبات تكلفة صيانة", "اعرض أعلى 5 مركبات حسب الرحلات"];
   } else if (parsed?.unsupported_reason === "receivables_requires_client") {
     title = "المديونية ترتبط بالعملاء";
     summary = "لا يمكن عرض المديونية إلا إذا كان المرجع الحالي عميلًا.";
     answer = "المديونية ترتبط بالعملاء، وليس بالمركبة أو الموقع الحالي.";
-    followUps = ["اعرض أعلى 5 عملاء مديونية"];
   } else if (parsed?.unsupported_reason === "trips_requires_client_vehicle_site") {
     title = "الرحلات تحتاج مرجعًا صالحًا";
     summary = "الرحلات يمكن ربطها بعميل أو مركبة أو موقع.";
     answer =
       "أحتاج أن يكون المرجع الحالي عميلًا أو مركبة أو موقعًا حتى أعرض الرحلات المرتبطة به.";
-    followUps = [
-      "اعرض أعلى 5 عملاء حسب الرحلات",
-      "اعرض أعلى 5 مركبات حسب الرحلات",
-      "اعرض أعلى 5 مواقع حسب الرحلات",
-    ];
-      } else if (parsed?.unsupported_reason === "profit_requires_client") {
+  } else if (parsed?.unsupported_reason === "profit_requires_client") {
     title = "الربحية الحالية متاحة للعملاء فقط";
     summary = "لا يمكن حساب الربحية حاليًا إلا إذا كان المرجع الحالي عميلًا.";
     answer = "حساب الربحية متاح حاليًا للعملاء فقط، وليس للمركبة أو الموقع أو الرحلة.";
-    followUps = ["اعرض أعلى 5 عملاء حسب الرحلات", "اعرض أعلى 5 عملاء مديونية"];
   } else if (parsed?.unsupported_reason === "expenses_requires_supported_owner") {
     title = "لا يمكن تحديد المصروفات لهذا المرجع";
     summary = "المصروفات الحالية يمكن ربطها بعميل أو موقع أو مركبة فقط.";
     answer =
       "أحتاج أن يكون المرجع الحالي عميلًا أو موقعًا أو مركبة حتى أعرض المصروفات المرتبطة به.";
-    followUps = [
-      "اعرض أعلى 5 عملاء مديونية",
-      "اعرض أعلى 5 مركبات صرفًا",
-      "اعرض أعلى 5 مواقع حسب الرحلات",
-    ];
   }
 
-  return {
-    ok: true,
+  return buildSimpleResponse({
     parsed,
-    intent: parsed,
     mode: "unsupported_followup",
-    ui: {
-      mode: "unsupported_followup",
-      title,
-      summary,
-      badges: ["Entity Intelligence", "قيد التطوير"],
-      result_type: "summary",
-      has_items: false,
-    },
-    result: null,
+    title,
+    summary,
+    badges: ["Entity Intelligence", "قيد التطوير"],
     answer,
-    followUps,
-    insights: [],
+    followUps: buildEntityUnsupportedFollowUps(
+      parsed?.unsupported_reason || parsed?.intent
+    ),
     session_snapshot: body?.session_snapshot || null,
-  };
-}
-
-function parsedToAnalyticsQuery(parsed) {
-  return {
-    range: parsed?.filters?.range || "this_month",
-    limit: parsed?.options?.limit || undefined,
-    focus: parsed?.filters?.focus || null,
-    date_from: parsed?.filters?.date_from || null,
-    date_to: parsed?.filters?.date_to || null,
-    status: parsed?.filters?.status || null,
-
-    vehicle_hint: parsed?.entities?.vehicle_hint || null,
-    client_hint: parsed?.entities?.client_hint || null,
-    site_hint: parsed?.entities?.site_hint || null,
-    trip_hint: parsed?.entities?.trip_hint || null,
-    work_order_hint: parsed?.entities?.work_order_hint || null,
-
-    expense_type: parsed?.entities?.expense_type || null,
-    vendor_name: parsed?.entities?.vendor_name || null,
-    paid_method: parsed?.entities?.paid_method || null,
-  };
-}
-
-async function executeParsedQuery({ user, parsed }) {
-  const intent = parsed?.intent;
-  const query = parsedToAnalyticsQuery(parsed);
-
-  if (intent === "expense_summary_compare") {
-    return buildExpenseCompareResult({ user });
-  }
-
-  if (intent === "expense_summary") {
-    return analyticsService.getFinanceExpenseSummary({ user, query });
-  }
-
-  if (intent === "expense_by_type") {
-    return analyticsService.getFinanceExpenseByType({ user, query });
-  }
-
-  if (intent === "expense_by_vehicle") {
-    return analyticsService.getFinanceExpenseByVehicle({ user, query });
-  }
-
-  if (intent === "expense_by_payment_source") {
-    return analyticsService.getFinanceExpenseByPaymentSource({ user, query });
-  }
-
-  if (intent === "top_vendors") {
-    return analyticsService.getFinanceTopVendors({ user, query });
-  }
-
-  if (intent === "expense_approval_breakdown") {
-    return analyticsService.getFinanceExpenseApprovalBreakdown({ user, query });
-  }
-
-  if (intent === "outstanding_summary") {
-    return analyticsService.getArOutstandingSummary({ user, query });
-  }
-
-  if (intent === "top_debtors") {
-    return analyticsService.getArTopDebtors({ user, query });
-  }
-
-  if (intent === "open_work_orders") {
-    return analyticsService.getMaintenanceOpenWorkOrders({ user, query });
-  }
-
-  if (intent === "maintenance_cost_by_vehicle") {
-    return analyticsService.getMaintenanceCostByVehicle({ user, query });
-  }
-
-  if (intent === "top_issued_parts") {
-    return analyticsService.getInventoryTopIssuedParts({ user, query });
-  }
-
-  if (intent === "low_stock_items") {
-    return analyticsService.getInventoryLowStockItems({ user, query });
-  }
-
-  if (intent === "trips_summary") {
-    return analyticsService.getTripsSummary({ user, query });
-  }
-
-  if (intent === "active_trips") {
-    return analyticsService.getActiveTrips({ user, query });
-  }
-
-  if (intent === "trips_need_financial_closure") {
-    return analyticsService.getTripsNeedingFinancialClosure({ user, query });
-  }
-
-  if (intent === "top_clients_by_trips") {
-    return analyticsService.getTopClientsByTrips({ user, query });
-  }
-
-  if (intent === "top_sites_by_trips") {
-    return analyticsService.getTopSitesByTrips({ user, query });
-  }
-
-  if (intent === "top_vehicles_by_trips") {
-    return analyticsService.getTopVehiclesByTrips({ user, query });
-  }
-
-    if (intent === "entity_profit_summary") {
-    return analyticsService.getEntityProfitSummary({ user, query });
-  }
-
-  return null;
-}
-
-async function buildInlineInsights({ user, parsed, result }) {
-  const moduleName = parsed?.module || parsed?.domain;
-
-  if (moduleName === "finance") {
-    const expenseSummary =
-      parsed?.intent === "expense_summary"
-        ? result
-        : await analyticsService.getFinanceExpenseSummary({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const expenseByType =
-      parsed?.intent === "expense_by_type"
-        ? result
-        : await analyticsService.getFinanceExpenseByType({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const expenseByVehicle =
-      parsed?.intent === "expense_by_vehicle"
-        ? result
-        : await analyticsService.getFinanceExpenseByVehicle({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const expenseByPaymentSource =
-      parsed?.intent === "expense_by_payment_source"
-        ? result
-        : await analyticsService.getFinanceExpenseByPaymentSource({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const topVendors =
-      parsed?.intent === "top_vendors"
-        ? result
-        : await analyticsService.getFinanceTopVendors({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const expenseApprovalBreakdown =
-      parsed?.intent === "expense_approval_breakdown"
-        ? result
-        : await analyticsService.getFinanceExpenseApprovalBreakdown({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
-      user,
-      query: { range: "last_month" },
-    });
-
-    return buildInsightsByContext({
-      context: "finance",
-      data: {
-        expenseSummary,
-        expenseByType,
-        expenseByVehicle,
-        expenseByPaymentSource,
-        topVendors,
-        expenseApprovalBreakdown,
-        expenseSummaryLastMonth,
-      },
-    }).slice(0, 5);
-  }
-
-  if (moduleName === "ar") {
-    const outstandingSummary =
-      parsed?.intent === "outstanding_summary"
-        ? result
-        : await analyticsService.getArOutstandingSummary({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const topDebtors =
-      parsed?.intent === "top_debtors"
-        ? result
-        : await analyticsService.getArTopDebtors({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    return buildInsightsByContext({
-      context: "ar",
-      data: {
-        outstandingSummary,
-        topDebtors,
-      },
-    }).slice(0, 3);
-  }
-
-  if (moduleName === "maintenance") {
-    const openWorkOrders =
-      parsed?.intent === "open_work_orders"
-        ? result
-        : await analyticsService.getMaintenanceOpenWorkOrders({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const costByVehicle =
-      parsed?.intent === "maintenance_cost_by_vehicle"
-        ? result
-        : await analyticsService.getMaintenanceCostByVehicle({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    return buildInsightsByContext({
-      context: "maintenance",
-      data: {
-        openWorkOrders,
-        costByVehicle,
-      },
-    }).slice(0, 3);
-  }
-
-  if (moduleName === "inventory") {
-    const topIssuedParts =
-      parsed?.intent === "top_issued_parts"
-        ? result
-        : await analyticsService.getInventoryTopIssuedParts({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const lowStockItems =
-      parsed?.intent === "low_stock_items"
-        ? result
-        : await analyticsService.getInventoryLowStockItems({
-            user,
-            query: { limit: 10 },
-          });
-
-    return buildInsightsByContext({
-      context: "inventory",
-      data: {
-        topIssuedParts,
-        lowStockItems,
-      },
-    }).slice(0, 3);
-  }
-
-  if (moduleName === "trips") {
-    const tripsSummary =
-      parsed?.intent === "trips_summary"
-        ? result
-        : await analyticsService.getTripsSummary({
-            user,
-            query: { range: "this_month" },
-          });
-
-    const activeTrips =
-      parsed?.intent === "active_trips"
-        ? result
-        : await analyticsService.getActiveTrips({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const tripsNeedFinancialClosure =
-      parsed?.intent === "trips_need_financial_closure"
-        ? result
-        : await analyticsService.getTripsNeedingFinancialClosure({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const topClientsByTrips =
-      parsed?.intent === "top_clients_by_trips"
-        ? result
-        : await analyticsService.getTopClientsByTrips({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const topSitesByTrips =
-      parsed?.intent === "top_sites_by_trips"
-        ? result
-        : await analyticsService.getTopSitesByTrips({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    const topVehiclesByTrips =
-      parsed?.intent === "top_vehicles_by_trips"
-        ? result
-        : await analyticsService.getTopVehiclesByTrips({
-            user,
-            query: { range: "this_month", limit: 5 },
-          });
-
-    return buildInsightsByContext({
-      context: "trips",
-      data: {
-        tripsSummary,
-        activeTrips,
-        tripsNeedFinancialClosure,
-        topClientsByTrips,
-        topSitesByTrips,
-        topVehiclesByTrips,
-      },
-    }).slice(0, 5);
-  }
-
-  return [];
+  });
 }
 
 function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
@@ -479,30 +243,15 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
   const entity = referenceResult?.resolved_entity || null;
 
   if (!item) {
-    return {
-      ok: true,
+    return buildSimpleResponse({
       parsed,
-      intent: parsed,
       mode: "unknown",
-      ui: {
-        mode: "unknown",
-        title: "تعذر تحديد المرجع السابق",
-        summary: "لم أتمكن من تحديد العنصر المقصود من النتائج السابقة.",
-        badges: ["متابعة"],
-        result_type: "summary",
-        has_items: false,
-      },
-      result: null,
+      title: "تعذر تحديد المرجع السابق",
+      summary: "لم أتمكن من تحديد العنصر المقصود من النتائج السابقة.",
+      badges: ["متابعة"],
       answer: "لم أتمكن من تحديد العنصر المقصود من النتائج السابقة.",
-      followUps: [
-        "اعرض أعلى 5 عملاء مديونية",
-        "اعرض أعلى 5 مركبات تكلفة صيانة",
-        "اعرض أعلى 5 أصناف صرفًا",
-        "اعرض أعلى 5 مركبات حسب الرحلات",
-      ],
-      insights: [],
-      session_snapshot: null,
-    };
+      followUps: buildReferenceFallbackFollowUps(),
+    });
   }
 
   const snapshot = buildSessionSnapshot({
@@ -524,40 +273,32 @@ function buildReferenceFollowUpResponse({ parsed, referenceResult }) {
     snapshot.applied_entities.vehicle_hint = entity.vehicle_hint;
   }
 
-  return {
-    ok: true,
+  const result = {
+    data: {
+      items: [item],
+    },
+  };
+
+  return buildSimpleResponse({
     parsed,
-    intent: parsed,
     mode: "query",
-    ui: {
-      mode: "query",
-      title: "العنصر المشار إليه من النتيجة السابقة",
-      summary: entity?.entity_label
-        ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
-        : "تم تحديد العنصر المقصود من النتائج السابقة.",
-      badges: ["متابعة", "مرجع سابق"],
-      result_type: "table",
-      has_items: true,
-    },
-    result: {
-      data: {
-        items: [item],
-      },
-    },
+    title: "العنصر المشار إليه من النتيجة السابقة",
+    summary: entity?.entity_label
+      ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
+      : "تم تحديد العنصر المقصود من النتائج السابقة.",
+    badges: ["متابعة", "مرجع سابق"],
+    result,
     answer: entity?.entity_label
       ? `تم تحديد "${entity.entity_label}" من النتائج السابقة.`
       : "هذا هو العنصر المقصود من النتائج السابقة.",
     followUps: getFollowUpQuestions({
       parsed,
-      result: {
-        data: {
-          items: [item],
-        },
-      },
+      result,
     }),
-    insights: [],
     session_snapshot: snapshot,
-  };
+    result_type: "table",
+    has_items: true,
+  });
 }
 
 function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
@@ -566,30 +307,15 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
   const sliced = items.slice(0, limit);
 
   if (!items.length) {
-    return {
-      ok: true,
+    return buildSimpleResponse({
       parsed,
-      intent: parsed,
       mode: "unknown",
-      ui: {
-        mode: "unknown",
-        title: "لا توجد نتائج سابقة للتوسيع",
-        summary: "لم أجد نتائج سابقة يمكن توسيعها.",
-        badges: ["متابعة"],
-        result_type: "summary",
-        has_items: false,
-      },
-      result: null,
+      title: "لا توجد نتائج سابقة للتوسيع",
+      summary: "لم أجد نتائج سابقة يمكن توسيعها.",
+      badges: ["متابعة"],
       answer: "لم أجد نتائج سابقة يمكن توسيعها.",
-      followUps: [
-        "اعرض أعلى 5 عملاء مديونية",
-        "اعرض أعلى 5 مركبات تكلفة صيانة",
-        "اعرض أعلى 5 أصناف صرفًا",
-        "اعرض أعلى 5 مركبات حسب الرحلات",
-      ],
-      insights: [],
-      session_snapshot: null,
-    };
+      followUps: buildReferenceFallbackFollowUps(),
+    });
   }
 
   const newSnapshot = {
@@ -600,19 +326,12 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
     created_at: new Date().toISOString(),
   };
 
-  return {
-    ok: true,
+  return buildSimpleResponse({
     parsed,
-    intent: parsed,
     mode: "query",
-    ui: {
-      mode: "query",
-      title: `توسيع النتائج السابقة إلى ${limit}`,
-      summary: `تم عرض أول ${sliced.length} عنصر من النتائج السابقة.`,
-      badges: ["متابعة", "توسيع النتائج"],
-      result_type: "table",
-      has_items: true,
-    },
+    title: `توسيع النتائج السابقة إلى ${limit}`,
+    summary: `تم عرض أول ${sliced.length} عنصر من النتائج السابقة.`,
+    badges: ["متابعة", "توسيع النتائج"],
     result: {
       data: {
         items: sliced,
@@ -627,9 +346,10 @@ function buildReferenceExpandLimitResponse({ parsed, snapshot }) {
         },
       },
     }),
-    insights: [],
     session_snapshot: newSnapshot,
-  };
+    result_type: "table",
+    has_items: true,
+  });
 }
 
 function buildActionPreviewResponse({ parsed }) {
@@ -672,117 +392,350 @@ function buildActionPreviewResponse({ parsed }) {
   };
 }
 
-async function queryAiAnalytics({ user, body }) {
-  const question = String(body?.question || "").trim();
+// =======================
+// Query execution
+// =======================
+async function executeParsedQuery({ user, parsed }) {
+  const intent = parsed?.intent;
+  const query = parsedToAnalyticsQuery(parsed);
 
-  if (!question) {
-    const err = new Error("question is required");
-    err.status = 400;
-    throw err;
+  if (intent === "expense_summary_compare") {
+    return buildExpenseCompareResult({ user });
   }
 
-  const parsed = parseAiQuestion({
-    question,
-    context: body?.context || null,
+  const handlers = {
+    expense_summary: analyticsService.getFinanceExpenseSummary,
+    expense_by_type: analyticsService.getFinanceExpenseByType,
+    expense_by_vehicle: analyticsService.getFinanceExpenseByVehicle,
+    expense_by_payment_source: analyticsService.getFinanceExpenseByPaymentSource,
+    top_vendors: analyticsService.getFinanceTopVendors,
+    expense_approval_breakdown: analyticsService.getFinanceExpenseApprovalBreakdown,
+
+    outstanding_summary: analyticsService.getArOutstandingSummary,
+    top_debtors: analyticsService.getArTopDebtors,
+
+    open_work_orders: analyticsService.getMaintenanceOpenWorkOrders,
+    maintenance_cost_by_vehicle: analyticsService.getMaintenanceCostByVehicle,
+
+    top_issued_parts: analyticsService.getInventoryTopIssuedParts,
+    low_stock_items: analyticsService.getInventoryLowStockItems,
+
+    trips_summary: analyticsService.getTripsSummary,
+    active_trips: analyticsService.getActiveTrips,
+    trips_need_financial_closure: analyticsService.getTripsNeedingFinancialClosure,
+    top_clients_by_trips: analyticsService.getTopClientsByTrips,
+    top_sites_by_trips: analyticsService.getTopSitesByTrips,
+    top_vehicles_by_trips: analyticsService.getTopVehiclesByTrips,
+
+    entity_profit_summary: analyticsService.getEntityProfitSummary,
+  };
+
+  const handler = handlers[intent];
+  if (!handler) return null;
+
+  return handler.call(analyticsService, { user, query });
+}
+
+// =======================
+// Inline insights
+// =======================
+async function buildFinanceInlineInsights({ user, parsed, result }) {
+  const expenseSummary =
+    parsed?.intent === "expense_summary"
+      ? result
+      : await analyticsService.getFinanceExpenseSummary({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const expenseByType =
+    parsed?.intent === "expense_by_type"
+      ? result
+      : await analyticsService.getFinanceExpenseByType({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const expenseByVehicle =
+    parsed?.intent === "expense_by_vehicle"
+      ? result
+      : await analyticsService.getFinanceExpenseByVehicle({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const expenseByPaymentSource =
+    parsed?.intent === "expense_by_payment_source"
+      ? result
+      : await analyticsService.getFinanceExpenseByPaymentSource({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const topVendors =
+    parsed?.intent === "top_vendors"
+      ? result
+      : await analyticsService.getFinanceTopVendors({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const expenseApprovalBreakdown =
+    parsed?.intent === "expense_approval_breakdown"
+      ? result
+      : await analyticsService.getFinanceExpenseApprovalBreakdown({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
     user,
-    body,
+    query: { range: "last_month" },
   });
 
-  if (parsed?.mode === "unsupported_followup") {
-    return buildUnsupportedFollowupResponse({
-      parsed,
-      body,
-    });
+  return buildInsightsByContext({
+    context: "finance",
+    data: {
+      expenseSummary,
+      expenseByType,
+      expenseByVehicle,
+      expenseByPaymentSource,
+      topVendors,
+      expenseApprovalBreakdown,
+      expenseSummaryLastMonth,
+    },
+  }).slice(0, 5);
+}
+
+async function buildArInlineInsights({ user, parsed, result }) {
+  const outstandingSummary =
+    parsed?.intent === "outstanding_summary"
+      ? result
+      : await analyticsService.getArOutstandingSummary({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const topDebtors =
+    parsed?.intent === "top_debtors"
+      ? result
+      : await analyticsService.getArTopDebtors({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  return buildInsightsByContext({
+    context: "ar",
+    data: {
+      outstandingSummary,
+      topDebtors,
+    },
+  }).slice(0, 3);
+}
+
+async function buildMaintenanceInlineInsights({ user, parsed, result }) {
+  const openWorkOrders =
+    parsed?.intent === "open_work_orders"
+      ? result
+      : await analyticsService.getMaintenanceOpenWorkOrders({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const costByVehicle =
+    parsed?.intent === "maintenance_cost_by_vehicle"
+      ? result
+      : await analyticsService.getMaintenanceCostByVehicle({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  return buildInsightsByContext({
+    context: "maintenance",
+    data: {
+      openWorkOrders,
+      costByVehicle,
+    },
+  }).slice(0, 3);
+}
+
+async function buildInventoryInlineInsights({ user, parsed, result }) {
+  const topIssuedParts =
+    parsed?.intent === "top_issued_parts"
+      ? result
+      : await analyticsService.getInventoryTopIssuedParts({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const lowStockItems =
+    parsed?.intent === "low_stock_items"
+      ? result
+      : await analyticsService.getInventoryLowStockItems({
+          user,
+          query: { limit: 10 },
+        });
+
+  return buildInsightsByContext({
+    context: "inventory",
+    data: {
+      topIssuedParts,
+      lowStockItems,
+    },
+  }).slice(0, 3);
+}
+
+async function buildTripsInlineInsights({ user, parsed, result }) {
+  const tripsSummary =
+    parsed?.intent === "trips_summary"
+      ? result
+      : await analyticsService.getTripsSummary({
+          user,
+          query: { range: "this_month" },
+        });
+
+  const activeTrips =
+    parsed?.intent === "active_trips"
+      ? result
+      : await analyticsService.getActiveTrips({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const tripsNeedFinancialClosure =
+    parsed?.intent === "trips_need_financial_closure"
+      ? result
+      : await analyticsService.getTripsNeedingFinancialClosure({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const topClientsByTrips =
+    parsed?.intent === "top_clients_by_trips"
+      ? result
+      : await analyticsService.getTopClientsByTrips({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const topSitesByTrips =
+    parsed?.intent === "top_sites_by_trips"
+      ? result
+      : await analyticsService.getTopSitesByTrips({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  const topVehiclesByTrips =
+    parsed?.intent === "top_vehicles_by_trips"
+      ? result
+      : await analyticsService.getTopVehiclesByTrips({
+          user,
+          query: { range: "this_month", limit: 5 },
+        });
+
+  return buildInsightsByContext({
+    context: "trips",
+    data: {
+      tripsSummary,
+      activeTrips,
+      tripsNeedFinancialClosure,
+      topClientsByTrips,
+      topSitesByTrips,
+      topVehiclesByTrips,
+    },
+  }).slice(0, 5);
+}
+
+async function buildInlineInsights({ user, parsed, result }) {
+  const moduleName = parsed?.module || parsed?.domain;
+
+  if (moduleName === "finance") {
+    return buildFinanceInlineInsights({ user, parsed, result });
   }
 
-  if (!parsed || parsed.mode === "unknown" || parsed.intent === "unknown") {
-    const entityFollowUpResponse = handleEntityIntelligenceFollowUp({
-      parsed: parsed || { mode: "unknown", intent: "unknown" },
-      question,
-      snapshot: body?.session_snapshot || null,
-    });
-
-    if (entityFollowUpResponse) {
-      return entityFollowUpResponse;
-    }
-
-    return buildUnknownResponse(parsed);
+  if (moduleName === "ar") {
+    return buildArInlineInsights({ user, parsed, result });
   }
 
-  if (parsed.mode === "reference_followup") {
-    if (parsed.intent === "reference_previous_expand_limit") {
-      return buildReferenceExpandLimitResponse({
-        parsed,
-        snapshot: body?.session_snapshot || null,
-      });
-    }
-
-    const referenceResult = resolveReferenceFollowUp({
-      parsed,
-      body,
-    });
-
-    return buildReferenceFollowUpResponse({
-      parsed,
-      referenceResult,
-    });
+  if (moduleName === "maintenance") {
+    return buildMaintenanceInlineInsights({ user, parsed, result });
   }
 
-  if (parsed.mode === "action" && !body?.auto_execute) {
-    return buildActionPreviewResponse({ parsed });
+  if (moduleName === "inventory") {
+    return buildInventoryInlineInsights({ user, parsed, result });
   }
 
-  if (parsed.mode === "action") {
-    const execution = await executeAiAction({
-      interpreted: {
-        mode: "action",
-        domain: parsed.domain,
-        action: parsed.intent,
-        confidence: parsed.confidence,
-        auto_execute: parsed.auto_execute,
-        payload: parsed.action_payload || {},
-      },
-      user,
-    });
+  if (moduleName === "trips") {
+    return buildTripsInlineInsights({ user, parsed, result });
+  }
 
-    const built = buildArabicAnswer({
-      parsed,
-      execution,
-      result: execution,
-    });
+  return [];
+}
 
-    const followUps = getFollowUpQuestions({
-      parsed,
-      execution,
-      result: execution,
-    });
+// =======================
+// Main flow helpers
+// =======================
+function tryEntityFollowUp({ parsed, question, snapshot }) {
+  return handleEntityIntelligenceFollowUp({
+    parsed: parsed || { mode: "unknown", intent: "unknown" },
+    question,
+    snapshot,
+  });
+}
 
-    return {
-      ok: true,
-      parsed,
-      intent: parsed,
+async function handleActionExecution({ parsed, user }) {
+  const execution = await executeAiAction({
+    interpreted: {
       mode: "action",
+      domain: parsed.domain,
       action: parsed.intent,
-      ui: built.ui,
-      execution: {
-        status: execution?.executed ? "executed" : "execution_failed",
-        ready_to_execute: false,
-        executed: Boolean(execution?.executed),
-        payload: parsed.action_payload || null,
-        missing_fields: [],
-      },
-      result: execution,
-      answer: built.answer,
-      followUps,
-      insights: [],
-      session_snapshot: null,
-    };
-  }
+      confidence: parsed.confidence,
+      auto_execute: parsed.auto_execute,
+      payload: parsed.action_payload || {},
+    },
+    user,
+  });
 
+  const built = buildArabicAnswer({
+    parsed,
+    execution,
+    result: execution,
+  });
+
+  const followUps = getFollowUpQuestions({
+    parsed,
+    execution,
+    result: execution,
+  });
+
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "action",
+    action: parsed.intent,
+    ui: built.ui,
+    execution: {
+      status: execution?.executed ? "executed" : "execution_failed",
+      ready_to_execute: false,
+      executed: Boolean(execution?.executed),
+      payload: parsed.action_payload || null,
+      missing_fields: [],
+    },
+    result: execution,
+    answer: built.answer,
+    followUps,
+    insights: [],
+    session_snapshot: null,
+  };
+}
+
+async function handleQueryExecution({ parsed, user, question, body }) {
   const result = await executeParsedQuery({ user, parsed });
 
   if (!result) {
-    const entityFollowUpResponse = handleEntityIntelligenceFollowUp({
+    const entityFollowUpResponse = tryEntityFollowUp({
       parsed,
       question,
       snapshot: body?.session_snapshot || null,
@@ -836,6 +789,81 @@ async function queryAiAnalytics({ user, body }) {
   };
 }
 
+// =======================
+// Public API
+// =======================
+async function queryAiAnalytics({ user, body }) {
+  const question = String(body?.question || "").trim();
+
+  if (!question) {
+    const err = new Error("question is required");
+    err.status = 400;
+    throw err;
+  }
+
+  const parsed = parseAiQuestion({
+    question,
+    context: body?.context || null,
+    user,
+    body,
+  });
+
+  if (parsed?.mode === "unsupported_followup") {
+    return buildUnsupportedFollowupResponse({
+      parsed,
+      body,
+    });
+  }
+
+  if (!parsed || parsed.mode === "unknown" || parsed.intent === "unknown") {
+    const entityFollowUpResponse = tryEntityFollowUp({
+      parsed,
+      question,
+      snapshot: body?.session_snapshot || null,
+    });
+
+    if (entityFollowUpResponse) {
+      return entityFollowUpResponse;
+    }
+
+    return buildUnknownResponse(parsed);
+  }
+
+  if (parsed.mode === "reference_followup") {
+    if (parsed.intent === "reference_previous_expand_limit") {
+      return buildReferenceExpandLimitResponse({
+        parsed,
+        snapshot: body?.session_snapshot || null,
+      });
+    }
+
+    const referenceResult = resolveReferenceFollowUp({
+      parsed,
+      body,
+    });
+
+    return buildReferenceFollowUpResponse({
+      parsed,
+      referenceResult,
+    });
+  }
+
+  if (parsed.mode === "action" && !body?.auto_execute) {
+    return buildActionPreviewResponse({ parsed });
+  }
+
+  if (parsed.mode === "action") {
+    return handleActionExecution({ parsed, user });
+  }
+
+  return handleQueryExecution({
+    parsed,
+    user,
+    question,
+    body,
+  });
+}
+
 async function getAiSuggestedQuestions({ user, query }) {
   const context = String(query?.context || "").trim().toLowerCase() || null;
 
@@ -853,7 +881,6 @@ async function getAiSuggestedQuestions({ user, query }) {
 
 async function getAiInsights({ user, query }) {
   const context = String(query?.context || "").trim().toLowerCase() || null;
-
   const data = {};
 
   if (!context || context === "finance") {

@@ -12,7 +12,7 @@ function uniqueQuestions(items = []) {
   );
 }
 
-function buildFinanceQuestions() {
+function financeQuestions() {
   return [
     "كم إجمالي المصروفات هذا الشهر؟",
     "قارن مصروفات هذا الشهر بالشهر الماضي",
@@ -28,7 +28,7 @@ function buildFinanceQuestions() {
   ];
 }
 
-function buildArQuestions() {
+function arQuestions() {
   return [
     "كم إجمالي مستحقات العملاء؟",
     "قيمة متأخرات العملاء كام؟",
@@ -38,7 +38,7 @@ function buildArQuestions() {
   ];
 }
 
-function buildMaintenanceQuestions() {
+function maintenanceQuestions() {
   return [
     "كم عدد أوامر العمل المفتوحة؟",
     "ما أعلى مركبة تكلفة صيانة؟",
@@ -46,7 +46,7 @@ function buildMaintenanceQuestions() {
   ];
 }
 
-function buildInventoryQuestions() {
+function inventoryQuestions() {
   return [
     "ما أكثر قطع الغيار صرفًا هذا الشهر؟",
     "اعرض أعلى 5 أصناف صرفًا",
@@ -55,7 +55,7 @@ function buildInventoryQuestions() {
   ];
 }
 
-function buildTripsQuestions() {
+function tripsQuestions() {
   return [
     "كم عدد الرحلات هذا الشهر؟",
     "اعرض الرحلات النشطة",
@@ -69,21 +69,59 @@ function buildTripsQuestions() {
   ];
 }
 
+function defaultQuestions() {
+  return [
+    "كم إجمالي المصروفات هذا الشهر؟",
+    "من أعلى عميل مديونية؟",
+    "كم عدد أوامر العمل المفتوحة؟",
+    "ما الأصناف القريبة من النفاد؟",
+    "كم عدد الرحلات هذا الشهر؟",
+  ];
+}
+
+function allQuestions() {
+  return [
+    ...financeQuestions(),
+    ...arQuestions(),
+    ...maintenanceQuestions(),
+    ...inventoryQuestions(),
+    ...tripsQuestions(),
+  ];
+}
+
 function questionsByContext(context) {
   const c = String(context || "").trim().toLowerCase();
 
-  if (c === "finance") return buildFinanceQuestions();
-  if (c === "ar") return buildArQuestions();
-  if (c === "maintenance") return buildMaintenanceQuestions();
-  if (c === "inventory") return buildInventoryQuestions();
-  if (c === "trips") return buildTripsQuestions();
+  const contextMap = {
+    finance: financeQuestions,
+    ar: arQuestions,
+    maintenance: maintenanceQuestions,
+    inventory: inventoryQuestions,
+    trips: tripsQuestions,
+  };
 
+  return contextMap[c] ? contextMap[c]() : allQuestions();
+}
+
+function fieldSupervisorQuestions() {
   return [
-    ...buildFinanceQuestions(),
-    ...buildArQuestions(),
-    ...buildMaintenanceQuestions(),
-    ...buildInventoryQuestions(),
-    ...buildTripsQuestions(),
+    "كم إجمالي المصروفات هذا الشهر؟",
+    "ما أعلى مركبة صرفًا هذا الشهر؟",
+    "اعرض أعلى 5 مركبات صرفًا هذا الشهر",
+    "كم عدد أوامر العمل المفتوحة؟",
+    "ما أعلى مركبة تكلفة صيانة؟",
+    "اعرض أعلى 5 مركبات تكلفة صيانة",
+    "كم عدد الرحلات هذا الشهر؟",
+    "اعرض الرحلات النشطة",
+    "كم عدد الرحلات التي تحتاج إغلاق مالي؟",
+    "من أعلى مركبة من حيث الرحلات؟",
+  ];
+}
+
+function hrQuestions() {
+  return [
+    ...maintenanceQuestions(),
+    ...tripsQuestions(),
   ];
 }
 
@@ -95,57 +133,19 @@ function questionsByRole(role, context) {
     return questionsByContext(c);
   }
 
-  if (r === "ADMIN") {
-    return [
-      ...buildFinanceQuestions(),
-      ...buildArQuestions(),
-      ...buildMaintenanceQuestions(),
-      ...buildInventoryQuestions(),
-      ...buildTripsQuestions(),
-    ];
-  }
+  const roleMap = {
+    ADMIN: allQuestions,
+    ACCOUNTANT: () => [
+      ...financeQuestions(),
+      ...arQuestions(),
+      ...tripsQuestions(),
+    ],
+    FIELD_SUPERVISOR: fieldSupervisorQuestions,
+    STOREKEEPER: inventoryQuestions,
+    HR: hrQuestions,
+  };
 
-  if (r === "ACCOUNTANT") {
-    return [
-      ...buildFinanceQuestions(),
-      ...buildArQuestions(),
-      ...buildTripsQuestions(),
-    ];
-  }
-
-  if (r === "FIELD_SUPERVISOR") {
-    return [
-      "كم إجمالي المصروفات هذا الشهر؟",
-      "ما أعلى مركبة صرفًا هذا الشهر؟",
-      "اعرض أعلى 5 مركبات صرفًا هذا الشهر",
-      "كم عدد أوامر العمل المفتوحة؟",
-      "ما أعلى مركبة تكلفة صيانة؟",
-      "اعرض أعلى 5 مركبات تكلفة صيانة",
-      "كم عدد الرحلات هذا الشهر؟",
-      "اعرض الرحلات النشطة",
-      "كم عدد الرحلات التي تحتاج إغلاق مالي؟",
-      "من أعلى مركبة من حيث الرحلات؟",
-    ];
-  }
-
-  if (r === "STOREKEEPER") {
-    return buildInventoryQuestions();
-  }
-
-  if (r === "HR") {
-    return [
-      ...buildMaintenanceQuestions(),
-      ...buildTripsQuestions(),
-    ];
-  }
-
-  return [
-    "كم إجمالي المصروفات هذا الشهر؟",
-    "من أعلى عميل مديونية؟",
-    "كم عدد أوامر العمل المفتوحة؟",
-    "ما الأصناف القريبة من النفاد؟",
-    "كم عدد الرحلات هذا الشهر؟",
-  ];
+  return roleMap[r] ? roleMap[r]() : defaultQuestions();
 }
 
 function buildDynamicFinanceQuestions(signals = {}) {
@@ -276,14 +276,23 @@ function buildDynamicTripsQuestions(signals = {}) {
   return items;
 }
 
+function dynamicQuestionsMap() {
+  return {
+    finance: buildDynamicFinanceQuestions,
+    ar: buildDynamicArQuestions,
+    maintenance: buildDynamicMaintenanceQuestions,
+    inventory: buildDynamicInventoryQuestions,
+    trips: buildDynamicTripsQuestions,
+  };
+}
+
 function getDynamicQuestions({ context = null, signals = {} }) {
   const c = String(context || "").trim().toLowerCase();
+  const map = dynamicQuestionsMap();
 
-  if (c === "finance") return buildDynamicFinanceQuestions(signals);
-  if (c === "ar") return buildDynamicArQuestions(signals);
-  if (c === "maintenance") return buildDynamicMaintenanceQuestions(signals);
-  if (c === "inventory") return buildDynamicInventoryQuestions(signals);
-  if (c === "trips") return buildDynamicTripsQuestions(signals);
+  if (map[c]) {
+    return map[c](signals);
+  }
 
   return [
     ...buildDynamicFinanceQuestions(signals),

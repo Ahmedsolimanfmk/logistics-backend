@@ -1,9 +1,34 @@
-const { getEntityContext } = require("./entity-memory");
-
 function normalizeText(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+  return String(value || "").trim().toLowerCase();
+}
+
+function getEntityContext(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return {
+      primary_entity: null,
+      last_entities: [],
+    };
+  }
+
+  return snapshot.entity_context || {
+    primary_entity: null,
+    last_entities: [],
+  };
+}
+
+function buildError(message, code) {
+  return {
+    ok: false,
+    code,
+    message,
+  };
+}
+
+function buildSuccess(entity) {
+  return {
+    ok: true,
+    entity,
+  };
 }
 
 function resolveIndexedReference(text, snapshot) {
@@ -33,33 +58,19 @@ function resolveIndexedReference(text, snapshot) {
     "5": 4,
   };
 
-  if (!(t in indexMap)) {
-    return null;
+  if (!(t in indexMap)) return null;
+
+  const entities = Array.isArray(ctx.last_entities) ? ctx.last_entities : [];
+  if (!entities.length) {
+    return buildError("لا توجد قائمة سابقة للاختيار منها.", "NO_LIST");
   }
 
-  if (!Array.isArray(ctx.last_entities) || !ctx.last_entities.length) {
-    return {
-      ok: false,
-      code: "NO_LIST",
-      message: "لا توجد قائمة سابقة للاختيار منها.",
-    };
-  }
-
-  const idx = indexMap[t];
-  const entity = ctx.last_entities[idx];
-
+  const entity = entities[indexMap[t]];
   if (!entity) {
-    return {
-      ok: false,
-      code: "OUT_OF_RANGE",
-      message: "العنصر المطلوب غير موجود في النتائج السابقة.",
-    };
+    return buildError("العنصر المطلوب غير موجود في النتائج السابقة.", "OUT_OF_RANGE");
   }
 
-  return {
-    ok: true,
-    entity,
-  };
+  return buildSuccess(entity);
 }
 
 function resolveContextReference(text, snapshot) {
@@ -81,22 +92,13 @@ function resolveContextReference(text, snapshot) {
     "دي",
   ];
 
-  if (!primaryRefWords.includes(t)) {
-    return null;
-  }
+  if (!primaryRefWords.includes(t)) return null;
 
   if (!ctx.primary_entity) {
-    return {
-      ok: false,
-      code: "NO_CONTEXT",
-      message: "لا يوجد عنصر حالي يمكن الرجوع إليه.",
-    };
+    return buildError("لا يوجد عنصر حالي يمكن الرجوع إليه.", "NO_CONTEXT");
   }
 
-  return {
-    ok: true,
-    entity: ctx.primary_entity,
-  };
+  return buildSuccess(ctx.primary_entity);
 }
 
 module.exports = {

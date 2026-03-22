@@ -27,6 +27,20 @@ function pickValue(obj, keys = []) {
   return null;
 }
 
+function buildEntity(type, item, idKeys, labelKeys) {
+  const id = pickValue(item, idKeys);
+  const label = pickValue(item, labelKeys);
+
+  if (!type || !id) return null;
+
+  return {
+    type,
+    id,
+    label: label || String(id),
+    raw: item,
+  };
+}
+
 function mapItemToEntity(item, parsed) {
   if (!item || typeof item !== "object") return null;
 
@@ -34,30 +48,30 @@ function mapItemToEntity(item, parsed) {
   const moduleName = parsed?.module || parsed?.domain || "";
 
   if (intent === "top_debtors") {
-    return {
-      type: "client",
-      id: pickValue(item, ["client_id", "id", "client_name", "name"]),
-      label: pickValue(item, ["client_name", "name", "client"]),
-      raw: item,
-    };
+    return buildEntity(
+      "client",
+      item,
+      ["client_id", "id", "client_name", "name"],
+      ["client_name", "name", "client"]
+    );
   }
 
   if (intent === "top_clients_by_trips") {
-    return {
-      type: "client",
-      id: pickValue(item, ["client_id", "id", "client_name", "name"]),
-      label: pickValue(item, ["client_name", "name", "client"]),
-      raw: item,
-    };
+    return buildEntity(
+      "client",
+      item,
+      ["client_id", "id", "client_name", "name"],
+      ["client_name", "name", "client"]
+    );
   }
 
   if (intent === "top_sites_by_trips") {
-    return {
-      type: "site",
-      id: pickValue(item, ["site_id", "id", "site_name", "name"]),
-      label: pickValue(item, ["site_name", "name", "site"]),
-      raw: item,
-    };
+    return buildEntity(
+      "site",
+      item,
+      ["site_id", "id", "site_name", "name"],
+      ["site_name", "name", "site"]
+    );
   }
 
   if (
@@ -65,45 +79,21 @@ function mapItemToEntity(item, parsed) {
     intent === "maintenance_cost_by_vehicle" ||
     intent === "expense_by_vehicle"
   ) {
-    return {
-      type: "vehicle",
-      id: pickValue(item, [
-        "vehicle_id",
-        "id",
-        "vehicle_name",
-        "display_name",
-        "fleet_no",
-        "plate_no",
-      ]),
-      label: pickValue(item, [
-        "vehicle_name",
-        "display_name",
-        "fleet_no",
-        "plate_no",
-        "name",
-        "vehicle",
-      ]),
-      raw: item,
-    };
+    return buildEntity(
+      "vehicle",
+      item,
+      ["vehicle_id", "id", "vehicle_name", "display_name", "fleet_no", "plate_no"],
+      ["vehicle_name", "display_name", "fleet_no", "plate_no", "name", "vehicle"]
+    );
   }
 
   if (intent === "active_trips" || moduleName === "trips") {
-    const tripId = pickValue(item, ["trip_id", "id"]);
-    const tripLabel = pickValue(item, [
-      "trip_code",
-      "trip_no",
-      "reference_no",
-      "name",
-    ]);
-
-    if (tripId || tripLabel) {
-      return {
-        type: "trip",
-        id: tripId || tripLabel,
-        label: tripLabel || String(tripId),
-        raw: item,
-      };
-    }
+    return buildEntity(
+      "trip",
+      item,
+      ["trip_id", "id", "trip_code", "trip_no", "reference_no"],
+      ["trip_code", "trip_no", "reference_no", "name", "id"]
+    );
   }
 
   return null;
@@ -115,6 +105,26 @@ function extractEntitiesFromResult({ parsed, result }) {
   return items
     .map((item) => mapItemToEntity(item, parsed))
     .filter((entity) => entity && entity.type && entity.id);
+}
+
+function buildSelectionFollowUps(entity) {
+  if (entity?.type === "client") {
+    return ["رحلاته", "مديونيته", "مصروفاته"];
+  }
+
+  if (entity?.type === "vehicle") {
+    return ["صيانتها", "رحلاتها", "مصروفاتها"];
+  }
+
+  if (entity?.type === "site") {
+    return ["رحلاته"];
+  }
+
+  if (entity?.type === "trip") {
+    return ["اعرض التفاصيل"];
+  }
+
+  return ["اعرض التفاصيل"];
 }
 
 function buildEntitySelectionResponse({ parsed, entity, snapshot }) {
@@ -147,14 +157,7 @@ function buildEntitySelectionResponse({ parsed, entity, snapshot }) {
     answer: entity?.label
       ? `تم اختيار "${entity.label}" ويمكنك الآن المتابعة بأسئلة مثل رحلاته أو مديونيته أو صيانتها حسب نوع العنصر.`
       : "تم تحديد العنصر المطلوب من النتائج السابقة.",
-    followUps:
-      entity?.type === "client"
-        ? ["رحلاته", "مديونيته", "مصروفاته"]
-        : entity?.type === "vehicle"
-        ? ["صيانتها", "رحلاتها", "مصروفاتها"]
-        : entity?.type === "site"
-        ? ["رحلاته"]
-        : ["اعرض التفاصيل"],
+    followUps: buildSelectionFollowUps(entity),
     insights: [],
     session_snapshot: attachEntityContextToSnapshot(updatedSnapshot, {
       source_module: parsed?.module || parsed?.domain || null,
@@ -163,57 +166,64 @@ function buildEntitySelectionResponse({ parsed, entity, snapshot }) {
   };
 }
 
+function buildResolveErrorResponse({ parsed, message, snapshot }) {
+  return {
+    ok: true,
+    parsed,
+    intent: parsed,
+    mode: "unknown",
+    ui: {
+      mode: "unknown",
+      title: "تعذر تحديد المرجع",
+      summary: message,
+      badges: ["متابعة"],
+      result_type: "summary",
+      has_items: false,
+    },
+    result: null,
+    answer: message,
+    followUps: [
+      "اعرض أعلى 5 عملاء مديونية",
+      "اعرض أعلى 5 مركبات حسب الرحلات",
+      "اعرض أعلى 5 مواقع حسب الرحلات",
+    ],
+    insights: [],
+    session_snapshot: attachEntityContextToSnapshot(
+      ensureSnapshot(snapshot),
+      {}
+    ),
+  };
+}
+
 function resolveEntityFromText({ text, snapshot }) {
-  const indexed = resolveIndexedReference(text, snapshot);
-  if (indexed) return indexed;
-
-  const contextual = resolveContextReference(text, snapshot);
-  if (contextual) return contextual;
-
-  return null;
+  return (
+    resolveIndexedReference(text, snapshot) ||
+    resolveContextReference(text, snapshot) ||
+    null
+  );
 }
 
 function handleEntityIntelligenceFollowUp({ parsed, question, snapshot }) {
+  const safeSnapshot = ensureSnapshot(snapshot);
   const resolved = resolveEntityFromText({
     text: question,
-    snapshot,
+    snapshot: safeSnapshot,
   });
 
   if (!resolved) return null;
 
   if (!resolved.ok) {
-    return {
-      ok: true,
+    return buildResolveErrorResponse({
       parsed,
-      intent: parsed,
-      mode: "unknown",
-      ui: {
-        mode: "unknown",
-        title: "تعذر تحديد المرجع",
-        summary: resolved.message,
-        badges: ["متابعة"],
-        result_type: "summary",
-        has_items: false,
-      },
-      result: null,
-      answer: resolved.message,
-      followUps: [
-        "اعرض أعلى 5 عملاء مديونية",
-        "اعرض أعلى 5 مركبات حسب الرحلات",
-        "اعرض أعلى 5 مواقع حسب الرحلات",
-      ],
-      insights: [],
-      session_snapshot: attachEntityContextToSnapshot(
-        ensureSnapshot(snapshot),
-        {}
-      ),
-    };
+      message: resolved.message,
+      snapshot: safeSnapshot,
+    });
   }
 
   return buildEntitySelectionResponse({
     parsed,
     entity: resolved.entity,
-    snapshot: ensureSnapshot(snapshot),
+    snapshot: safeSnapshot,
   });
 }
 
@@ -221,7 +231,7 @@ function enrichSessionSnapshotWithEntities({ parsed, result, snapshot }) {
   const safeSnapshot = ensureSnapshot(snapshot);
   const entities = extractEntitiesFromResult({ parsed, result });
 
-  if (entities.length) {
+  if (entities.length > 0) {
     setLastEntities(safeSnapshot, entities);
   }
 

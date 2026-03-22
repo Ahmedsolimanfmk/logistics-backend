@@ -18,6 +18,9 @@ const {
   extractPaidMethod,
 } = require("./ai-analytics.extractors");
 
+// =======================
+// General helpers
+// =======================
 function roleUpper(role) {
   return String(role || "").trim().toUpperCase();
 }
@@ -55,15 +58,7 @@ function detectQuestionType(question) {
   return "general";
 }
 
-function detectModule(question, context, user) {
-  const normalizedContext = String(context || "").trim().toLowerCase();
-  const allowed = allowedModulesByRole(user?.role);
-
-  if (normalizedContext && allowed.includes(normalizedContext)) {
-    return normalizedContext;
-  }
-
-  const text = normalizeArabicText(question);
+function scoreModuleFromQuestion(text, allowed) {
   const scores = {
     finance: 0,
     ar: 0,
@@ -84,11 +79,37 @@ function detectModule(question, context, user) {
     .filter(([mod]) => allowed.includes(mod))
     .sort((a, b) => b[1] - a[1]);
 
-  if (ranked.length && ranked[0][1] > 0) {
-    return ranked[0][0];
+  return ranked.length && ranked[0][1] > 0 ? ranked[0][0] : null;
+}
+
+function detectModule(question, context, user) {
+  const normalizedContext = String(context || "").trim().toLowerCase();
+  const allowed = allowedModulesByRole(user?.role);
+
+  if (normalizedContext && allowed.includes(normalizedContext)) {
+    return normalizedContext;
   }
 
-  return allowed[0] || null;
+  const text = normalizeArabicText(question);
+  return scoreModuleFromQuestion(text, allowed) || allowed[0] || null;
+}
+
+function buildEntities(question) {
+  return {
+    vehicle_hint: extractVehicleHint(question) || null,
+    trip_hint: extractTripHint(question) || null,
+    work_order_hint: extractWorkOrderHint(question) || null,
+    client_hint: extractClientHint(question) || null,
+    part_hint: null,
+    site_hint: extractSiteHint(question) || null,
+    expense_type: extractExpenseType(question) || null,
+    vendor_name: extractVendorName(question) || null,
+    paid_method: extractPaidMethod(question) || null,
+    ordinal_ref: null,
+    same_as_previous: false,
+    possessive_owner_type: null,
+    possessive_owner_label: null,
+  };
 }
 
 function buildBaseParsed({ question, context, user, body }) {
@@ -105,21 +126,7 @@ function buildBaseParsed({ question, context, user, body }) {
     confidence: 0,
     raw_question: String(question || "").trim(),
     normalized_question: normalizeArabicText(question),
-    entities: {
-      vehicle_hint: extractVehicleHint(question) || null,
-      trip_hint: extractTripHint(question) || null,
-      work_order_hint: extractWorkOrderHint(question) || null,
-      client_hint: extractClientHint(question) || null,
-      part_hint: null,
-      site_hint: extractSiteHint(question) || null,
-      expense_type: extractExpenseType(question) || null,
-      vendor_name: extractVendorName(question) || null,
-      paid_method: extractPaidMethod(question) || null,
-      ordinal_ref: null,
-      same_as_previous: false,
-      possessive_owner_type: null,
-      possessive_owner_label: null,
-    },
+    entities: buildEntities(question),
     metric: null,
     group_by: null,
     filters: {
@@ -145,7 +152,7 @@ function applySnapshotEntityHints(base, body = {}) {
   const firstEntity = snapshot?.first_entity || null;
   const primaryEntity = snapshot?.entity_context?.primary_entity || null;
 
-  const merged = {
+  return {
     ...base,
     entities: {
       ...base.entities,
@@ -171,47 +178,68 @@ function applySnapshotEntityHints(base, body = {}) {
       possessive_owner_label: primaryEntity?.label || null,
     },
   };
-
-  return merged;
 }
 
+function withQuery(base, overrides = {}) {
+  return {
+    ...base,
+    mode: "query",
+    ...overrides,
+  };
+}
+
+function withUnsupported(base, overrides = {}) {
+  return {
+    ...base,
+    mode: "unsupported_followup",
+    ...overrides,
+  };
+}
+
+function buildActionParsed(base, overrides = {}) {
+  return {
+    ...base,
+    mode: "action",
+    options: {
+      ...base.options,
+      response_type: "action",
+    },
+    ...overrides,
+  };
+}
+
+function matchAny(text, groups = []) {
+  return groups.some((group) => includesAny(text, group || []));
+}
+
+// =======================
+// Action detection
+// =======================
 function detectAction(question, body = {}, base) {
   const text = normalizeArabicText(question);
 
   if (includesAny(text, SYNONYMS.actions?.createWorkOrder || [])) {
-    return {
-      ...base,
-      mode: "action",
+    return buildActionParsed(base, {
       intent: "create_work_order",
       confidence: 0.95,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
       action_payload: {
         vehicle_hint: extractVehicleHint(question),
         title: extractTitle(question),
         notes: String(question || "").trim(),
       },
-    };
+    });
   }
 
   if (includesAny(text, SYNONYMS.actions?.createMaintenanceRequest || [])) {
-    return {
-      ...base,
-      mode: "action",
+    return buildActionParsed(base, {
       intent: "create_maintenance_request",
       confidence: 0.95,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
       action_payload: {
         vehicle_hint: extractVehicleHint(question),
         description: extractTitle(question) || String(question || "").trim(),
         title: extractTitle(question),
       },
-    };
+    });
   }
 
   if (
@@ -219,17 +247,11 @@ function detectAction(question, body = {}, base) {
     (text.includes("مصروف") &&
       includesAny(text, ["وقود", "صيانه", "صيانة", "زيت", "كاوتش", "شراء", "نثريه", "نثرية"]))
   ) {
-    return {
-      ...base,
-      mode: "action",
+    return buildActionParsed(base, {
       module: "finance",
       domain: "finance",
       intent: "create_expense",
       confidence: 0.94,
-      options: {
-        ...base.options,
-        response_type: "action",
-      },
       action_payload: {
         amount: extractAmount(question),
         expense_type: extractExpenseType(question),
@@ -249,12 +271,15 @@ function detectAction(question, body = {}, base) {
         invoice_total: body?.invoice_total || null,
         notes: String(question || "").trim(),
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Finance parser
+// =======================
 function parseFinance(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -274,9 +299,7 @@ function parseFinance(question, base) {
       "قارن الصرف هذا الشهر بالشهر الماضي",
     ])
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_summary_compare",
       confidence: 0.95,
       metric: "total_expense",
@@ -291,7 +314,7 @@ function parseFinance(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
@@ -310,9 +333,7 @@ function parseFinance(question, base) {
     (text.includes("مصروفات") && includesAny(text, ["اجمالي", "كم", "كام"])) ||
     (text.includes("الصرف") && includesAny(text, ["اجمالي", "كم", "كام"]))
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_summary",
       confidence: 0.92,
       metric: "total_expense",
@@ -321,7 +342,7 @@ function parseFinance(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
@@ -331,9 +352,7 @@ function parseFinance(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_by_type",
       confidence: 0.92,
       metric: "expense_amount",
@@ -343,7 +362,7 @@ function parseFinance(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -368,9 +387,7 @@ function parseFinance(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_by_vehicle",
       confidence: 0.93,
       metric: "expense_amount",
@@ -380,7 +397,7 @@ function parseFinance(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -399,9 +416,7 @@ function parseFinance(question, base) {
       "كم من العهدة وكم من الشركة",
     ])
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_by_payment_source",
       confidence: 0.92,
       metric: "expense_amount",
@@ -410,7 +425,7 @@ function parseFinance(question, base) {
         ...base.options,
         response_type: "table",
       },
-    };
+    });
   }
 
   if (
@@ -430,9 +445,7 @@ function parseFinance(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "top_vendors",
       confidence: 0.91,
       metric: "expense_amount",
@@ -442,7 +455,7 @@ function parseFinance(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -460,9 +473,7 @@ function parseFinance(question, base) {
       "حالات المصروفات",
     ])
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "expense_approval_breakdown",
       confidence: 0.9,
       metric: "expense_amount",
@@ -471,12 +482,15 @@ function parseFinance(question, base) {
         ...base.options,
         response_type: "table",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// AR parser
+// =======================
 function parseAr(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -487,9 +501,7 @@ function parseAr(question, base) {
     (text.includes("مستحقات") && includesAny(text, ["العملاء", "عملاء"])) ||
     (text.includes("مديوني") && includesAny(text, ["العملاء", "عملاء"]))
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "outstanding_summary",
       confidence: 0.9,
       metric: "total_outstanding",
@@ -502,16 +514,14 @@ function parseAr(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
     includesAny(text, SYNONYMS.ar?.overdue || []) ||
     (text.includes("متاخر") && includesAny(text, ["العملاء", "عملاء", "مستحقات"]))
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "outstanding_summary",
       confidence: 0.9,
       metric: "overdue_amount",
@@ -524,7 +534,7 @@ function parseAr(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
@@ -537,9 +547,7 @@ function parseAr(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "top_debtors",
       confidence: 0.9,
       metric: "outstanding_amount",
@@ -549,12 +557,15 @@ function parseAr(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Maintenance parser
+// =======================
 function parseMaintenance(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -568,9 +579,7 @@ function parseMaintenance(question, base) {
       includesAny(text, ["مفتوح", "مفتوحه", "مفتوحة"])
     )
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "open_work_orders",
       confidence: 0.9,
       metric: "open_work_orders_count",
@@ -579,7 +588,7 @@ function parseMaintenance(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
@@ -592,9 +601,7 @@ function parseMaintenance(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "maintenance_cost_by_vehicle",
       confidence: 0.9,
       metric: "maintenance_cost",
@@ -604,12 +611,15 @@ function parseMaintenance(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Inventory parser
+// =======================
 function parseInventory(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -625,9 +635,7 @@ function parseInventory(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "top_issued_parts",
       confidence: 0.9,
       metric: "issued_qty",
@@ -637,7 +645,7 @@ function parseInventory(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -649,9 +657,7 @@ function parseInventory(question, base) {
   ) {
     const focus = includesAny(text, ["كم", "كام", "عدد"]) ? "count_only" : "list";
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       intent: "low_stock_items",
       confidence: 0.9,
       metric: "low_stock_count",
@@ -666,18 +672,28 @@ function parseInventory(question, base) {
         limit: limit || 10,
         response_type: focus === "count_only" ? "summary" : "table",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Trips followups
+// =======================
 function parseTripsFollowup(question, base, body = {}) {
   const text = base.normalized_question;
   const snapshot = body?.session_snapshot || null;
-  const hasClient = Boolean(base?.entities?.client_hint || snapshot?.applied_entities?.client_hint);
-  const hasSite = Boolean(base?.entities?.site_hint || snapshot?.applied_entities?.site_hint);
-  const hasVehicle = Boolean(base?.entities?.vehicle_hint || snapshot?.applied_entities?.vehicle_hint);
+
+  const hasClient = Boolean(
+    base?.entities?.client_hint || snapshot?.applied_entities?.client_hint
+  );
+  const hasSite = Boolean(
+    base?.entities?.site_hint || snapshot?.applied_entities?.site_hint
+  );
+  const hasVehicle = Boolean(
+    base?.entities?.vehicle_hint || snapshot?.applied_entities?.vehicle_hint
+  );
 
   if (
     includesAny(text, [
@@ -695,9 +711,7 @@ function parseTripsFollowup(question, base, body = {}) {
     ])
   ) {
     if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
+      return withQuery(base, {
         module: "trips",
         domain: "trips",
         intent: "trips_summary",
@@ -708,7 +722,7 @@ function parseTripsFollowup(question, base, body = {}) {
           ...base.options,
           response_type: "summary",
         },
-      };
+      });
     }
   }
 
@@ -725,9 +739,7 @@ function parseTripsFollowup(question, base, body = {}) {
     ])
   ) {
     if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
+      return withQuery(base, {
         module: "trips",
         domain: "trips",
         intent: "active_trips",
@@ -739,7 +751,7 @@ function parseTripsFollowup(question, base, body = {}) {
           limit: base.options.limit || 5,
           response_type: "table",
         },
-      };
+      });
     }
   }
 
@@ -757,9 +769,7 @@ function parseTripsFollowup(question, base, body = {}) {
     ])
   ) {
     if (hasClient || hasSite || hasVehicle) {
-      return {
-        ...base,
-        mode: "query",
+      return withQuery(base, {
         module: "trips",
         domain: "trips",
         intent: "trips_need_financial_closure",
@@ -771,13 +781,16 @@ function parseTripsFollowup(question, base, body = {}) {
           limit: base.options.limit || 5,
           response_type: "table",
         },
-      };
+      });
     }
   }
 
   return null;
 }
 
+// =======================
+// Possessive followups
+// =======================
 function parsePossessiveFollowUp(question, base, body = {}) {
   const text = base.normalized_question;
   const snapshot = body?.session_snapshot || null;
@@ -788,11 +801,20 @@ function parsePossessiveFollowUp(question, base, body = {}) {
 
   if (!ownerType || !ownerLabel) return null;
 
-    if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها", "هل هو مربح", "هل هي مربحة"])) {
+  if (
+    includesAny(text, [
+      "ربحه",
+      "ربحها",
+      "أرباحه",
+      "ارباحه",
+      "أرباحها",
+      "ارباحها",
+      "هل هو مربح",
+      "هل هي مربحة",
+    ])
+  ) {
     if (ownerType !== "client") {
-      return {
-        ...base,
-        mode: "unsupported_followup",
+      return withUnsupported(base, {
         module: "finance",
         domain: "finance",
         intent: "unsupported_possessive_relation",
@@ -802,12 +824,10 @@ function parsePossessiveFollowUp(question, base, body = {}) {
           ...base.options,
           response_type: "summary",
         },
-      };
+      });
     }
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "finance",
       domain: "finance",
       intent: "entity_profit_summary",
@@ -821,14 +841,12 @@ function parsePossessiveFollowUp(question, base, body = {}) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (includesAny(text, ["رحلاته", "رحلاتها"])) {
     if (!["client", "vehicle", "site"].includes(ownerType)) {
-      return {
-        ...base,
-        mode: "unsupported_followup",
+      return withUnsupported(base, {
         module: "trips",
         domain: "trips",
         intent: "unsupported_possessive_relation",
@@ -838,7 +856,7 @@ function parsePossessiveFollowUp(question, base, body = {}) {
           ...base.options,
           response_type: "summary",
         },
-      };
+      });
     }
 
     const entities = { ...base.entities };
@@ -851,9 +869,7 @@ function parsePossessiveFollowUp(question, base, body = {}) {
       entities.site_hint = entities.site_hint || ownerLabel;
     }
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "trips_summary",
@@ -864,14 +880,12 @@ function parsePossessiveFollowUp(question, base, body = {}) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (includesAny(text, ["صيانته", "صيانتها"])) {
     if (ownerType !== "vehicle") {
-      return {
-        ...base,
-        mode: "unsupported_followup",
+      return withUnsupported(base, {
         module: "maintenance",
         domain: "maintenance",
         intent: "unsupported_possessive_relation",
@@ -881,12 +895,10 @@ function parsePossessiveFollowUp(question, base, body = {}) {
           ...base.options,
           response_type: "summary",
         },
-      };
+      });
     }
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "maintenance",
       domain: "maintenance",
       intent: "maintenance_cost_by_vehicle",
@@ -902,14 +914,12 @@ function parsePossessiveFollowUp(question, base, body = {}) {
         limit: 1,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (includesAny(text, ["مصروفاته", "مصروفاتها", "مصاريفه", "مصاريفها"])) {
     if (ownerType === "vehicle") {
-      return {
-        ...base,
-        mode: "query",
+      return withQuery(base, {
         module: "finance",
         domain: "finance",
         intent: "expense_by_vehicle",
@@ -925,13 +935,11 @@ function parsePossessiveFollowUp(question, base, body = {}) {
           limit: 1,
           response_type: "summary",
         },
-      };
+      });
     }
 
     if (ownerType === "client") {
-      return {
-        ...base,
-        mode: "unsupported_followup",
+      return withUnsupported(base, {
         module: "finance",
         domain: "finance",
         intent: "client_expense_followup_pending",
@@ -945,12 +953,10 @@ function parsePossessiveFollowUp(question, base, body = {}) {
           ...base.options,
           response_type: "summary",
         },
-      };
+      });
     }
 
-    return {
-      ...base,
-      mode: "unsupported_followup",
+    return withUnsupported(base, {
       module: "finance",
       domain: "finance",
       intent: "unsupported_possessive_relation",
@@ -960,13 +966,11 @@ function parsePossessiveFollowUp(question, base, body = {}) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها"])) {
-    return {
-      ...base,
-      mode: "unsupported_followup",
+    return withUnsupported(base, {
       module: "finance",
       domain: "finance",
       intent: "profit_followup_pending",
@@ -976,12 +980,15 @@ function parsePossessiveFollowUp(question, base, body = {}) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Trips parser
+// =======================
 function parseTrips(question, base) {
   const text = base.normalized_question;
   const limit = base.options.limit;
@@ -994,9 +1001,7 @@ function parseTrips(question, base) {
       includesAny(text, ["اجمالي", "إجمالي", "عدد", "كم", "كام"])
     )
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "trips_summary",
@@ -1007,7 +1012,7 @@ function parseTrips(question, base) {
         ...base.options,
         response_type: "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1019,9 +1024,7 @@ function parseTrips(question, base) {
   ) {
     const finalLimit = limit || 5;
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "active_trips",
@@ -1033,7 +1036,7 @@ function parseTrips(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1045,9 +1048,7 @@ function parseTrips(question, base) {
   ) {
     const finalLimit = limit || 5;
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "trips_need_financial_closure",
@@ -1059,7 +1060,7 @@ function parseTrips(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1086,9 +1087,7 @@ function parseTrips(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "top_clients_by_trips",
@@ -1100,7 +1099,7 @@ function parseTrips(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1129,9 +1128,7 @@ function parseTrips(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "top_sites_by_trips",
@@ -1143,7 +1140,7 @@ function parseTrips(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1170,9 +1167,7 @@ function parseTrips(question, base) {
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "top_vehicles_by_trips",
@@ -1184,7 +1179,7 @@ function parseTrips(question, base) {
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
       },
-    };
+    });
   }
 
   if (
@@ -1192,9 +1187,7 @@ function parseTrips(question, base) {
     includesAny(text, ["5", "خمسه", "خمسة"]) &&
     includesAny(text, ["عملاء", "العملاء"])
   ) {
-    return {
-      ...base,
-      mode: "query",
+    return withQuery(base, {
       module: "trips",
       domain: "trips",
       intent: "top_clients_by_trips",
@@ -1206,12 +1199,15 @@ function parseTrips(question, base) {
         limit: 5,
         response_type: "table",
       },
-    };
+    });
   }
 
   return null;
 }
 
+// =======================
+// Reference followup parser
+// =======================
 function parseReferenceFollowUp(question, base) {
   const text = base.normalized_question;
 
@@ -1292,6 +1288,31 @@ function parseReferenceFollowUp(question, base) {
   return null;
 }
 
+// =======================
+// Ordered parsers
+// =======================
+function parseByModule(moduleName, question, base) {
+  if (moduleName === "finance") return parseFinance(question, base);
+  if (moduleName === "ar") return parseAr(question, base);
+  if (moduleName === "maintenance") return parseMaintenance(question, base);
+  if (moduleName === "inventory") return parseInventory(question, base);
+  if (moduleName === "trips") return parseTrips(question, base);
+  return null;
+}
+
+function parseAcrossModules(question, base) {
+  return (
+    parseFinance(question, base) ||
+    parseAr(question, base) ||
+    parseMaintenance(question, base) ||
+    parseInventory(question, base) ||
+    parseTrips(question, base)
+  );
+}
+
+// =======================
+// Main parser
+// =======================
 function parseAiQuestion({ question, context = null, user, body = {} }) {
   let base = buildBaseParsed({ question, context, user, body });
   base = applySnapshotEntityHints(base, body);
@@ -1308,25 +1329,11 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
   const tripsFollowup = parseTripsFollowup(question, base, body);
   if (tripsFollowup) return tripsFollowup;
 
-  const moduleName = base.module;
-  let parsed = null;
+  const byModule = parseByModule(base.module, question, base);
+  if (byModule) return byModule;
 
-  if (moduleName === "finance") parsed = parseFinance(question, base);
-  if (!parsed && moduleName === "ar") parsed = parseAr(question, base);
-  if (!parsed && moduleName === "maintenance") parsed = parseMaintenance(question, base);
-  if (!parsed && moduleName === "inventory") parsed = parseInventory(question, base);
-  if (!parsed && moduleName === "trips") parsed = parseTrips(question, base);
-
-  if (parsed) return parsed;
-
-  parsed =
-    parseFinance(question, base) ||
-    parseAr(question, base) ||
-    parseMaintenance(question, base) ||
-    parseInventory(question, base) ||
-    parseTrips(question, base);
-
-  if (parsed) return parsed;
+  const fallback = parseAcrossModules(question, base);
+  if (fallback) return fallback;
 
   return base;
 }

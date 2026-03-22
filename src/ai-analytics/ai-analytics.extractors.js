@@ -11,97 +11,75 @@ function normalizeArabicText(text) {
     .replace(/\s+/g, " ");
 }
 
+function toRawText(value) {
+  return String(value || "").trim();
+}
+
+function matchFirst(raw, patterns = []) {
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match?.[1]) {
+      const value = String(match[1]).trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
 function extractAmount(question) {
   const text = normalizeArabicText(question);
+  const match = text.match(/(\d+(?:\.\d+)?)\s*(جنيه|ج|egp)?/i);
 
-  const direct = text.match(/(\d+(?:\.\d+)?)\s*(جنيه|ج|egp)?/i);
-  if (direct) {
-    const n = Number(direct[1]);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
+  if (!match) return null;
 
-  return null;
+  const amount = Number(match[1]);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 function extractVehicleHint(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:للمركبه|للمركبة|للعربيه|للعربية|للسياره|للسيارة)\s+([^\n\r,.]+)/i,
     /(?:المركبه|المركبة|العربيه|العربية|السياره|السيارة)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractClientHint(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:للعميل|لعميل|عميل|العميل|client|clients)\s+([^\n\r,.]+)/i,
     /(?:رحلات العميل|رحلات لعميل|trips for client)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractSiteHint(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:للموقع|لموقع|موقع|الموقع|site|sites)\s+([^\n\r,.]+)/i,
     /(?:رحلات الموقع|رحلات لموقع|trips for site)\s+([^\n\r,.]+)/i,
     /(?:الى موقع|إلى موقع)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractTripHint(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:الرحله|الرحلة|trip)\s+([^\n\r,.]+)/i,
     /(?:على الرحله|على الرحلة|for trip)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractWorkOrderHint(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:امر العمل|أمر العمل|work order)\s+([^\n\r,.]+)/i,
     /(?:على امر العمل|على أمر العمل|for work order)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractExpenseType(question) {
@@ -118,31 +96,27 @@ function extractExpenseType(question) {
 }
 
 function extractTitle(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const m =
+  const match =
     raw.match(/(?:يوجد|بسبب|بعنوان)\s+([^\n\r]+)/i) ||
     raw.match(/(?:صيانة|صيانه)\s+([^\n\r]+)/i);
 
-  if (m && m[1]) return m[1].trim();
+  if (match?.[1]) {
+    const value = String(match[1]).trim();
+    if (value) return value;
+  }
 
   return raw || null;
 }
 
 function extractVendorName(question) {
-  const raw = String(question || "").trim();
+  const raw = toRawText(question);
 
-  const patterns = [
+  return matchFirst(raw, [
     /(?:من مورد|من المورد|من)\s+([^\n\r,.]+)/i,
     /(?:vendor|supplier)\s+([^\n\r,.]+)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m && m[1]) return m[1].trim();
-  }
-
-  return null;
+  ]);
 }
 
 function extractPaidMethod(question) {

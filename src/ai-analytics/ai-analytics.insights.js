@@ -60,6 +60,14 @@ function paymentSourceLabel(v) {
   return v || "غير محدد";
 }
 
+function pushInsight(items, type, level, text) {
+  items.push({ type, level, text });
+}
+
+function firstItem(items = []) {
+  return Array.isArray(items) && items.length ? items[0] : null;
+}
+
 function buildFinanceInsights(data = {}) {
   const items = [];
 
@@ -111,11 +119,12 @@ function buildFinanceInsights(data = {}) {
   ]);
 
   if (currentTotal > 0) {
-    items.push({
-      type: "finance_total_expense",
-      level: "info",
-      text: `إجمالي المصروفات في ${labelRange("this_month")} هو ${money(currentTotal)} جنيه.`,
-    });
+    pushInsight(
+      items,
+      "finance_total_expense",
+      "info",
+      `إجمالي المصروفات في ${labelRange("this_month")} هو ${money(currentTotal)} جنيه.`
+    );
   }
 
   if (currentTotal > 0 || lastTotal > 0) {
@@ -123,108 +132,126 @@ function buildFinanceInsights(data = {}) {
     const absDelta = Math.abs(delta);
 
     if (absDelta >= 10) {
-      items.push({
-        type: "finance_vs_last_month",
-        level: levelByMagnitude(absDelta),
-        text:
-          delta >= 0
-            ? `المصروفات ارتفعت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`
-            : `المصروفات انخفضت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`,
-      });
+      pushInsight(
+        items,
+        "finance_vs_last_month",
+        levelByMagnitude(absDelta),
+        delta >= 0
+          ? `المصروفات ارتفعت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`
+          : `المصروفات انخفضت بنسبة ${money(absDelta)}% مقارنة بالشهر الماضي.`
+      );
     }
   }
 
   if (approvedExpense > 0) {
-    items.push({
-      type: "finance_approved_expense",
-      level: "info",
-      text: `إجمالي المصروفات المعتمدة هذا الشهر هو ${money(approvedExpense)} جنيه.`,
-    });
+    pushInsight(
+      items,
+      "finance_approved_expense",
+      "info",
+      `إجمالي المصروفات المعتمدة هذا الشهر هو ${money(approvedExpense)} جنيه.`
+    );
   }
 
   if (pendingExpense > 0) {
-    items.push({
-      type: "finance_pending_expense",
-      level: pendingExpense >= currentTotal * 0.25 ? "warning" : "info",
-      text: `يوجد مصروفات معلقة بقيمة ${money(pendingExpense)} جنيه تحتاج متابعة.`,
-    });
+    pushInsight(
+      items,
+      "finance_pending_expense",
+      pendingExpense >= currentTotal * 0.25 ? "warning" : "info",
+      `يوجد مصروفات معلقة بقيمة ${money(pendingExpense)} جنيه تحتاج متابعة.`
+    );
   }
 
   if (rejectedExpense > 0) {
-    items.push({
-      type: "finance_rejected_expense",
-      level: "warning",
-      text: `تم رفض مصروفات بقيمة ${money(rejectedExpense)} جنيه خلال الفترة الحالية.`,
-    });
+    pushInsight(
+      items,
+      "finance_rejected_expense",
+      "warning",
+      `تم رفض مصروفات بقيمة ${money(rejectedExpense)} جنيه خلال الفترة الحالية.`
+    );
   }
 
   const expenseTypes = pickItems(expenseByType);
-  if (expenseTypes.length > 0) {
-    const top = expenseTypes[0];
-    const name = top?.expense_type || top?.type_name || top?.name || "غير محدد";
-    const value = Number(top?.total_amount || top?.amount || 0);
+  const topExpenseType = firstItem(expenseTypes);
+  if (topExpenseType) {
+    const name =
+      topExpenseType?.expense_type ||
+      topExpenseType?.type_name ||
+      topExpenseType?.name ||
+      "غير محدد";
 
-    items.push({
-      type: "finance_top_expense_type",
-      level: "info",
-      text: `أعلى نوع مصروف هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`,
-    });
+    const value = Number(topExpenseType?.total_amount || topExpenseType?.amount || 0);
+
+    pushInsight(
+      items,
+      "finance_top_expense_type",
+      "info",
+      `أعلى نوع مصروف هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`
+    );
   }
 
   const vehicles = pickItems(expenseByVehicle);
-  if (vehicles.length > 0) {
-    const top = vehicles[0];
+  const topVehicle = firstItem(vehicles);
+  if (topVehicle) {
     const vehicleName =
-      top?.display_name || top?.fleet_no || top?.plate_no || "مركبة غير محددة";
-    const value = Number(top?.total_amount || top?.amount || 0);
+      topVehicle?.display_name ||
+      topVehicle?.fleet_no ||
+      topVehicle?.plate_no ||
+      "مركبة غير محددة";
 
-    items.push({
-      type: "finance_top_vehicle_expense",
-      level: "info",
-      text: `أعلى مركبة من حيث المصروفات هذا الشهر هي "${vehicleName}" بإجمالي ${money(value)} جنيه.`,
-    });
+    const value = Number(topVehicle?.total_amount || topVehicle?.amount || 0);
+
+    pushInsight(
+      items,
+      "finance_top_vehicle_expense",
+      "info",
+      `أعلى مركبة من حيث المصروفات هذا الشهر هي "${vehicleName}" بإجمالي ${money(value)} جنيه.`
+    );
   }
 
   const paymentSources = pickItems(expenseByPaymentSource);
-  if (paymentSources.length > 0) {
-    const top = paymentSources[0];
-    const label = paymentSourceLabel(top?.payment_source);
-    const value = Number(top?.total_amount || 0);
+  const topPaymentSource = firstItem(paymentSources);
+  if (topPaymentSource) {
+    const label = paymentSourceLabel(topPaymentSource?.payment_source);
+    const value = Number(topPaymentSource?.total_amount || 0);
 
-    items.push({
-      type: "finance_top_payment_source",
-      level: "info",
-      text: `أكبر مصدر دفع للمصروفات هذا الشهر هو "${label}" بإجمالي ${money(value)} جنيه.`,
-    });
+    pushInsight(
+      items,
+      "finance_top_payment_source",
+      "info",
+      `أكبر مصدر دفع للمصروفات هذا الشهر هو "${label}" بإجمالي ${money(value)} جنيه.`
+    );
   }
 
   if (advanceExpense > 0 || companyExpense > 0) {
     if (advanceExpense > companyExpense) {
-      items.push({
-        type: "finance_advance_dominates",
-        level: advanceExpense >= currentTotal * 0.5 ? "warning" : "info",
-        text: `المصروفات من العهدة أعلى من مصروفات الشركة خلال هذا الشهر.`,
-      });
+      pushInsight(
+        items,
+        "finance_advance_dominates",
+        advanceExpense >= currentTotal * 0.5 ? "warning" : "info",
+        "المصروفات من العهدة أعلى من مصروفات الشركة خلال هذا الشهر."
+      );
     } else if (companyExpense > advanceExpense) {
-      items.push({
-        type: "finance_company_dominates",
-        level: "info",
-        text: `مصروفات الشركة أعلى من مصروفات العهدة خلال هذا الشهر.`,
-      });
+      pushInsight(
+        items,
+        "finance_company_dominates",
+        "info",
+        "مصروفات الشركة أعلى من مصروفات العهدة خلال هذا الشهر."
+      );
     }
   }
 
   const vendorItems = pickItems(topVendors);
-  if (vendorItems.length > 0) {
-    const top = vendorItems[0];
-    const name = top?.vendor_name || "مورد غير معروف";
-    const value = Number(top?.total_amount || 0);
+  const topVendor = firstItem(vendorItems);
+  if (topVendor) {
+    const name = topVendor?.vendor_name || "مورد غير معروف";
+    const value = Number(topVendor?.total_amount || 0);
 
-    items.push({
-      type: "finance_top_vendor",
-      level: "info",
-      text: `أعلى مورد من حيث المصروفات هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`,
-    });
+    pushInsight(
+      items,
+      "finance_top_vendor",
+      "info",
+      `أعلى مورد من حيث المصروفات هذا الشهر هو "${name}" بإجمالي ${money(value)} جنيه.`
+    );
   }
 
   const approvalItems = pickItems(expenseApprovalBreakdown);
@@ -234,13 +261,14 @@ function buildFinanceInsights(data = {}) {
     );
 
     if (pendingRow && Number(pendingRow?.total_amount || 0) > 0) {
-      items.push({
-        type: "finance_pending_breakdown",
-        level: "warning",
-        text: `حالة "معلق" تمثل ${money(
+      pushInsight(
+        items,
+        "finance_pending_breakdown",
+        "warning",
+        `حالة "معلق" تمثل ${money(
           pendingRow.total_amount || 0
-        )} جنيه من إجمالي المصروفات المسجلة.`,
-      });
+        )} جنيه من إجمالي المصروفات المسجلة.`
+      );
     }
   }
 
@@ -266,24 +294,28 @@ function buildArInsights(data = {}) {
   ]);
 
   if (totalOutstanding > 0) {
-    items.push({
-      type: "ar_total_outstanding",
-      level: overdueAmount > 0 ? "warning" : "info",
-      text: `إجمالي مستحقات العملاء حاليًا هو ${money(totalOutstanding)} جنيه، منها ${money(overdueAmount)} متأخرات.`,
-    });
+    pushInsight(
+      items,
+      "ar_total_outstanding",
+      overdueAmount > 0 ? "warning" : "info",
+      `إجمالي مستحقات العملاء حاليًا هو ${money(totalOutstanding)} جنيه، منها ${money(
+        overdueAmount
+      )} متأخرات.`
+    );
   }
 
   const debtors = pickItems(topDebtors);
-  if (debtors.length > 0) {
-    const top = debtors[0];
-    const name = top?.client_name || top?.name || "غير محدد";
-    const value = Number(top?.total_outstanding || top?.amount || 0);
+  const topDebtor = firstItem(debtors);
+  if (topDebtor) {
+    const name = topDebtor?.client_name || topDebtor?.name || "غير محدد";
+    const value = Number(topDebtor?.total_outstanding || topDebtor?.amount || 0);
 
-    items.push({
-      type: "ar_top_debtor",
-      level: value > 0 ? "warning" : "info",
-      text: `أعلى عميل مديونية حاليًا هو "${name}" بإجمالي ${money(value)} جنيه.`,
-    });
+    pushInsight(
+      items,
+      "ar_top_debtor",
+      value > 0 ? "warning" : "info",
+      `أعلى عميل مديونية حاليًا هو "${name}" بإجمالي ${money(value)} جنيه.`
+    );
   }
 
   return items;
@@ -304,27 +336,35 @@ function buildMaintenanceInsights(data = {}) {
     ["total"],
   ]);
 
-  items.push({
-    type: "maintenance_open_work_orders",
-    level: totalOpen > 0 ? "warning" : "info",
-    text:
-      totalOpen > 0
-        ? `يوجد ${Number(totalOpen)} أوامر عمل مفتوحة حاليًا.`
-        : "لا توجد أوامر عمل مفتوحة حاليًا.",
-  });
+  pushInsight(
+    items,
+    "maintenance_open_work_orders",
+    totalOpen > 0 ? "warning" : "info",
+    totalOpen > 0
+      ? `يوجد ${Number(totalOpen)} أوامر عمل مفتوحة حاليًا.`
+      : "لا توجد أوامر عمل مفتوحة حاليًا."
+  );
 
   const vehicles = pickItems(costByVehicle);
-  if (vehicles.length > 0) {
-    const top = vehicles[0];
+  const topVehicle = firstItem(vehicles);
+  if (topVehicle) {
     const vehicleName =
-      top?.vehicle_name || top?.display_name || top?.plate_no || top?.name || "غير محددة";
-    const totalCost = Number(top?.total_cost || top?.total_amount || top?.amount || 0);
+      topVehicle?.vehicle_name ||
+      topVehicle?.display_name ||
+      topVehicle?.plate_no ||
+      topVehicle?.name ||
+      "غير محددة";
 
-    items.push({
-      type: "maintenance_top_vehicle_cost",
-      level: "info",
-      text: `أعلى مركبة تكلفة صيانة هذا الشهر هي "${vehicleName}" بإجمالي ${money(totalCost)} جنيه.`,
-    });
+    const totalCost = Number(
+      topVehicle?.total_cost || topVehicle?.total_amount || topVehicle?.amount || 0
+    );
+
+    pushInsight(
+      items,
+      "maintenance_top_vehicle_cost",
+      "info",
+      `أعلى مركبة تكلفة صيانة هذا الشهر هي "${vehicleName}" بإجمالي ${money(totalCost)} جنيه.`
+    );
   }
 
   return items;
@@ -337,41 +377,48 @@ function buildInventoryInsights(data = {}) {
   const lowStockItems = data?.lowStockItems;
 
   const issued = pickItems(topIssuedParts);
-  if (issued.length > 0) {
-    const top = issued[0];
-    const name = top?.part_name || top?.item_name || top?.name || "غير محدد";
-    const qty = Number(top?.total_issued_qty || top?.issued_qty || top?.qty || 0);
+  const topIssued = firstItem(issued);
+  if (topIssued) {
+    const name = topIssued?.part_name || topIssued?.item_name || topIssued?.name || "غير محدد";
+    const qty = Number(topIssued?.total_issued_qty || topIssued?.issued_qty || topIssued?.qty || 0);
 
-    items.push({
-      type: "inventory_top_issued_part",
-      level: "info",
-      text: `أكثر صنف صرفًا هذا الشهر هو "${name}" بعدد ${qty}.`,
-    });
+    pushInsight(
+      items,
+      "inventory_top_issued_part",
+      "info",
+      `أكثر صنف صرفًا هذا الشهر هو "${name}" بعدد ${qty}.`
+    );
   }
 
   const lowStock = pickItems(lowStockItems);
   if (lowStock.length > 0) {
-    items.push({
-      type: "inventory_low_stock_count",
-      level: lowStock.length >= 5 ? "warning" : "info",
-      text: `يوجد ${lowStock.length} أصناف منخفضة المخزون حاليًا.`,
-    });
+    pushInsight(
+      items,
+      "inventory_low_stock_count",
+      lowStock.length >= 5 ? "warning" : "info",
+      `يوجد ${lowStock.length} أصناف منخفضة المخزون حاليًا.`
+    );
 
-    const first = lowStock[0];
+    const firstLowStock = lowStock[0];
     const firstName =
-      first?.part_name || first?.item_name || first?.name || "غير محدد";
+      firstLowStock?.part_name ||
+      firstLowStock?.item_name ||
+      firstLowStock?.name ||
+      "غير محدد";
 
-    items.push({
-      type: "inventory_low_stock_top",
-      level: "warning",
-      text: `أقرب صنف للنفاد حاليًا هو "${firstName}".`,
-    });
+    pushInsight(
+      items,
+      "inventory_low_stock_top",
+      "warning",
+      `أقرب صنف للنفاد حاليًا هو "${firstName}".`
+    );
   } else {
-    items.push({
-      type: "inventory_low_stock_none",
-      level: "info",
-      text: "لا توجد أصناف منخفضة المخزون حاليًا.",
-    });
+    pushInsight(
+      items,
+      "inventory_low_stock_none",
+      "info",
+      "لا توجد أصناف منخفضة المخزون حاليًا."
+    );
   }
 
   return items;
@@ -405,119 +452,132 @@ function buildTripsInsights(data = {}) {
   ]);
 
   if (totalTrips > 0) {
-    items.push({
-      type: "trips_total",
-      level: "info",
-      text: `إجمالي الرحلات في ${labelRange("this_month")} هو ${Number(totalTrips)} رحلة.`,
-    });
+    pushInsight(
+      items,
+      "trips_total",
+      "info",
+      `إجمالي الرحلات في ${labelRange("this_month")} هو ${Number(totalTrips)} رحلة.`
+    );
   }
 
   if (activeCount > 0) {
-    items.push({
-      type: "trips_active_count",
-      level: "info",
-      text: `يوجد ${Number(activeCount)} رحلة نشطة خلال الفترة الحالية.`,
-    });
+    pushInsight(
+      items,
+      "trips_active_count",
+      "info",
+      `يوجد ${Number(activeCount)} رحلة نشطة خلال الفترة الحالية.`
+    );
   }
 
   if (needClosureCount > 0) {
-    items.push({
-      type: "trips_need_fin_closure",
-      level: "warning",
-      text: `يوجد ${Number(needClosureCount)} رحلة تحتاج إغلاقًا ماليًا.`,
-    });
+    pushInsight(
+      items,
+      "trips_need_fin_closure",
+      "warning",
+      `يوجد ${Number(needClosureCount)} رحلة تحتاج إغلاقًا ماليًا.`
+    );
   }
 
   const activeTripItems = pickItems(activeTrips);
-  if (activeTripItems.length > 0) {
-    const first = activeTripItems[0];
-    items.push({
-      type: "trips_active_example",
-      level: "info",
-      text: `من الرحلات النشطة الحالية: عميل "${first.client_name || "عميل غير معروف"}" في موقع "${first.site_name || "موقع غير معروف"}".`,
-    });
+  const firstActiveTrip = firstItem(activeTripItems);
+  if (firstActiveTrip) {
+    pushInsight(
+      items,
+      "trips_active_example",
+      "info",
+      `من الرحلات النشطة الحالية: عميل "${firstActiveTrip.client_name || "عميل غير معروف"}" في موقع "${
+        firstActiveTrip.site_name || "موقع غير معروف"
+      }".`
+    );
   }
 
   const needClosureItems = pickItems(tripsNeedFinancialClosure);
-  if (needClosureItems.length > 0) {
-    const first = needClosureItems[0];
-    items.push({
-      type: "trips_need_fin_closure_example",
-      level: "warning",
-      text: `هناك رحلة مكتملة للعميل "${first.client_name || "عميل غير معروف"}" ما زالت تحتاج إغلاقًا ماليًا.`,
-    });
+  const firstNeedClosureTrip = firstItem(needClosureItems);
+  if (firstNeedClosureTrip) {
+    pushInsight(
+      items,
+      "trips_need_fin_closure_example",
+      "warning",
+      `هناك رحلة مكتملة للعميل "${
+        firstNeedClosureTrip.client_name || "عميل غير معروف"
+      }" ما زالت تحتاج إغلاقًا ماليًا.`
+    );
   }
 
   const topClients = pickItems(topClientsByTrips);
-  if (topClients.length > 0) {
-    const top = topClients[0];
-    items.push({
-      type: "trips_top_client",
-      level: "info",
-      text: `أعلى عميل من حيث عدد الرحلات هو "${top.client_name || "عميل غير معروف"}" بعدد ${Number(
-        top.trips_count || 0
-      )} رحلة.`,
-    });
+  const topClient = firstItem(topClients);
+  if (topClient) {
+    pushInsight(
+      items,
+      "trips_top_client",
+      "info",
+      `أعلى عميل من حيث عدد الرحلات هو "${topClient.client_name || "عميل غير معروف"}" بعدد ${Number(
+        topClient.trips_count || 0
+      )} رحلة.`
+    );
   }
 
   const topSites = pickItems(topSitesByTrips);
-  if (topSites.length > 0) {
-    const top = topSites[0];
-    items.push({
-      type: "trips_top_site",
-      level: "info",
-      text: `أعلى موقع من حيث عدد الرحلات هو "${top.site_name || "موقع غير معروف"}" بعدد ${Number(
-        top.trips_count || 0
-      )} رحلة.`,
-    });
+  const topSite = firstItem(topSites);
+  if (topSite) {
+    pushInsight(
+      items,
+      "trips_top_site",
+      "info",
+      `أعلى موقع من حيث عدد الرحلات هو "${topSite.site_name || "موقع غير معروف"}" بعدد ${Number(
+        topSite.trips_count || 0
+      )} رحلة.`
+    );
   }
 
   const topVehicles = pickItems(topVehiclesByTrips);
-  if (topVehicles.length > 0) {
-    const top = topVehicles[0];
-    const vehicleName = top?.display_name || top?.fleet_no || top?.plate_no || "مركبة غير معروفة";
-    items.push({
-      type: "trips_top_vehicle",
-      level: "info",
-      text: `أعلى مركبة من حيث عدد الرحلات هي "${vehicleName}" بعدد ${Number(
-        top.trips_count || 0
-      )} رحلة.`,
-    });
+  const topVehicle = firstItem(topVehicles);
+  if (topVehicle) {
+    const vehicleName =
+      topVehicle?.display_name ||
+      topVehicle?.fleet_no ||
+      topVehicle?.plate_no ||
+      "مركبة غير معروفة";
+
+    pushInsight(
+      items,
+      "trips_top_vehicle",
+      "info",
+      `أعلى مركبة من حيث عدد الرحلات هي "${vehicleName}" بعدد ${Number(
+        topVehicle.trips_count || 0
+      )} رحلة.`
+    );
   }
 
   return items;
 }
 
-function buildInsightsByContext({ context, data }) {
-  const c = String(context || "").trim().toLowerCase();
-
-  if (c === "finance") {
-    return buildFinanceInsights(data);
-  }
-
-  if (c === "ar") {
-    return buildArInsights(data);
-  }
-
-  if (c === "maintenance") {
-    return buildMaintenanceInsights(data);
-  }
-
-  if (c === "inventory") {
-    return buildInventoryInsights(data);
-  }
-
-  if (c === "trips") {
-    return buildTripsInsights(data);
-  }
-
+function buildAllInsights(data = {}) {
   return [
     ...buildFinanceInsights(data),
     ...buildArInsights(data),
     ...buildMaintenanceInsights(data),
     ...buildInventoryInsights(data),
     ...buildTripsInsights(data),
-  ].slice(0, 12);
+  ];
+}
+
+function buildInsightsByContext({ context, data }) {
+  const c = String(context || "").trim().toLowerCase();
+
+  const builders = {
+    finance: buildFinanceInsights,
+    ar: buildArInsights,
+    maintenance: buildMaintenanceInsights,
+    inventory: buildInventoryInsights,
+    trips: buildTripsInsights,
+  };
+
+  if (builders[c]) {
+    return builders[c](data);
+  }
+
+  return buildAllInsights(data).slice(0, 12);
 }
 
 module.exports = {
