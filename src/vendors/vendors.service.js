@@ -20,11 +20,11 @@ function normalizeEnum(value) {
   return String(value).trim().toUpperCase();
 }
 
-function buildWhere(query = {}) {
-  const q = toNullableString(query.q);
-  const vendor_type = normalizeEnum(query.vendor_type);
-  const classification = normalizeEnum(query.classification);
-  const status = normalizeEnum(query.status);
+function buildWhere(query) {
+  const q = toNullableString(query && query.q);
+  const vendor_type = normalizeEnum(query && query.vendor_type);
+  const classification = normalizeEnum(query && query.classification);
+  const status = normalizeEnum(query && query.status);
 
   const where = {};
 
@@ -47,7 +47,9 @@ function buildWhere(query = {}) {
   return where;
 }
 
-function mapVendorPayload(payload = {}) {
+function mapVendorPayload(payload) {
+  payload = payload || {};
+
   return {
     name: String(payload.name || "").trim(),
     code: toNullableString(payload.code),
@@ -79,16 +81,20 @@ async function ensureName(name) {
   }
 }
 
-async function ensureCodeUnique(code, excludeId = null) {
+async function ensureCodeUnique(code, excludeId) {
   if (!code) return;
 
+  const where = excludeId
+    ? {
+        code: code,
+        id: { not: excludeId },
+      }
+    : {
+        code: code,
+      };
+
   const existing = await prisma.vendors.findFirst({
-    where: excludeId
-      ? {
-          code,
-          id: { not: excludeId },
-        }
-      : { code },
+    where,
     select: { id: true, code: true },
   });
 
@@ -101,7 +107,7 @@ async function ensureCodeUnique(code, excludeId = null) {
 
 async function getVendorOrThrow(id) {
   const vendor = await prisma.vendors.findUnique({
-    where: { id },
+    where: { id: id },
   });
 
   if (!vendor) {
@@ -116,31 +122,35 @@ async function getVendorOrThrow(id) {
 // =======================
 // Service
 // =======================
-async function list(query = {}) {
+async function list(query) {
+  query = query || {};
+
   const page = Math.max(parseInt(query.page || "1", 10), 1);
   const pageSize = Math.min(Math.max(parseInt(query.pageSize || "25", 10), 1), 100);
   const skip = (page - 1) * pageSize;
 
   const where = buildWhere(query);
 
-  const [items, total] = await Promise.all([
+  const result = await Promise.all([
     prisma.vendors.findMany({
-      where,
+      where: where,
       orderBy: [{ created_at: "desc" }, { name: "asc" }],
-      skip,
+      skip: skip,
       take: pageSize,
     }),
-    prisma.vendors.count({ where }),
+    prisma.vendors.count({ where: where }),
   ]);
 
+  const items = result[0];
+  const total = result[1];
   const pages = Math.max(Math.ceil(total / pageSize), 1);
 
   return {
-    items,
-    total,
-    page,
-    pageSize,
-    pages,
+    items: items,
+    total: total,
+    page: page,
+    pageSize: pageSize,
+    pages: pages,
   };
 }
 
@@ -167,7 +177,7 @@ async function options() {
 async function getById(id) {
   const vendor = await getVendorOrThrow(id);
 
-  const [workOrdersCount, expensesCount, transactionsCount] = await Promise.all([
+  const result = await Promise.all([
     prisma.maintenance_work_orders.count({
       where: { vendor_id: id },
     }),
@@ -178,6 +188,10 @@ async function getById(id) {
       where: { vendor_id: id },
     }),
   ]);
+
+  const workOrdersCount = result[0];
+  const expensesCount = result[1];
+  const transactionsCount = result[2];
 
   return {
     ...vendor,
@@ -193,10 +207,10 @@ async function create(payload) {
   const data = mapVendorPayload(payload);
 
   await ensureName(data.name);
-  await ensureCodeUnique(data.code);
+  await ensureCodeUnique(data.code, null);
 
   const created = await prisma.vendors.create({
-    data,
+    data: data,
   });
 
   return created;
@@ -211,8 +225,8 @@ async function update(id, payload) {
   await ensureCodeUnique(data.code, id);
 
   const updated = await prisma.vendors.update({
-    where: { id },
-    data,
+    where: { id: id },
+    data: data,
   });
 
   return updated;
@@ -224,7 +238,7 @@ async function toggle(id) {
   const nextStatus = existing.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
 
   const updated = await prisma.vendors.update({
-    where: { id },
+    where: { id: id },
     data: {
       status: nextStatus,
     },

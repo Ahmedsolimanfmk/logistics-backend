@@ -318,7 +318,7 @@ async function getFinanceAlerts({ clientId = null }) {
   const advance7d = nowCairo.minus({ days: 7 }).toJSDate();
   const openAdvances = await prisma.cash_advances.findMany({
     where: {
-      status: { in: ["OPEN", "IN_REVIEW"] },
+      status: { in: ["OPEN"] },
       created_at: { lt: advance7d },
     },
     select: {
