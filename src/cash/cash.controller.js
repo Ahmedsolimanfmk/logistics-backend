@@ -8,7 +8,6 @@
 const prisma = require("../prisma");
 const {
   getUserId,
-  getUserRole,
   isAdminOrAccountant,
 } = require("../auth/access");
 const tripFinanceService = require("../trips/trip-finance.service");
@@ -24,13 +23,11 @@ function isUuid(v) {
   );
 }
 
-// Trip finance lock helper
 function isTripFinancialLocked(financial_status) {
   const s = String(financial_status || "OPEN").toUpperCase();
   return ["UNDER_REVIEW", "CLOSED"].includes(s);
 }
 
-// Trip ownership for supervisor (any historical assignment)
 async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   const where = { trip_id, field_supervisor_id: userId };
   if (vehicle_id) where.vehicle_id = vehicle_id;
@@ -44,7 +41,6 @@ async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   return !!row;
 }
 
-// Vehicle portfolio validation (when trip_id not provided)
 async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
@@ -136,9 +132,6 @@ async function getExpenseFullOr404(id, res) {
   return expense;
 }
 
-// Backward compatibility:
-// - accepts payment_source: ADVANCE/COMPANY
-// - accepts expense_source: CASH/COMPANY
 function normalizePaymentSource(v) {
   const s = String(v || "ADVANCE").toUpperCase();
   if (["COMPANY", "CO", "DIRECT"].includes(s)) return "COMPANY";
@@ -157,7 +150,6 @@ function safeUpper(v) {
   return String(v || "").toUpperCase();
 }
 
-// cash_advance_status schema-safe helpers
 function isAdvanceOpenStatus(s) {
   return ["OPEN"].includes(safeUpper(s));
 }
@@ -174,7 +166,6 @@ function isAdvanceCancelledStatus(s) {
 // Cash Advances
 // =======================
 
-// GET /cash/cash-advances/summary?q=&status=
 async function getCashAdvancesSummary(req, res) {
   try {
     const userId = getUserId(req);
@@ -232,7 +223,6 @@ async function getCashAdvancesSummary(req, res) {
   }
 }
 
-// GET /cash/cash-advances?status=&q=&page=&page_size=
 async function getCashAdvances(req, res) {
   try {
     const userId = getUserId(req);
@@ -274,11 +264,7 @@ async function getCashAdvances(req, res) {
             orderBy: { created_at: "desc" },
             include: {
               vendors: {
-                select: {
-                  id: true,
-                  name: true,
-                  code: true,
-                },
+                select: { id: true, name: true, code: true },
               },
             },
           },
@@ -304,16 +290,13 @@ async function getCashAdvances(req, res) {
   }
 }
 
-// POST /cash/cash-advances
 async function createCashAdvance(req, res) {
   try {
     const issuerId = getUserId(req);
 
     if (!issuerId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
-      return res
-        .status(403)
-        .json({ message: "Only ADMIN or ACCOUNTANT can issue cash advances" });
+      return res.status(403).json({ message: "Only ADMIN or ACCOUNTANT can issue cash advances" });
     }
 
     const { field_supervisor_id, amount } = req.body || {};
@@ -353,7 +336,6 @@ async function createCashAdvance(req, res) {
 
     return res.status(201).json(created);
   } catch (e) {
-    console.log("CREATE CASH ADVANCE ERROR:", e);
     return res.status(500).json({
       message: "Failed to create cash advance",
       error: e?.message || String(e),
@@ -361,8 +343,6 @@ async function createCashAdvance(req, res) {
   }
 }
 
-// POST /cash/cash-advances/:id/submit-review
-// enum fix: no IN_REVIEW in schema, so we keep OPEN and return marker only
 async function submitCashAdvanceForReview(req, res) {
   try {
     const actorId = getUserId(req);
@@ -458,15 +438,12 @@ async function closeCashAdvance(req, res) {
     const approvedExpenses = await prisma.cash_expenses.findMany({
       where: {
         cash_advance_id: id,
-        approval_status: { in: ["APPROVED", "REAPPROVED"] },
+        approval_status: "APPROVED",
       },
       select: { amount: true },
     });
 
-    const totalApproved = approvedExpenses.reduce(
-      (acc, x) => acc + Number(x.amount || 0),
-      0
-    );
+    const totalApproved = approvedExpenses.reduce((acc, x) => acc + Number(x.amount || 0), 0);
     const advanceAmount = Number(advance.amount || 0);
 
     const remaining = advanceAmount - totalApproved;
@@ -523,7 +500,6 @@ async function closeCashAdvance(req, res) {
       totals: { advanceAmount, totalApproved, remaining, shortage },
     });
   } catch (e) {
-    console.log("CLOSE CASH ADVANCE ERROR:", e);
     return res.status(500).json({
       message: "Failed to settle cash advance",
       error: e?.message || String(e),
@@ -580,7 +556,6 @@ async function reopenCashAdvance(req, res) {
   }
 }
 
-// GET /cash/cash-advances/:id/expenses?status=...
 async function getAdvanceExpenses(req, res) {
   try {
     const { id } = req.params;
@@ -603,11 +578,7 @@ async function getAdvanceExpenses(req, res) {
         trips: true,
         vehicles: true,
         vendors: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+          select: { id: true, name: true, code: true },
         },
       },
     });
@@ -625,7 +596,6 @@ async function getAdvanceExpenses(req, res) {
 // Cash Expenses
 // =======================
 
-// POST /cash/cash-expenses
 async function createCashExpense(req, res) {
   try {
     const userId = getUserId(req);
@@ -634,20 +604,15 @@ async function createCashExpense(req, res) {
     const {
       expense_source,
       payment_source,
-
       cash_advance_id,
       trip_id,
       vehicle_id,
       maintenance_work_order_id,
-
       vendor_id,
-      vendor_name, // accepted as legacy input but not stored
-
       expense_type,
       amount,
       notes,
       receipt_url,
-
       invoice_no,
       invoice_date,
       paid_method,
@@ -770,23 +735,15 @@ async function createCashExpense(req, res) {
           invoice_date: invDate,
           paid_method: paid_method ? String(paid_method).toUpperCase() : null,
           payment_ref: payment_ref ? String(payment_ref) : null,
-          vat_amount:
-            vat_amount !== undefined && vat_amount !== null ? vat_amount : null,
-          invoice_total:
-            invoice_total !== undefined && invoice_total !== null
-              ? invoice_total
-              : null,
+          vat_amount: vat_amount !== undefined && vat_amount !== null ? vat_amount : null,
+          invoice_total: invoice_total !== undefined && invoice_total !== null ? invoice_total : null,
 
           approval_status: "PENDING",
           users_cash_expenses_created_byTousers: { connect: { id: userId } },
         },
         include: {
           vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
+            select: { id: true, name: true, code: true },
           },
         },
       });
@@ -879,18 +836,13 @@ async function createCashExpense(req, res) {
       },
       include: {
         vendors: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+          select: { id: true, name: true, code: true },
         },
       },
     });
 
     return res.status(201).json(mapExpenseVendorFields(created));
   } catch (e) {
-    console.log("CREATE CASH EXPENSE ERROR:", e);
     return res.status(500).json({
       message: "Failed to create cash expense",
       error: e?.message || String(e),
@@ -898,21 +850,13 @@ async function createCashExpense(req, res) {
   }
 }
 
-// GET /cash/cash-expenses?...
 async function listCashExpenses(req, res) {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
-    const {
-      status,
-      payment_source,
-      q,
-      vendor_id,
-      page = "1",
-      page_size = "50",
-    } = req.query || {};
+    const { status, payment_source, q, vendor_id, page = "1", page_size = "50" } = req.query || {};
 
     const where = {};
 
@@ -993,7 +937,6 @@ async function listCashExpenses(req, res) {
   }
 }
 
-// GET /cash/cash-advances/:id
 async function getCashAdvanceById(req, res) {
   try {
     const userId = getUserId(req);
@@ -1011,11 +954,7 @@ async function getCashAdvanceById(req, res) {
           orderBy: { created_at: "desc" },
           include: {
             vendors: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-              },
+              select: { id: true, name: true, code: true },
             },
           },
         },
@@ -1043,7 +982,6 @@ async function getCashAdvanceById(req, res) {
   }
 }
 
-// GET /cash/cash-expenses/summary?...
 async function getCashExpensesSummary(req, res) {
   try {
     const userId = getUserId(req);
@@ -1108,10 +1046,10 @@ async function getCashExpensesSummary(req, res) {
     const pick = (k) => map.get(k)?.sum || 0;
     const pickCount = (k) => map.get(k)?.count || 0;
 
-    const sumApproved = pick("APPROVED") + pick("REAPPROVED");
-    const countApproved = pickCount("APPROVED") + pickCount("REAPPROVED");
+    const sumApproved = pick("APPROVED");
+    const countApproved = pickCount("APPROVED");
 
-    const result = {
+    return res.json({
       where_applied: {
         status: status ? String(status).toUpperCase() : null,
         payment_source: payment_source ? normalizePaymentSource(payment_source) : null,
@@ -1122,27 +1060,23 @@ async function getCashExpensesSummary(req, res) {
       totals: {
         sumAll: Number(agg._sum?.amount || 0),
         countAll: Number(agg._count?._all || 0),
-
         sumApproved,
         countApproved,
-
         sumPending: pick("PENDING"),
         countPending: pickCount("PENDING"),
-
         sumRejected: pick("REJECTED"),
         countRejected: pickCount("REJECTED"),
-
         sumAppealed: pick("APPEALED"),
         countAppealed: pickCount("APPEALED"),
+        sumResolved: pick("RESOLVED"),
+        countResolved: pickCount("RESOLVED"),
       },
       raw_by_status: groups.map((g) => ({
         approval_status: String(g.approval_status || "").toUpperCase(),
         sum: Number(g._sum?.amount || 0),
         count: Number(g._count?._all || 0),
       })),
-    };
-
-    return res.json(result);
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch expenses summary",
@@ -1151,7 +1085,6 @@ async function getCashExpensesSummary(req, res) {
   }
 }
 
-// GET /cash/cash-expenses/:id
 async function getCashExpenseById(req, res) {
   try {
     const userId = getUserId(req);
@@ -1194,7 +1127,6 @@ async function getCashExpenseById(req, res) {
   }
 }
 
-// POST /cash/cash-expenses/:id/approve
 async function approveCashExpense(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1220,39 +1152,31 @@ async function approveCashExpense(req, res) {
       });
     }
 
-    const nextStatus = st === "APPEALED" ? "REAPPROVED" : "APPROVED";
-
     const updated = await prisma.$transaction(async (tx) => {
       const before = expense;
 
       const after = await tx.cash_expenses.update({
         where: { id },
         data: {
-          approval_status: nextStatus,
+          approval_status: "APPROVED",
           approved_at: new Date(),
           approved_by: actorId,
-
           rejected_at: null,
           rejected_by: null,
           rejection_reason: null,
-
-          resolved_at: new Date(),
-          resolved_by: actorId,
+          resolved_at: st === "APPEALED" ? new Date() : expense.resolved_at,
+          resolved_by: st === "APPEALED" ? actorId : expense.resolved_by,
         },
         include: {
           vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
+            select: { id: true, name: true, code: true },
           },
         },
       });
 
       await writeExpenseAuditSafe(tx, {
         expense_id: id,
-        action: nextStatus === "REAPPROVED" ? "REAPPROVE" : "APPROVE",
+        action: st === "APPEALED" ? "APPROVE_APPEAL" : "APPROVE",
         actor_id: actorId,
         before,
         after,
@@ -1271,7 +1195,6 @@ async function approveCashExpense(req, res) {
   }
 }
 
-// POST /cash/cash-expenses/:id/reject
 async function rejectCashExpense(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1311,17 +1234,12 @@ async function rejectCashExpense(req, res) {
           rejected_at: new Date(),
           rejected_by: actorId,
           rejection_reason: reason,
-
-          resolved_at: new Date(),
-          resolved_by: actorId,
+          resolved_at: st === "APPEALED" ? new Date() : expense.resolved_at,
+          resolved_by: st === "APPEALED" ? actorId : expense.resolved_by,
         },
         include: {
           vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
+            select: { id: true, name: true, code: true },
           },
         },
       });
@@ -1347,7 +1265,6 @@ async function rejectCashExpense(req, res) {
   }
 }
 
-// POST /cash/cash-expenses/:id/appeal
 async function appealRejectedExpense(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1390,17 +1307,12 @@ async function appealRejectedExpense(req, res) {
           appealed_at: new Date(),
           appealed_by: actorId,
           appeal_reason,
-
           resolved_at: null,
           resolved_by: null,
         },
         include: {
           vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
+            select: { id: true, name: true, code: true },
           },
         },
       });
@@ -1426,7 +1338,6 @@ async function appealRejectedExpense(req, res) {
   }
 }
 
-// POST /cash/cash-expenses/:id/resolve-appeal
 async function resolveAppeal(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1465,7 +1376,7 @@ async function resolveAppeal(req, res) {
         after = await tx.cash_expenses.update({
           where: { id },
           data: {
-            approval_status: "REAPPROVED",
+            approval_status: "APPROVED",
             approved_at: new Date(),
             approved_by: actorId,
             rejected_at: null,
@@ -1476,11 +1387,7 @@ async function resolveAppeal(req, res) {
           },
           include: {
             vendors: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-              },
+              select: { id: true, name: true, code: true },
             },
           },
         });
@@ -1497,11 +1404,7 @@ async function resolveAppeal(req, res) {
           },
           include: {
             vendors: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-              },
+              select: { id: true, name: true, code: true },
             },
           },
         });
@@ -1509,10 +1412,7 @@ async function resolveAppeal(req, res) {
 
       await writeExpenseAuditSafe(tx, {
         expense_id: id,
-        action:
-          decision === "APPROVE"
-            ? "RESOLVE_APPEAL_APPROVE"
-            : "RESOLVE_APPEAL_REJECT",
+        action: decision === "APPROVE" ? "RESOLVE_APPEAL_APPROVE" : "RESOLVE_APPEAL_REJECT",
         actor_id: actorId,
         before,
         after,
@@ -1531,7 +1431,6 @@ async function resolveAppeal(req, res) {
   }
 }
 
-// POST /cash/cash-expenses/:id/reopen
 async function reopenRejectedExpense(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1562,25 +1461,18 @@ async function reopenRejectedExpense(req, res) {
         where: { id },
         data: {
           approval_status: "PENDING",
-
           rejected_at: null,
           rejected_by: null,
           rejection_reason: null,
-
           appealed_at: null,
           appealed_by: null,
           appeal_reason: null,
-
           resolved_at: null,
           resolved_by: null,
         },
         include: {
           vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
+            select: { id: true, name: true, code: true },
           },
         },
       });
@@ -1606,7 +1498,6 @@ async function reopenRejectedExpense(req, res) {
   }
 }
 
-// GET /cash/cash-expenses/:id/audit
 async function getExpenseAudit(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1647,7 +1538,6 @@ async function getExpenseAudit(req, res) {
   }
 }
 
-// GET /cash/reports/supervisor-deficit
 async function getSupervisorDeficitReport(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1678,7 +1568,7 @@ async function getSupervisorDeficitReport(req, res) {
       ? await prisma.cash_expenses.findMany({
           where: {
             cash_advance_id: { in: ids },
-            approval_status: { in: ["APPROVED", "REAPPROVED"] },
+            approval_status: "APPROVED",
           },
           select: { cash_advance_id: true, amount: true },
         })
@@ -1699,8 +1589,7 @@ async function getSupervisorDeficitReport(req, res) {
       return {
         cash_advance_id: a.id,
         supervisor_id: a.field_supervisor_id,
-        supervisor_name:
-          a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
+        supervisor_name: a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
         status: a.status,
         advance_amount: advanceAmount,
         approved_spent: approvedSpent,
@@ -1723,7 +1612,10 @@ async function getSupervisorDeficitReport(req, res) {
   }
 }
 
-// POST /cash/trips/:id/finance/open-review
+// =======================
+// Trip Finance
+// =======================
+
 async function openTripFinanceReview(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1766,7 +1658,6 @@ async function openTripFinanceReview(req, res) {
   }
 }
 
-// POST /cash/trips/:id/finance/close
 async function closeTripFinance(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1808,7 +1699,6 @@ async function closeTripFinance(req, res) {
   }
 }
 
-// GET /cash/trips/:id/finance/summary
 async function getTripFinanceSummary(req, res) {
   try {
     const actorId = getUserId(req);
@@ -1854,8 +1744,8 @@ async function getTripFinanceSummary(req, res) {
     });
   }
 }
+
 module.exports = {
-  // Cash Advances
   getCashAdvancesSummary,
   getCashAdvances,
   getCashAdvanceById,
@@ -1865,7 +1755,6 @@ module.exports = {
   reopenCashAdvance,
   getAdvanceExpenses,
 
-  // Cash Expenses
   createCashExpense,
   listCashExpenses,
   getCashExpensesSummary,
@@ -1876,11 +1765,9 @@ module.exports = {
   resolveAppeal,
   reopenRejectedExpense,
 
-  // Reports / Audits
   getSupervisorDeficitReport,
   getExpenseAudit,
 
-  // Trip finance
   openTripFinanceReview,
   closeTripFinance,
   getTripFinanceSummary,

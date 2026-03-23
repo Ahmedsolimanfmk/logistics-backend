@@ -1,5 +1,4 @@
 const prisma = require("../prisma");
-const tripFinanceService = require("../trips/trip-finance.service");
 
 // =======================
 // Helpers
@@ -50,7 +49,7 @@ async function getTripFinanceSummary(tripId) {
   const approvedExpenses = await prisma.cash_expenses.findMany({
     where: {
       trip_id: tripId,
-      approval_status: { in: ["APPROVED", "REAPPROVED"] },
+      approval_status: "APPROVED",
     },
     select: {
       id: true,
@@ -58,6 +57,7 @@ async function getTripFinanceSummary(tripId) {
       payment_source: true,
       expense_type: true,
       approval_status: true,
+      created_at: true,
     },
   });
 
@@ -72,6 +72,7 @@ async function getTripFinanceSummary(tripId) {
       payment_source: true,
       expense_type: true,
       approval_status: true,
+      created_at: true,
     },
   });
 
@@ -127,6 +128,9 @@ async function getTripFinanceSummary(tripId) {
     currency: revenueRow?.currency || trip.revenue_currency || "EGP",
     revenue_record: revenueRow || null,
     breakdown_by_type: breakdownByType,
+
+    expenses_items: approvedExpenses,
+    pending_expenses_items: pendingExpenses,
   };
 }
 
