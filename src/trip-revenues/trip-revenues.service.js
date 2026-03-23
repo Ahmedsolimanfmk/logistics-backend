@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const tripFinanceService = require("../trips/trip-finance.service");
 
 // =======================
 // Helpers
@@ -80,6 +81,9 @@ async function createOrUpdateRevenue({
     throw err;
   }
 
+  const normalizedSource = String(source || "MANUAL").toUpperCase();
+  const resolvedCurrency = currency || trip.revenue_currency || "EGP";
+
   const existing = await prisma.trip_revenues.findFirst({
     where: { trip_id },
     orderBy: { entered_at: "desc" },
@@ -93,8 +97,8 @@ async function createOrUpdateRevenue({
       where: { id: existing.id },
       data: {
         amount: parsedAmount,
-        currency: currency || trip.revenue_currency || "EGP",
-        source: source || "MANUAL",
+        currency: resolvedCurrency,
+        source: normalizedSource,
         contract_id: contract_id || null,
         invoice_id: invoice_id || null,
         notes: notes || null,
@@ -125,8 +129,8 @@ async function createOrUpdateRevenue({
         contract_id: contract_id || null,
         invoice_id: invoice_id || null,
         amount: parsedAmount,
-        currency: currency || trip.revenue_currency || "EGP",
-        source: source || "MANUAL",
+        currency: resolvedCurrency,
+        source: normalizedSource,
         entered_by: entered_by || null,
         notes: notes || null,
       },
@@ -154,8 +158,8 @@ async function createOrUpdateRevenue({
     where: { id: trip_id },
     data: {
       agreed_revenue: parsedAmount,
-      revenue_currency: currency || trip.revenue_currency || "EGP",
-      revenue_entry_mode: source === "CONTRACT" ? "CONTRACT" : "MANUAL",
+      revenue_currency: resolvedCurrency,
+      revenue_entry_mode: normalizedSource === "CONTRACT" ? "CONTRACT" : "MANUAL",
     },
   });
 
@@ -163,56 +167,7 @@ async function createOrUpdateRevenue({
 }
 
 async function getTripProfitability(tripId) {
-  const trip = await getTripOrThrow(tripId);
-
-  const revenueRow = await prisma.trip_revenues.findFirst({
-    where: { trip_id: tripId },
-    orderBy: { entered_at: "desc" },
-    select: {
-      id: true,
-      amount: true,
-      currency: true,
-      source: true,
-      entered_at: true,
-      approved_at: true,
-      notes: true,
-    },
-  });
-
-  const expensesAgg = await prisma.cash_expenses.aggregate({
-    where: {
-      trip_id: tripId,
-    },
-    _sum: {
-      amount: true,
-    },
-  });
-
-  const advancesAgg = await prisma.cash_expenses.aggregate({
-    where: {
-      trip_id: tripId,
-      payment_source: "ADVANCE",
-    },
-    _sum: {
-      amount: true,
-    },
-  });
-
-  const revenue = revenueRow?.amount ? Number(revenueRow.amount) : Number(trip.agreed_revenue || 0);
-  const expenses = expensesAgg?._sum?.amount ? Number(expensesAgg._sum.amount) : 0;
-  const advances = advancesAgg?._sum?.amount ? Number(advancesAgg._sum.amount) : 0;
-  const profit = revenue - expenses;
-
-  return {
-    trip_id: tripId,
-    financial_status: trip.financial_status,
-    revenue,
-    expenses,
-    advances,
-    profit,
-    currency: revenueRow?.currency || trip.revenue_currency || "EGP",
-    revenue_record: revenueRow || null,
-  };
+  return tripFinanceService.getTripFinanceSummary(tripId);
 }
 
 module.exports = {

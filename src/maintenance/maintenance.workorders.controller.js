@@ -9,13 +9,16 @@ const prisma = require("../prisma");
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
 }
+
 function roleUpper(r) {
   return String(r || "").toUpperCase();
 }
+
 function isAdminOrAccountant(role) {
   const rr = roleUpper(role);
   return rr === "ADMIN" || rr === "ACCOUNTANT";
 }
+
 function isUuid(v) {
   return (
     typeof v === "string" &&
@@ -31,9 +34,11 @@ function toNum(v) {
   if (typeof v?.toString === "function") return Number(v.toString()) || 0;
   return 0;
 }
+
 function round3(n) {
   return Math.round((Number(n) || 0) * 1000) / 1000;
 }
+
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
@@ -74,16 +79,15 @@ function buildRuntimeReport(woFull, opts = {}) {
         unit_cost: round2(toNum(line.unit_cost)),
         total_cost: round2(totalCost),
         notes: line.notes || null,
-         part_item_id: line.part_item_id || null,
-         
+        part_item_id: line.part_item_id || null,
         part_item: line.part_items
-    ? {
-        id: line.part_items.id,
-        internal_serial: line.part_items.internal_serial,
-        manufacturer_serial: line.part_items.manufacturer_serial,
-        status: line.part_items.status,
-      }
-    : null,
+          ? {
+              id: line.part_items.id,
+              internal_serial: line.part_items.internal_serial,
+              manufacturer_serial: line.part_items.manufacturer_serial,
+              status: line.part_items.status,
+            }
+          : null,
       });
 
       const prev = issuedByPart.get(partId) || { part, qty: 0, cost: 0 };
@@ -213,19 +217,13 @@ function buildRuntimeReport(woFull, opts = {}) {
 // GET /maintenance/work-orders
 // Query:
 //  page, limit
-//  status, vehicle_id, request_id
+//  status, vehicle_id, request_id, vendor_id
 //  q (search vendor/notes)
 // =======================
 async function listWorkOrders(req, res) {
   try {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
-
-    // (اختياري) تقييد الرؤية
-    // لو عايز تعرض للجميع: سيبها
-    // لو عايز Admin/Accountant فقط:
-    // const role = req.user?.role || null;
-    // if (!isAdminOrAccountant(role)) return res.status(403).json({ message: "Forbidden" });
 
     const page = Math.max(1, parseIntQuery(req.query.page, 1));
     const limit = Math.min(100, Math.max(1, parseIntQuery(req.query.limit, 20)));
@@ -234,27 +232,38 @@ async function listWorkOrders(req, res) {
     const status = req.query.status ? String(req.query.status).toUpperCase() : null;
     const vehicle_id = req.query.vehicle_id ? String(req.query.vehicle_id) : null;
     const request_id = req.query.request_id ? String(req.query.request_id) : null;
+    const vendor_id = req.query.vendor_id ? String(req.query.vendor_id) : null;
     const q = req.query.q ? String(req.query.q).trim() : "";
 
     const where = {};
 
     if (status) where.status = status;
+
     if (vehicle_id) {
       if (!isUuid(vehicle_id)) return res.status(400).json({ message: "Invalid vehicle_id" });
       where.vehicle_id = vehicle_id;
     }
 
-    // لو عندك request_id في جدول work_orders (زي اللي عملته في CloudSQL)
     if (request_id) {
       if (!isUuid(request_id)) return res.status(400).json({ message: "Invalid request_id" });
       where.request_id = request_id;
     }
 
+    if (vendor_id) {
+      if (!isUuid(vendor_id)) return res.status(400).json({ message: "Invalid vendor_id" });
+      where.vendor_id = vendor_id;
+    }
+
     if (q) {
       where.OR = [
-        { vendor_name: { contains: q, mode: "insensitive" } },
+        {
+          vendors: {
+            is: {
+              name: { contains: q, mode: "insensitive" },
+            },
+          },
+        },
         { notes: { contains: q, mode: "insensitive" } },
-        // ابقى زود search على أي fields تحبها
       ];
     }
 
@@ -268,20 +277,17 @@ async function listWorkOrders(req, res) {
           id: true,
           status: true,
           type: true,
-          vendor_name: true,
+          maintenance_mode: true,
+          vendor_id: true,
           opened_at: true,
           started_at: true,
           completed_at: true,
           odometer: true,
           notes: true,
           vehicle_id: true,
-
-          // لو موجود
           request_id: true,
-
           created_at: true,
           updated_at: true,
-
           vehicles: {
             select: {
               id: true,
@@ -290,6 +296,18 @@ async function listWorkOrders(req, res) {
               display_name: true,
               status: true,
               current_odometer: true,
+            },
+          },
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              vendor_type: true,
+              classification: true,
+              status: true,
+              phone: true,
+              city: true,
             },
           },
         },
@@ -311,7 +329,6 @@ async function listWorkOrders(req, res) {
 
 // =======================
 // GET /maintenance/work-orders/:id
-// (تفاصيل مختصرة - غير report)
 // =======================
 async function getWorkOrderById(req, res) {
   try {
@@ -332,6 +349,23 @@ async function getWorkOrderById(req, res) {
             display_name: true,
             status: true,
             current_odometer: true,
+          },
+        },
+        vendors: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            vendor_type: true,
+            classification: true,
+            status: true,
+            specialization: true,
+            contact_person: true,
+            phone: true,
+            phone2: true,
+            email: true,
+            address: true,
+            city: true,
           },
         },
         post_maintenance_reports: true,
@@ -369,52 +403,76 @@ async function getWorkOrderReport(req, res) {
             current_odometer: true,
           },
         },
-        inventory_issues: {
-  include: {
-    inventory_issue_lines: {
-      include: {
-        parts: {
-          select: { id: true, name: true, part_number: true, brand: true, unit: true },
-        },
-        // ✅ NEW: bring serial info (if line has part_item_id)
-        part_items: {
+        vendors: {
           select: {
             id: true,
-            internal_serial: true,
-            manufacturer_serial: true,
+            name: true,
+            code: true,
+            vendor_type: true,
+            classification: true,
             status: true,
+            specialization: true,
+            contact_person: true,
+            phone: true,
+            phone2: true,
+            email: true,
+            address: true,
+            city: true,
           },
         },
-      },
-    },
-  },
-},
+        inventory_issues: {
+          include: {
+            inventory_issue_lines: {
+              include: {
+                parts: {
+                  select: { id: true, name: true, part_number: true, brand: true, unit: true },
+                },
+                part_items: {
+                  select: {
+                    id: true,
+                    internal_serial: true,
+                    manufacturer_serial: true,
+                    status: true,
+                  },
+                },
+              },
+            },
+          },
+        },
         work_order_installations: {
           include: {
-            parts: { select: { id: true, name: true, part_number: true, brand: true, unit: true } },
+            parts: {
+              select: { id: true, name: true, part_number: true, brand: true, unit: true },
+            },
           },
         },
         post_maintenance_reports: true,
-
-        // ✅ IMPORTANT: bring all WO-linked expenses (company or supervisor)
         cash_expenses: {
-  where: { maintenance_work_order_id: workOrderId },
-  orderBy: { created_at: "desc" },
-  select: {
-    id: true,
-    amount: true,
-    expense_type: true,
-    notes: true,
-    receipt_url: true,
-    approval_status: true,
-    approved_at: true,
-    approved_by: true,
-    payment_source: true, // ✅ موجود في schema
-    created_at: true,
-    created_by: true,
-    cash_advance_id: true,
-  },
-},
+          where: { maintenance_work_order_id: workOrderId },
+          orderBy: { created_at: "desc" },
+          select: {
+            id: true,
+            amount: true,
+            expense_type: true,
+            notes: true,
+            receipt_url: true,
+            approval_status: true,
+            approved_at: true,
+            approved_by: true,
+            payment_source: true,
+            created_at: true,
+            created_by: true,
+            cash_advance_id: true,
+            vendor_id: true,
+            vendors: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -427,7 +485,6 @@ async function getWorkOrderReport(req, res) {
 
     const woExpenses = woFull.cash_expenses || [];
 
-    // totals by approval
     const approvedExpenses = woExpenses.filter(
       (e) => String(e.approval_status || "").toUpperCase() === "APPROVED"
     );
@@ -436,18 +493,17 @@ async function getWorkOrderReport(req, res) {
       approvedExpenses.reduce((s, e) => s + toNum(e.amount), 0)
     );
 
-    // split (optional but useful)
-  const approved_company_total = round2(
-  approvedExpenses
-    .filter((e) => String(e.payment_source || "").toUpperCase() === "COMPANY")
-    .reduce((s, e) => s + toNum(e.amount), 0)
-);
+    const approved_company_total = round2(
+      approvedExpenses
+        .filter((e) => String(e.payment_source || "").toUpperCase() === "COMPANY")
+        .reduce((s, e) => s + toNum(e.amount), 0)
+    );
 
-const approved_supervisor_total = round2(
-  approvedExpenses
-    .filter((e) => String(e.payment_source || "").toUpperCase() === "ADVANCE")
-    .reduce((s, e) => s + toNum(e.amount), 0)
-);
+    const approved_supervisor_total = round2(
+      approvedExpenses
+        .filter((e) => String(e.payment_source || "").toUpperCase() === "ADVANCE")
+        .reduce((s, e) => s + toNum(e.amount), 0)
+    );
 
     totals.maintenance_cash_cost_total = maintenance_cash_cost_total;
     totals.maintenance_company_cost_total = approved_company_total;
@@ -474,7 +530,10 @@ const approved_supervisor_total = round2(
         id: woFull.id,
         status: woFull.status,
         type: woFull.type,
-        vendor_name: woFull.vendor_name,
+        maintenance_mode: woFull.maintenance_mode,
+        vendor_id: woFull.vendor_id || null,
+        vendor_name: woFull.vendors?.name || null,
+        vendor: woFull.vendors || null,
         opened_at: woFull.opened_at,
         started_at: woFull.started_at,
         completed_at: woFull.completed_at,
@@ -484,19 +543,21 @@ const approved_supervisor_total = round2(
       },
       vehicle: woFull.vehicles,
       post_report_db: woFull.post_maintenance_reports,
-      work_order_expenses: woExpenses,
+      work_order_expenses: woExpenses.map((x) => ({
+        ...x,
+        vendor_name: x.vendors?.name || null,
+      })),
       report_runtime,
     });
   } catch (e) {
-  console.error("GET WORK ORDER REPORT ERROR:", e);
+    console.error("GET WORK ORDER REPORT ERROR:", e);
 
-  // ✅ مؤقت للتشخيص فقط
-  return res.status(500).json({
-    message: "Failed to get work order report",
-    error: e?.message || String(e),
-    stack: process.env.NODE_ENV === "production" ? undefined : e?.stack,
-  });
-}
+    return res.status(500).json({
+      message: "Failed to get work order report",
+      error: e?.message || String(e),
+      stack: process.env.NODE_ENV === "production" ? undefined : e?.stack,
+    });
+  }
 }
 
 // =======================
@@ -580,7 +641,9 @@ async function completeWorkOrder(req, res) {
 
     const st = String(wo.status || "").toUpperCase();
     if (st === "COMPLETED") return res.status(409).json({ message: "Work order already completed" });
-    if (st === "CANCELED") return res.status(409).json({ message: "Work order is canceled" });
+    if (st === "CANCELED" || st === "CANCELLED") {
+      return res.status(409).json({ message: "Work order is canceled" });
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const woUpdated = await tx.maintenance_work_orders.update({
@@ -598,7 +661,6 @@ async function completeWorkOrder(req, res) {
         data: { status: "AVAILABLE", updated_at: now },
       });
 
-      // optional log
       await tx.maintenance_work_order_events.create({
         data: {
           work_order_id: workOrderId,

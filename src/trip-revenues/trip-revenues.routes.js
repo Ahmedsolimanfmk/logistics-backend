@@ -3,13 +3,11 @@ const controller = require("./trip-revenues.controller");
 
 const router = express.Router();
 
-// GET revenue by trip
-router.get("/:tripId", controller.getByTripId);
+// Revenue by trip
+router.get("/:tripId/revenue", controller.getByTripId);
+router.put("/:tripId/revenue", controller.createOrUpdateRevenue);
 
-// GET profitability summary by trip
+// Profitability by trip
 router.get("/:tripId/profitability", controller.getProfitability);
-
-// CREATE or UPDATE trip revenue
-router.post("/", controller.createOrUpdateRevenue);
 
 module.exports = router;

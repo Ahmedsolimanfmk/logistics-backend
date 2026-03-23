@@ -41,7 +41,7 @@ app.use(express.json({ limit: JSON_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_LIMIT }));
 
 // =======================
-// CORS (production-ready)
+// CORS
 // =======================
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
@@ -49,12 +49,8 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 function corsOriginCheck(origin, cb) {
-  // origin can be undefined (server-to-server / curl), or sometimes "null"
   if (!origin || origin === "null") return cb(null, true);
-
-  // If no allowlist configured, allow all
   if (allowedOrigins.length === 0) return cb(null, true);
-
   if (allowedOrigins.includes(origin)) return cb(null, true);
 
   const e = new Error("Not allowed by CORS");
@@ -69,8 +65,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// ✅ Express 5 / path-to-regexp: "*" breaks, use regex or "/*"
 app.options(/.*/, cors(corsOptions));
 
 app.use((req, res, next) => {
@@ -86,15 +80,16 @@ app.use((req, res, next) => {
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // =======================
-// Public routes (NO auth)
+// Public routes
 // =======================
 app.use("/auth", authRoutes);
 
 // =======================
-// Protected routes (JWT required)
+// Protected routes
 // =======================
 app.use("/vehicles", authRequired, vehiclesRoutes);
 app.use("/trips", authRequired, tripsRoutes);
+app.use("/trips", authRequired, tripRevenuesRoutes);
 app.use("/drivers", authRequired, driversRoutes);
 app.use("/users", authRequired, usersRoutes);
 app.use("/supervisors", authRequired, supervisorsRoutes);
@@ -106,10 +101,7 @@ app.use("/inventory", authRequired, inventoryRoutes);
 app.use("/finance/ar", authRequired, arRoutes);
 app.use("/analytics", authRequired, analyticsRoutes);
 app.use("/ai-analytics", authRequired, aiAnalyticsRoutes);
-app.use("/trip-revenues", authRequired, tripRevenuesRoutes);
 app.use("/vendors", authRequired, vendorsRoutes);
-
-
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);
@@ -148,7 +140,7 @@ app.use((err, req, res, next) => {
 });
 
 // =======================
-// Start server (Cloud Run compatible)
+// Start server
 // =======================
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = "0.0.0.0";

@@ -35,6 +35,16 @@ function pickValue(obj, paths = []) {
   return undefined;
 }
 
+function extractVendorName(item) {
+  return (
+    item?.vendor_name ||
+    item?.vendors?.name ||
+    item?.vendor?.name ||
+    item?.name ||
+    null
+  );
+}
+
 function renderTopList(items, getLabel, getValue, unit = "جنيه") {
   return items
     .map((item, idx) => {
@@ -60,11 +70,12 @@ function renderEntityLabel(item) {
     item.item_name ||
     item.expense_type ||
     item.type_name ||
-    item.vendor_name ||
+    extractVendorName(item) ||
     item.payment_source ||
     item.approval_status ||
     item.plate_no ||
     item.fleet_no ||
+    item.trip_code ||
     item.name ||
     "العنصر المطلوب"
   );
@@ -85,6 +96,16 @@ function approvalStatusLabel(v) {
   if (s === "REJECTED") return "مرفوض";
   if (s === "REAPPROVED") return "معاد اعتماده";
   if (s === "APPEALED") return "تم التظلم عليه";
+
+  return v || "غير محدد";
+}
+
+function financialStatusLabel(v) {
+  const s = String(v || "").toUpperCase();
+
+  if (s === "OPEN") return "مفتوح";
+  if (s === "UNDER_REVIEW") return "تحت المراجعة";
+  if (s === "CLOSED") return "مغلق";
 
   return v || "غير محدد";
 }
@@ -203,7 +224,14 @@ function buildActionAnswer({ parsed, execution }) {
         execution?.data?.vehicle?.plate_no ||
         "المركبة المحددة";
 
-      return `تم إنشاء أمر العمل بنجاح للمركبة "${vehicleName}". رقم أمر العمل: ${woId}.`;
+      const vendorName =
+        execution?.data?.vendor?.name ||
+        execution?.data?.work_order?.vendor_name ||
+        null;
+
+      return vendorName
+        ? `تم إنشاء أمر العمل بنجاح للمركبة "${vehicleName}" وربطه بالمورد "${vendorName}". رقم أمر العمل: ${woId}.`
+        : `تم إنشاء أمر العمل بنجاح للمركبة "${vehicleName}". رقم أمر العمل: ${woId}.`;
     }
 
     if (intent === "create_maintenance_request") {
@@ -221,10 +249,18 @@ function buildActionAnswer({ parsed, execution }) {
       const expenseId = execution?.data?.expense?.id || "غير معروف";
       const amount = execution?.data?.expense?.amount || 0;
       const expenseType = execution?.data?.expense?.expense_type || "مصروف";
+      const vendorName =
+        execution?.data?.expense?.vendor_name ||
+        execution?.data?.vendor?.name ||
+        null;
 
-      return `تم تسجيل المصروف "${expenseType}" بنجاح بقيمة ${money(
-        amount
-      )} جنيه. رقم المصروف: ${expenseId}.`;
+      return vendorName
+        ? `تم تسجيل المصروف "${expenseType}" بنجاح بقيمة ${money(
+            amount
+          )} جنيه لصالح المورد "${vendorName}". رقم المصروف: ${expenseId}.`
+        : `تم تسجيل المصروف "${expenseType}" بنجاح بقيمة ${money(
+            amount
+          )} جنيه. رقم المصروف: ${expenseId}.`;
     }
 
     return "تم تنفيذ الأمر بنجاح.";
@@ -499,9 +535,9 @@ function handleTopVendors(parsed, result) {
       `أعلى ${count} موردين من حيث المصروفات خلال ${rangeLabel}:\n${list}`,
     singleText: (rangeLabel, top) =>
       `أعلى مورد من حيث المصروفات خلال ${rangeLabel} هو "${
-        top.vendor_name || "مورد غير معروف"
+        extractVendorName(top) || "مورد غير معروف"
       }" بإجمالي ${money(top.total_amount || 0)} جنيه.`,
-    getLabel: (x) => x.vendor_name || "مورد غير معروف",
+    getLabel: (x) => extractVendorName(x) || "مورد غير معروف",
     getValue: (x) => x.total_amount || 0,
   });
 }

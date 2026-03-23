@@ -4,7 +4,7 @@ const tripRevenuesService = require("./trip-revenues.service");
 // Helpers
 // =======================
 function getUserId(req) {
-  return req.user?.id || req.auth?.id || null;
+  return req.user?.id || req.user?.sub || req.auth?.id || null;
 }
 
 function handleError(res, error) {
@@ -42,12 +42,13 @@ async function getByTripId(req, res) {
 
 async function createOrUpdateRevenue(req, res) {
   try {
-    const { trip_id, amount, currency, source, contract_id, invoice_id, notes } = req.body;
+    const { tripId } = req.params;
+    const { amount, currency, source, contract_id, invoice_id, notes } = req.body || {};
 
-    if (!trip_id) {
+    if (!tripId) {
       return res.status(400).json({
         success: false,
-        message: "trip_id is required",
+        message: "tripId is required",
       });
     }
 
@@ -59,7 +60,7 @@ async function createOrUpdateRevenue(req, res) {
     }
 
     const data = await tripRevenuesService.createOrUpdateRevenue({
-      trip_id,
+      trip_id: tripId,
       amount,
       currency,
       source,

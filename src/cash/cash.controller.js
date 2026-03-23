@@ -2,6 +2,8 @@
 // FINAL: COMPANY + ADVANCE (enum payment_source) + backward compatibility
 // + approve/reject/appeal/resolve/reopen + audits + trip finance helpers
 // + unified auth/access helpers
+// + vendors via vendor_id relation (vendor_name derived in response only)
+// + enum fixes aligned with Prisma schema
 
 const prisma = require("../prisma");
 const {
@@ -9,6 +11,7 @@ const {
   getUserRole,
   isAdminOrAccountant,
 } = require("../auth/access");
+const tripFinanceService = require("../trips/trip-finance.service");
 
 // =======================
 // Helpers
@@ -24,7 +27,7 @@ function isUuid(v) {
 // Trip finance lock helper
 function isTripFinancialLocked(financial_status) {
   const s = String(financial_status || "OPEN").toUpperCase();
-  return ["IN_REVIEW", "CLOSED"].includes(s);
+  return ["UNDER_REVIEW", "CLOSED"].includes(s);
 }
 
 // Trip ownership for supervisor (any historical assignment)
@@ -77,12 +80,36 @@ async function writeExpenseAuditSafe(
   }
 }
 
+function mapExpenseVendorFields(expense) {
+  if (!expense) return expense;
+  return {
+    ...expense,
+    vendor_name: expense.vendors?.name || null,
+  };
+}
+
 async function getExpenseOr404(id, res) {
-  const expense = await prisma.cash_expenses.findUnique({ where: { id } });
+  const expense = await prisma.cash_expenses.findUnique({
+    where: { id },
+    include: {
+      vendors: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          vendor_type: true,
+          classification: true,
+          status: true,
+        },
+      },
+    },
+  });
+
   if (!expense) {
     res.status(404).json({ message: "Cash expense not found" });
     return null;
   }
+
   return expense;
 }
 
@@ -94,6 +121,7 @@ async function getExpenseFullOr404(id, res) {
       trips: true,
       vehicles: true,
       maintenance_work_orders: true,
+      vendors: true,
       users_cash_expenses_created_byTousers: true,
       users_cash_expenses_approved_byTousers: true,
       users_cash_expenses_rejected_byTousers: true,
@@ -129,6 +157,19 @@ function safeUpper(v) {
   return String(v || "").toUpperCase();
 }
 
+// cash_advance_status schema-safe helpers
+function isAdvanceOpenStatus(s) {
+  return ["OPEN"].includes(safeUpper(s));
+}
+
+function isAdvanceSettledStatus(s) {
+  return ["SETTLED"].includes(safeUpper(s));
+}
+
+function isAdvanceCancelledStatus(s) {
+  return ["CANCELLED", "CANCELED"].includes(safeUpper(s));
+}
+
 // =======================
 // Cash Advances
 // =======================
@@ -137,7 +178,6 @@ function safeUpper(v) {
 async function getCashAdvancesSummary(req, res) {
   try {
     const userId = getUserId(req);
-    const role = getUserRole(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
@@ -164,16 +204,11 @@ async function getCashAdvancesSummary(req, res) {
       select: { amount: true, status: true },
     });
 
-    const st = (x) => String(x?.status || "").toUpperCase();
     const sumAmount = rows.reduce((acc, x) => acc + Number(x.amount || 0), 0);
 
-    const isOpen = (s) => ["OPEN", "IN_REVIEW", "PENDING"].includes(s);
-    const isSettled = (s) => ["SETTLED", "CLOSED"].includes(s);
-    const isCanceled = (s) => ["CANCELED", "REJECTED"].includes(s);
-
-    const openCount = rows.filter((x) => isOpen(st(x))).length;
-    const settledCount = rows.filter((x) => isSettled(st(x))).length;
-    const canceledCount = rows.filter((x) => isCanceled(st(x))).length;
+    const openCount = rows.filter((x) => isAdvanceOpenStatus(x.status)).length;
+    const settledCount = rows.filter((x) => isAdvanceSettledStatus(x.status)).length;
+    const canceledCount = rows.filter((x) => isAdvanceCancelledStatus(x.status)).length;
 
     return res.json({
       where_applied: {
@@ -235,13 +270,32 @@ async function getCashAdvances(req, res) {
         include: {
           users_cash_advances_field_supervisor_idTousers: true,
           users_cash_advances_issued_byTousers: true,
-          cash_expenses: { orderBy: { created_at: "desc" } },
+          cash_expenses: {
+            orderBy: { created_at: "desc" },
+            include: {
+              vendors: {
+                select: {
+                  id: true,
+                  name: true,
+                  code: true,
+                },
+              },
+            },
+          },
         },
       }),
       prisma.cash_advances.count({ where }),
     ]);
 
-    return res.json({ items, total, page: p, page_size: ps });
+    return res.json({
+      items: items.map((x) => ({
+        ...x,
+        cash_expenses: (x.cash_expenses || []).map(mapExpenseVendorFields),
+      })),
+      total,
+      page: p,
+      page_size: ps,
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch cash advances",
@@ -307,6 +361,8 @@ async function createCashAdvance(req, res) {
   }
 }
 
+// POST /cash/cash-advances/:id/submit-review
+// enum fix: no IN_REVIEW in schema, so we keep OPEN and return marker only
 async function submitCashAdvanceForReview(req, res) {
   try {
     const actorId = getUserId(req);
@@ -324,9 +380,9 @@ async function submitCashAdvanceForReview(req, res) {
     const advance = await prisma.cash_advances.findUnique({ where: { id } });
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
-    const st = String(advance.status || "OPEN").toUpperCase();
-    if (st === "CLOSED") {
-      return res.status(409).json({ message: "Cash advance already CLOSED" });
+    const st = safeUpper(advance.status || "OPEN");
+    if (st === "SETTLED") {
+      return res.status(409).json({ message: "Cash advance already SETTLED" });
     }
     if (st !== "OPEN") {
       return res.status(400).json({
@@ -334,14 +390,10 @@ async function submitCashAdvanceForReview(req, res) {
       });
     }
 
-    const updated = await prisma.cash_advances.update({
-      where: { id },
-      data: { status: "IN_REVIEW" },
-    });
-
     return res.json({
-      message: "Cash advance moved to IN_REVIEW",
-      cash_advance: updated,
+      message: "Cash advance ready for review",
+      review_status: "READY_FOR_REVIEW",
+      cash_advance: advance,
     });
   } catch (e) {
     return res.status(500).json({
@@ -381,11 +433,11 @@ async function closeCashAdvance(req, res) {
     const advance = await prisma.cash_advances.findUnique({ where: { id } });
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
-    const st = String(advance.status || "OPEN").toUpperCase();
-    if (st === "CLOSED") return res.status(409).json({ message: "Cash advance already CLOSED" });
-    if (st !== "IN_REVIEW") {
+    const st = safeUpper(advance.status || "OPEN");
+    if (st === "SETTLED") return res.status(409).json({ message: "Cash advance already SETTLED" });
+    if (st !== "OPEN") {
       return res.status(400).json({
-        message: `Cash advance must be IN_REVIEW before CLOSE (current: ${st})`,
+        message: `Cash advance must be OPEN before settlement (current: ${st})`,
       });
     }
 
@@ -398,7 +450,7 @@ async function closeCashAdvance(req, res) {
 
     if (pendingCount > 0) {
       return res.status(409).json({
-        message: "Cannot close cash advance while there are pending/appealed expenses",
+        message: "Cannot settle cash advance while there are pending/appealed expenses",
         pending_count: pendingCount,
       });
     }
@@ -431,7 +483,7 @@ async function closeCashAdvance(req, res) {
       }
       if (Number(remaining.toFixed(2)) !== Number(amt.toFixed(2))) {
         return res.status(400).json({
-          message: "For CLOSE with RETURN, amount must equal remaining exactly",
+          message: "For settlement with RETURN, amount must equal remaining exactly",
           totals: { advanceAmount, totalApproved, remaining },
         });
       }
@@ -446,7 +498,7 @@ async function closeCashAdvance(req, res) {
       }
       if (Number(shortage.toFixed(2)) !== Number(amt.toFixed(2))) {
         return res.status(400).json({
-          message: "For CLOSE with SHORTAGE, amount must equal shortage exactly",
+          message: "For settlement with SHORTAGE, amount must equal shortage exactly",
           totals: { advanceAmount, totalApproved, shortage },
         });
       }
@@ -455,7 +507,7 @@ async function closeCashAdvance(req, res) {
     const updated = await prisma.cash_advances.update({
       where: { id },
       data: {
-        status: "CLOSED",
+        status: "SETTLED",
         settlement_type: stType,
         settlement_amount: amt,
         settlement_reference: reference ? String(reference) : null,
@@ -466,14 +518,14 @@ async function closeCashAdvance(req, res) {
     });
 
     return res.json({
-      message: "Cash advance CLOSED",
+      message: "Cash advance SETTLED",
       cash_advance: updated,
       totals: { advanceAmount, totalApproved, remaining, shortage },
     });
   } catch (e) {
     console.log("CLOSE CASH ADVANCE ERROR:", e);
     return res.status(500).json({
-      message: "Failed to close cash advance",
+      message: "Failed to settle cash advance",
       error: e?.message || String(e),
     });
   }
@@ -496,17 +548,17 @@ async function reopenCashAdvance(req, res) {
     const advance = await prisma.cash_advances.findUnique({ where: { id } });
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
-    const st = String(advance.status || "OPEN").toUpperCase();
-    if (st !== "CLOSED") {
+    const st = safeUpper(advance.status || "OPEN");
+    if (st !== "SETTLED") {
       return res.status(400).json({
-        message: `Only CLOSED advances can be reopened (current: ${st})`,
+        message: `Only SETTLED advances can be reopened (current: ${st})`,
       });
     }
 
     const updated = await prisma.cash_advances.update({
       where: { id },
       data: {
-        status: "IN_REVIEW",
+        status: "OPEN",
         settlement_type: null,
         settlement_amount: null,
         settlement_reference: null,
@@ -517,7 +569,7 @@ async function reopenCashAdvance(req, res) {
     });
 
     return res.json({
-      message: "Cash advance reopened to IN_REVIEW",
+      message: "Cash advance reopened to OPEN",
       cash_advance: updated,
     });
   } catch (e) {
@@ -550,10 +602,17 @@ async function getAdvanceExpenses(req, res) {
         users_cash_expenses_approved_byTousers: true,
         trips: true,
         vehicles: true,
+        vendors: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
       },
     });
 
-    return res.json(list);
+    return res.json(list.map(mapExpenseVendorFields));
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch advance expenses",
@@ -572,8 +631,6 @@ async function createCashExpense(req, res) {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = getUserRole(req);
-
     const {
       expense_source,
       payment_source,
@@ -583,12 +640,14 @@ async function createCashExpense(req, res) {
       vehicle_id,
       maintenance_work_order_id,
 
+      vendor_id,
+      vendor_name, // accepted as legacy input but not stored
+
       expense_type,
       amount,
       notes,
       receipt_url,
 
-      vendor_name,
       invoice_no,
       invoice_date,
       paid_method,
@@ -616,16 +675,38 @@ async function createCashExpense(req, res) {
       return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
     }
 
+    let normalizedVendorId = null;
+    if (vendor_id !== undefined && vendor_id !== null && String(vendor_id).trim() !== "") {
+      if (!isUuid(String(vendor_id))) {
+        return res.status(400).json({ message: "Invalid vendor_id" });
+      }
+
+      const vendor = await prisma.vendors.findUnique({
+        where: { id: String(vendor_id) },
+        select: { id: true, name: true, status: true },
+      });
+
+      if (!vendor) {
+        return res.status(400).json({ message: "Invalid vendor_id" });
+      }
+
+      normalizedVendorId = vendor.id;
+    }
+
     let mwoVehicleId = null;
     if (maintenance_work_order_id) {
       const mwo = await prisma.maintenance_work_orders.findUnique({
         where: { id: maintenance_work_order_id },
-        select: { id: true, vehicle_id: true },
+        select: { id: true, vehicle_id: true, vendor_id: true },
       });
       if (!mwo) {
         return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
       }
       mwoVehicleId = mwo.vehicle_id || null;
+
+      if (!normalizedVendorId && mwo.vendor_id) {
+        normalizedVendorId = mwo.vendor_id;
+      }
     }
 
     if (src === "COMPANY") {
@@ -641,9 +722,9 @@ async function createCashExpense(req, res) {
         });
       }
 
-      if (!vendor_name || String(vendor_name).trim().length < 2) {
+      if (!normalizedVendorId) {
         return res.status(400).json({
-          message: "vendor_name is required for COMPANY expenses",
+          message: "vendor_id is required for COMPANY expenses",
         });
       }
 
@@ -671,19 +752,20 @@ async function createCashExpense(req, res) {
         data: {
           payment_source: "COMPANY",
           cash_advance_id: null,
+          vendor_id: normalizedVendorId,
 
           trips: trip_id ? { connect: { id: trip_id } } : undefined,
           vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
           maintenance_work_orders: maintenance_work_order_id
             ? { connect: { id: maintenance_work_order_id } }
             : undefined,
+          vendors: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
 
           expense_type,
           amount,
           notes: notes ? String(notes) : null,
           receipt_url: receipt_url ? String(receipt_url) : null,
 
-          vendor_name: String(vendor_name).trim(),
           invoice_no: invoice_no ? String(invoice_no).trim() : null,
           invoice_date: invDate,
           paid_method: paid_method ? String(paid_method).toUpperCase() : null,
@@ -698,9 +780,18 @@ async function createCashExpense(req, res) {
           approval_status: "PENDING",
           users_cash_expenses_created_byTousers: { connect: { id: userId } },
         },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
       });
 
-      return res.status(201).json(created);
+      return res.status(201).json(mapExpenseVendorFields(created));
     }
 
     if (!isUuid(cash_advance_id)) {
@@ -713,7 +804,7 @@ async function createCashExpense(req, res) {
       where: { id: cash_advance_id },
     });
 
-    if (!advance || String(advance.status).toUpperCase() !== "OPEN") {
+    if (!advance || !isAdvanceOpenStatus(advance.status)) {
       return res.status(400).json({ message: "Cash advance not found or not OPEN" });
     }
 
@@ -767,6 +858,7 @@ async function createCashExpense(req, res) {
       data: {
         payment_source: "ADVANCE",
         cash_advances: { connect: { id: cash_advance_id } },
+        vendor_id: normalizedVendorId,
 
         trips: trip_id ? { connect: { id: trip_id } } : undefined,
         vehicles: vehicle_id || mwoVehicleId
@@ -775,6 +867,7 @@ async function createCashExpense(req, res) {
         maintenance_work_orders: maintenance_work_order_id
           ? { connect: { id: maintenance_work_order_id } }
           : undefined,
+        vendors: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
 
         expense_type,
         amount,
@@ -784,9 +877,18 @@ async function createCashExpense(req, res) {
         approval_status: "PENDING",
         users_cash_expenses_created_byTousers: { connect: { id: userId } },
       },
+      include: {
+        vendors: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
     });
 
-    return res.status(201).json(created);
+    return res.status(201).json(mapExpenseVendorFields(created));
   } catch (e) {
     console.log("CREATE CASH EXPENSE ERROR:", e);
     return res.status(500).json({
@@ -803,12 +905,26 @@ async function listCashExpenses(req, res) {
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
-    const { status, payment_source, q, page = "1", page_size = "50" } = req.query || {};
+    const {
+      status,
+      payment_source,
+      q,
+      vendor_id,
+      page = "1",
+      page_size = "50",
+    } = req.query || {};
 
     const where = {};
 
     if (status) where.approval_status = String(status).toUpperCase();
     if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
+
+    if (vendor_id) {
+      if (!isUuid(String(vendor_id))) {
+        return res.status(400).json({ message: "Invalid vendor_id" });
+      }
+      where.vendor_id = String(vendor_id);
+    }
 
     if (!isPrivileged) {
       where.created_by = userId;
@@ -819,9 +935,15 @@ async function listCashExpenses(req, res) {
       where.OR = [
         { expense_type: { contains: qq, mode: "insensitive" } },
         { notes: { contains: qq, mode: "insensitive" } },
-        { vendor_name: { contains: qq, mode: "insensitive" } },
         { invoice_no: { contains: qq, mode: "insensitive" } },
         { payment_ref: { contains: qq, mode: "insensitive" } },
+        {
+          vendors: {
+            is: {
+              name: { contains: qq, mode: "insensitive" },
+            },
+          },
+        },
       ];
     }
 
@@ -840,6 +962,16 @@ async function listCashExpenses(req, res) {
           trips: true,
           vehicles: true,
           maintenance_work_orders: true,
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              vendor_type: true,
+              classification: true,
+              status: true,
+            },
+          },
           users_cash_expenses_created_byTousers: true,
           users_cash_expenses_approved_byTousers: true,
         },
@@ -847,7 +979,12 @@ async function listCashExpenses(req, res) {
       prisma.cash_expenses.count({ where }),
     ]);
 
-    return res.json({ items, total, page: p, page_size: ps });
+    return res.json({
+      items: items.map(mapExpenseVendorFields),
+      total,
+      page: p,
+      page_size: ps,
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch expenses",
@@ -870,7 +1007,18 @@ async function getCashAdvanceById(req, res) {
       include: {
         users_cash_advances_field_supervisor_idTousers: true,
         users_cash_advances_issued_byTousers: true,
-        cash_expenses: { orderBy: { created_at: "desc" } },
+        cash_expenses: {
+          orderBy: { created_at: "desc" },
+          include: {
+            vendors: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -883,7 +1031,10 @@ async function getCashAdvanceById(req, res) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    return res.json(row);
+    return res.json({
+      ...row,
+      cash_expenses: (row.cash_expenses || []).map(mapExpenseVendorFields),
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch cash advance",
@@ -899,11 +1050,18 @@ async function getCashExpensesSummary(req, res) {
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
-    const { status, payment_source, q } = req.query || {};
+    const { status, payment_source, q, vendor_id } = req.query || {};
     const where = {};
 
     if (status) where.approval_status = String(status).toUpperCase();
     if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
+
+    if (vendor_id) {
+      if (!isUuid(String(vendor_id))) {
+        return res.status(400).json({ message: "Invalid vendor_id" });
+      }
+      where.vendor_id = String(vendor_id);
+    }
 
     if (!isPrivileged) {
       where.created_by = userId;
@@ -914,9 +1072,15 @@ async function getCashExpensesSummary(req, res) {
       where.OR = [
         { expense_type: { contains: qq, mode: "insensitive" } },
         { notes: { contains: qq, mode: "insensitive" } },
-        { vendor_name: { contains: qq, mode: "insensitive" } },
         { invoice_no: { contains: qq, mode: "insensitive" } },
         { payment_ref: { contains: qq, mode: "insensitive" } },
+        {
+          vendors: {
+            is: {
+              name: { contains: qq, mode: "insensitive" },
+            },
+          },
+        },
       ];
     }
 
@@ -951,6 +1115,7 @@ async function getCashExpensesSummary(req, res) {
       where_applied: {
         status: status ? String(status).toUpperCase() : null,
         payment_source: payment_source ? normalizePaymentSource(payment_source) : null,
+        vendor_id: vendor_id ? String(vendor_id) : null,
         q: q ? String(q) : null,
         scope: isPrivileged ? "ALL" : "OWN_CREATED",
       },
@@ -1002,6 +1167,7 @@ async function getCashExpenseById(req, res) {
         trips: true,
         vehicles: true,
         maintenance_work_orders: true,
+        vendors: true,
         users_cash_expenses_created_byTousers: true,
         users_cash_expenses_approved_byTousers: true,
         users_cash_expenses_rejected_byTousers: true,
@@ -1019,7 +1185,7 @@ async function getCashExpenseById(req, res) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    return res.json(row);
+    return res.json(mapExpenseVendorFields(row));
   } catch (e) {
     return res.status(500).json({
       message: "Failed to fetch expense",
@@ -1073,6 +1239,15 @@ async function approveCashExpense(req, res) {
           resolved_at: new Date(),
           resolved_by: actorId,
         },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
       });
 
       await writeExpenseAuditSafe(tx, {
@@ -1087,7 +1262,7 @@ async function approveCashExpense(req, res) {
       return after;
     });
 
-    return res.json({ message: "Expense approved", expense: updated });
+    return res.json({ message: "Expense approved", expense: mapExpenseVendorFields(updated) });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to approve expense",
@@ -1140,6 +1315,15 @@ async function rejectCashExpense(req, res) {
           resolved_at: new Date(),
           resolved_by: actorId,
         },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
       });
 
       await writeExpenseAuditSafe(tx, {
@@ -1154,7 +1338,7 @@ async function rejectCashExpense(req, res) {
       return after;
     });
 
-    return res.json({ message: "Expense rejected", expense: updated });
+    return res.json({ message: "Expense rejected", expense: mapExpenseVendorFields(updated) });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to reject expense",
@@ -1210,6 +1394,15 @@ async function appealRejectedExpense(req, res) {
           resolved_at: null,
           resolved_by: null,
         },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
       });
 
       await writeExpenseAuditSafe(tx, {
@@ -1224,7 +1417,7 @@ async function appealRejectedExpense(req, res) {
       return after;
     });
 
-    return res.json({ message: "Appeal submitted", expense: updated });
+    return res.json({ message: "Appeal submitted", expense: mapExpenseVendorFields(updated) });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to appeal rejected expense",
@@ -1281,6 +1474,15 @@ async function resolveAppeal(req, res) {
             resolved_at: new Date(),
             resolved_by: actorId,
           },
+          include: {
+            vendors: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+          },
         });
       } else {
         after = await tx.cash_expenses.update({
@@ -1292,6 +1494,15 @@ async function resolveAppeal(req, res) {
             rejection_reason: notes,
             resolved_at: new Date(),
             resolved_by: actorId,
+          },
+          include: {
+            vendors: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
           },
         });
       }
@@ -1311,7 +1522,7 @@ async function resolveAppeal(req, res) {
       return after;
     });
 
-    return res.json({ message: "Appeal resolved", expense: updated });
+    return res.json({ message: "Appeal resolved", expense: mapExpenseVendorFields(updated) });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to resolve appeal",
@@ -1363,6 +1574,15 @@ async function reopenRejectedExpense(req, res) {
           resolved_at: null,
           resolved_by: null,
         },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
       });
 
       await writeExpenseAuditSafe(tx, {
@@ -1377,7 +1597,7 @@ async function reopenRejectedExpense(req, res) {
       return after;
     });
 
-    return res.json({ message: "Expense reopened to PENDING", expense: updated });
+    return res.json({ message: "Expense reopened to PENDING", expense: mapExpenseVendorFields(updated) });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to reopen expense",
@@ -1531,11 +1751,11 @@ async function openTripFinanceReview(req, res) {
 
     const updated = await prisma.trips.update({
       where: { id: trip_id },
-      data: { financial_status: "IN_REVIEW" },
+      data: { financial_status: "UNDER_REVIEW" },
     });
 
     return res.json({
-      message: "Trip finance moved to IN_REVIEW",
+      message: "Trip finance moved to UNDER_REVIEW",
       trip: updated,
     });
   } catch (e) {
@@ -1568,9 +1788,9 @@ async function closeTripFinance(req, res) {
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     const st = safeUpper(trip.financial_status || "OPEN");
-    if (st !== "IN_REVIEW") {
+    if (st !== "UNDER_REVIEW") {
       return res.status(400).json({
-        message: `Trip must be IN_REVIEW to close finance (current: ${st})`,
+        message: `Trip must be UNDER_REVIEW to close finance (current: ${st})`,
       });
     }
 
@@ -1602,73 +1822,38 @@ async function getTripFinanceSummary(req, res) {
       ? String(req.query.trip_id)
       : null;
 
-    const status = req.query?.status ? safeUpper(req.query.status) : null;
-
-    const whereTrip = {};
-    if (trip_id) {
-      if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
-      whereTrip.id = trip_id;
-    }
-    if (status) whereTrip.financial_status = status;
-
-    if (!isPrivileged && !trip_id) {
-      return res.status(403).json({ message: "Forbidden" });
+    if (!trip_id) {
+      return res.status(400).json({ message: "trip_id is required" });
     }
 
-    const trips = await prisma.trips.findMany({
-      where: whereTrip,
-      select: { id: true, financial_status: true },
-      orderBy: { created_at: "desc" },
-      take: 2000,
-    });
-
-    const tripIds = trips.map((t) => t.id);
-
-    const expenses = tripIds.length
-      ? await prisma.cash_expenses.findMany({
-          where: {
-            trip_id: { in: tripIds },
-            approval_status: { in: ["APPROVED", "REAPPROVED"] },
-          },
-          select: { trip_id: true, amount: true, payment_source: true },
-        })
-      : [];
-
-    const byTrip = new Map();
-    for (const e of expenses) {
-      const k = e.trip_id;
-      const cur = byTrip.get(k) || { sum: 0, sumCompany: 0, sumAdvance: 0 };
-      const amt = Number(e.amount || 0);
-      cur.sum += amt;
-      if (safeUpper(e.payment_source) === "COMPANY") cur.sumCompany += amt;
-      else cur.sumAdvance += amt;
-      byTrip.set(k, cur);
+    if (!isUuid(trip_id)) {
+      return res.status(400).json({ message: "Invalid trip_id" });
     }
 
-    const items = trips.map((t) => {
-      const agg = byTrip.get(t.id) || { sum: 0, sumCompany: 0, sumAdvance: 0 };
-      return {
-        trip_id: t.id,
-        financial_status: t.financial_status || "OPEN",
-        sum_approved_expenses: Number(agg.sum.toFixed(2)),
-        sum_company: Number(agg.sumCompany.toFixed(2)),
-        sum_advance: Number(agg.sumAdvance.toFixed(2)),
-      };
-    });
+    if (!isPrivileged) {
+      const allowed = await assertTripBelongsToSupervisor({
+        trip_id,
+        userId: actorId,
+      });
+
+      if (!allowed) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+    }
+
+    const data = await tripFinanceService.getTripFinanceSummary(trip_id);
 
     return res.json({
-      items,
-      total: items.length,
-      where_applied: { trip_id: trip_id || null, status: status || null },
+      success: true,
+      data,
     });
   } catch (e) {
-    return res.status(500).json({
-      message: "Failed to fetch trip finance summary",
-      error: e?.message || String(e),
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e?.message || "Failed to fetch trip finance summary",
     });
   }
 }
-
 module.exports = {
   // Cash Advances
   getCashAdvancesSummary,

@@ -2,7 +2,7 @@
 // src/maintenance/maintenance.requests.controller.js
 // =======================
 
-const prisma = require("./prisma");
+const prisma = require("../prisma");
 
 // ---------- helpers ----------
 function getAuthUserId(req) {
@@ -183,12 +183,25 @@ async function getMaintenanceRequestById(req, res) {
             id: true,
             status: true,
             type: true,
-            vendor_name: true,
+            maintenance_mode: true,
+            vendor_id: true,
             opened_at: true,
             started_at: true,
             completed_at: true,
             odometer: true,
             notes: true,
+            vendors: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                vendor_type: true,
+                classification: true,
+                status: true,
+                phone: true,
+                city: true,
+              },
+            },
           },
         },
       },
@@ -214,6 +227,14 @@ async function getMaintenanceRequestById(req, res) {
 
 // =======================
 // POST /maintenance/requests/:id/approve
+// body:
+// {
+//   vendor_id?: string,
+//   maintenance_mode?: "INTERNAL" | "EXTERNAL" | "HYBRID",
+//   type?: "CORRECTIVE" | "PREVENTIVE" | "EMERGENCY" | "INSPECTION",
+//   odometer?: number,
+//   notes?: string
+// }
 // =======================
 async function approveMaintenanceRequest(req, res) {
   try {
@@ -228,11 +249,71 @@ async function approveMaintenanceRequest(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid request id" });
 
-    const reqRow = await prisma.maintenance_requests.findUnique({ where: { id } });
+    const {
+      vendor_id,
+      maintenance_mode,
+      type,
+      odometer,
+      notes,
+    } = req.body || {};
+
+    const reqRow = await prisma.maintenance_requests.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        vehicle_id: true,
+        status: true,
+      },
+    });
+
     if (!reqRow) return res.status(404).json({ message: "Request not found" });
 
     if (reqRow.status !== "SUBMITTED") {
       return res.status(409).json({ message: "Request is not SUBMITTED" });
+    }
+
+    let normalizedVendorId = null;
+    if (vendor_id !== undefined && vendor_id !== null && String(vendor_id).trim() !== "") {
+      if (!isUuid(String(vendor_id))) {
+        return res.status(400).json({ message: "Invalid vendor_id" });
+      }
+
+      const vendor = await prisma.vendors.findUnique({
+        where: { id: String(vendor_id) },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+        },
+      });
+
+      if (!vendor) {
+        return res.status(404).json({ message: "Vendor not found" });
+      }
+
+      normalizedVendorId = vendor.id;
+    }
+
+    const normalizedMaintenanceMode = maintenance_mode
+      ? String(maintenance_mode).toUpperCase()
+      : normalizedVendorId
+      ? "EXTERNAL"
+      : "INTERNAL";
+
+    const normalizedType = type
+      ? String(type).toUpperCase()
+      : "CORRECTIVE";
+
+    const normalizedOdometer =
+      odometer === undefined || odometer === null || odometer === ""
+        ? null
+        : Number(odometer);
+
+    if (
+      normalizedOdometer !== null &&
+      (!Number.isFinite(normalizedOdometer) || normalizedOdometer < 0)
+    ) {
+      return res.status(400).json({ message: "Invalid odometer" });
     }
 
     const now = new Date();
@@ -251,12 +332,41 @@ async function approveMaintenanceRequest(req, res) {
       const wo = await tx.maintenance_work_orders.create({
         data: {
           vehicle_id: reqRow.vehicle_id,
-          request_id: reqRow.id, // 🔗 الربط المهم
+          request_id: reqRow.id,
+          vendor_id: normalizedVendorId,
           status: "OPEN",
+          type: normalizedType,
+          maintenance_mode: normalizedMaintenanceMode,
           opened_at: now,
+          odometer: normalizedOdometer,
+          notes: notes ? String(notes).trim() : null,
           created_by: actorId,
           created_at: now,
           updated_at: now,
+        },
+        include: {
+          vendors: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              vendor_type: true,
+              classification: true,
+              status: true,
+              phone: true,
+              city: true,
+            },
+          },
+          vehicles: {
+            select: {
+              id: true,
+              fleet_no: true,
+              plate_no: true,
+              display_name: true,
+              status: true,
+              current_odometer: true,
+            },
+          },
         },
       });
 
