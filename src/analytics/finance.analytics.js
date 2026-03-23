@@ -134,7 +134,14 @@ async function getExpenseSummary({ range, scope, query = {} }) {
       trip_id: true,
       vehicle_id: true,
       created_at: true,
-      vendor_name: true,
+      vendor_id: true,
+  vendors: {
+    select: {
+      id: true,
+      name: true,
+      code: true,
+    },
+    },
     },
   });
 
