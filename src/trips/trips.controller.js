@@ -2,6 +2,7 @@
 // src/trips/trips.controller.js
 // FINAL: enforce driver/vehicle compliance on ASSIGN + START
 // + trip finance summary
+// + profitability in trips list
 // =======================
 
 const prisma = require("../prisma");
@@ -66,6 +67,10 @@ function isExpiredDate(d) {
 
 function upper(v) {
   return String(v || "").trim().toUpperCase();
+}
+
+function toAmount(v) {
+  return Number(v || 0);
 }
 
 // =======================
@@ -211,6 +216,7 @@ async function getTrips(req, res) {
         take: pageSize,
         select: {
           id: true,
+          trip_code: true,
           status: true,
           financial_status: true,
           created_at: true,
@@ -219,6 +225,8 @@ async function getTrips(req, res) {
           notes: true,
           client_id: true,
           site_id: true,
+          agreed_revenue: true,
+          revenue_currency: true,
           financial_closed_at: true,
           clients: { select: { id: true, name: true } },
           sites: { select: { id: true, name: true } },
@@ -228,52 +236,133 @@ async function getTrips(req, res) {
     ]);
 
     const tripIds = trips.map((t) => t.id);
-    if (tripIds.length === 0) return res.json({ page, pageSize, total, items: [] });
+    if (tripIds.length === 0) {
+      return res.json({ page, pageSize, total, items: [] });
+    }
 
-    const latestAssignments = await prisma.trip_assignments.findMany({
-      where: { trip_id: { in: tripIds } },
-      orderBy: { assigned_at: "desc" },
-      distinct: ["trip_id"],
-      select: {
-        id: true,
-        trip_id: true,
-        assigned_at: true,
-        is_active: true,
-        vehicle_id: true,
-        driver_id: true,
-        field_supervisor_id: true,
-        vehicles: {
-          select: {
-            id: true,
-            fleet_no: true,
-            plate_no: true,
-            display_name: true,
-            status: true,
-            is_active: true,
-            license_expiry_date: true,
-            disable_reason: true,
+    const [latestAssignments, revenues, approvedExpenses] = await Promise.all([
+      prisma.trip_assignments.findMany({
+        where: { trip_id: { in: tripIds } },
+        orderBy: { assigned_at: "desc" },
+        distinct: ["trip_id"],
+        select: {
+          id: true,
+          trip_id: true,
+          assigned_at: true,
+          is_active: true,
+          vehicle_id: true,
+          driver_id: true,
+          field_supervisor_id: true,
+          vehicles: {
+            select: {
+              id: true,
+              fleet_no: true,
+              plate_no: true,
+              display_name: true,
+              status: true,
+              is_active: true,
+              license_expiry_date: true,
+              disable_reason: true,
+            },
           },
-        },
-        drivers: {
-          select: {
-            id: true,
-            full_name: true,
-            phone: true,
-            status: true,
-            license_expiry_date: true,
-            disable_reason: true,
+          drivers: {
+            select: {
+              id: true,
+              full_name: true,
+              phone: true,
+              status: true,
+              license_expiry_date: true,
+              disable_reason: true,
+            },
           },
+          users_trip_assignments_supervisor: { select: { id: true, full_name: true } },
         },
-        users_trip_assignments_supervisor: { select: { id: true, full_name: true } },
-      },
-    });
+      }),
+      prisma.trip_revenues.findMany({
+        where: { trip_id: { in: tripIds } },
+        orderBy: { entered_at: "desc" },
+        select: {
+          id: true,
+          trip_id: true,
+          amount: true,
+          currency: true,
+          source: true,
+          entered_at: true,
+        },
+      }),
+      prisma.cash_expenses.findMany({
+        where: {
+          trip_id: { in: tripIds },
+          approval_status: "APPROVED",
+        },
+        select: {
+          id: true,
+          trip_id: true,
+          amount: true,
+          payment_source: true,
+          expense_type: true,
+        },
+      }),
+    ]);
 
     const assignmentByTripId = new Map(latestAssignments.map((a) => [a.trip_id, a]));
 
-    const items = trips.map((t) => ({
-      ...t,
-      trip_assignments: assignmentByTripId.get(t.id) ? [assignmentByTripId.get(t.id)] : [],
-    }));
+    const revenueByTripId = new Map();
+    for (const row of revenues) {
+      if (!revenueByTripId.has(row.trip_id)) {
+        revenueByTripId.set(row.trip_id, row);
+      }
+    }
+
+    const expensesAggByTripId = new Map();
+    for (const row of approvedExpenses) {
+      const tripId = row.trip_id;
+      const cur = expensesAggByTripId.get(tripId) || {
+        expenses: 0,
+        company_expenses: 0,
+        advance_expenses: 0,
+      };
+
+      const amt = toAmount(row.amount);
+      cur.expenses += amt;
+
+      if (upper(row.payment_source) === "COMPANY") {
+        cur.company_expenses += amt;
+      } else {
+        cur.advance_expenses += amt;
+      }
+
+      expensesAggByTripId.set(tripId, cur);
+    }
+
+    const items = trips.map((t) => {
+      const revenueRow = revenueByTripId.get(t.id);
+      const expensesAgg = expensesAggByTripId.get(t.id) || {
+        expenses: 0,
+        company_expenses: 0,
+        advance_expenses: 0,
+      };
+
+      const revenue = revenueRow ? toAmount(revenueRow.amount) : toAmount(t.agreed_revenue);
+      const expenses = toAmount(expensesAgg.expenses);
+      const profit = revenue - expenses;
+
+      let profit_status = "BREAK_EVEN";
+      if (profit > 0) profit_status = "PROFIT";
+      if (profit < 0) profit_status = "LOSS";
+
+      return {
+        ...t,
+        revenue,
+        expenses,
+        company_expenses: toAmount(expensesAgg.company_expenses),
+        advance_expenses: toAmount(expensesAgg.advance_expenses),
+        profit,
+        profit_status,
+        currency: revenueRow?.currency || t.revenue_currency || "EGP",
+        trip_assignments: assignmentByTripId.get(t.id) ? [assignmentByTripId.get(t.id)] : [],
+      };
+    });
 
     return res.json({ page, pageSize, total, items });
   } catch (e) {

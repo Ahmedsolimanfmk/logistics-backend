@@ -1,4 +1,8 @@
 const tripRevenuesService = require("./trip-revenues.service");
+const {
+  canManageTripRevenue,
+  canViewTripProfitability,
+} = require("../auth/access");
 
 // =======================
 // Helpers
@@ -20,6 +24,13 @@ function handleError(res, error) {
 // =======================
 async function getByTripId(req, res) {
   try {
+    if (!canManageTripRevenue(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
     const { tripId } = req.params;
 
     if (!tripId) {
@@ -42,6 +53,13 @@ async function getByTripId(req, res) {
 
 async function createOrUpdateRevenue(req, res) {
   try {
+    if (!canManageTripRevenue(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
     const { tripId } = req.params;
     const { amount, currency, source, contract_id, invoice_id, notes } = req.body || {};
 
@@ -82,6 +100,13 @@ async function createOrUpdateRevenue(req, res) {
 
 async function getProfitability(req, res) {
   try {
+    if (!canViewTripProfitability(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
     const { tripId } = req.params;
 
     if (!tripId) {

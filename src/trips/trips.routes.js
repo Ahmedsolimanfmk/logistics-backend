@@ -4,7 +4,7 @@
 
 const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
-const { requireAdminOrHR } = require("../auth/role.middleware");
+const { isAdminOrAccountant } = require("../auth/access");
 
 const tripsController = require("./trips.controller");
 const cashController = require("../cash/cash.controller");
@@ -34,6 +34,13 @@ function requireUuidParam(paramName = "id") {
   };
 }
 
+function requireAdminOrAccountant(req, res, next) {
+  if (!isAdminOrAccountant(req)) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+  return next();
+}
+
 // === Bind handlers safely ===
 const createTrip = mustBeFn("createTrip", tripsController.createTrip);
 const getTrips = mustBeFn("getTrips", tripsController.getTrips);
@@ -44,7 +51,7 @@ const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
 const startTrip = mustBeFn("startTrip", tripsController.startTrip);
 const finishTrip = mustBeFn("finishTrip", tripsController.finishTrip);
 
-// finance state handlers (still implemented in cash.controller for now)
+// finance state handlers
 const openTripFinanceReview = mustBeFn("openTripFinanceReview", cashController.openTripFinanceReview);
 const closeTripFinance = mustBeFn("closeTripFinance", cashController.closeTripFinance);
 
@@ -60,8 +67,8 @@ router.get("/:id", requireUuidParam("id"), getTripById);
 
 // Finance
 router.get("/:id/finance/summary", requireUuidParam("id"), getTripFinanceSummary);
-router.post("/:id/finance/open-review", requireUuidParam("id"), requireAdminOrHR, openTripFinanceReview);
-router.post("/:id/finance/close", requireUuidParam("id"), requireAdminOrHR, closeTripFinance);
+router.post("/:id/finance/open-review", requireUuidParam("id"), requireAdminOrAccountant, openTripFinanceReview);
+router.post("/:id/finance/close", requireUuidParam("id"), requireAdminOrAccountant, closeTripFinance);
 
 // Assign / Start / Finish
 router.post("/:id/assign", requireUuidParam("id"), assignTrip);

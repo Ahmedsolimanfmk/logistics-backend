@@ -41,6 +41,18 @@ function isFieldSupervisor(userOrReq) {
   return hasRole(userOrReq, ROLES.FIELD_SUPERVISOR);
 }
 
+function isAdminOrContractManager(userOrReq) {
+  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+}
+
+function canManageTripRevenue(userOrReq) {
+  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+}
+
+function canViewTripProfitability(userOrReq) {
+  return hasRole(userOrReq, ROLES.ADMIN, ROLES.ACCOUNTANT);
+}
+
 function assertRole(userOrReq, ...allowedRoles) {
   const ok = hasRole(userOrReq, ...allowedRoles);
   if (!ok) {
@@ -65,5 +77,8 @@ module.exports = {
   isAdminOrAccountant,
   isAdminOrStorekeeper,
   isFieldSupervisor,
+  isAdminOrContractManager,
+  canManageTripRevenue,
+  canViewTripProfitability,
   assertRole,
 };
