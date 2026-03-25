@@ -1,9 +1,6 @@
-// src/finance/ar.controller.js
-
 const prisma = require("../prisma");
 const {
   getUserId,
-  getUserRole,
   isAdminOrAccountant,
 } = require("../auth/access");
 
@@ -22,6 +19,32 @@ function toDateOrNull(v) {
   const d = new Date(String(v));
   if (Number.isNaN(d.getTime())) return null;
   return d;
+}
+
+function isUuid(v) {
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+  );
+}
+
+function normalizePaymentMethod(v) {
+  const s = String(v || "BANK_TRANSFER").trim().toUpperCase();
+  if (["CASH", "BANK_TRANSFER", "CHEQUE", "CARD", "OTHER"].includes(s)) {
+    return s;
+  }
+  return null;
+}
+
+function normalizeTripLines(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x) => ({
+      trip_id: String(x?.trip_id || "").trim(),
+      amount: toMoney(x?.amount),
+      notes: x?.notes != null ? String(x.notes).trim() : null,
+    }))
+    .filter((x) => x.trip_id);
 }
 
 // Invoice number generator: INV-YYYYMM-0001
@@ -90,10 +113,32 @@ async function listArInvoices(req, res) {
       include: {
         clients: { select: { id: true, name: true } },
         client_contracts: { select: { id: true, contract_no: true } },
+        invoice_trip_lines: {
+          select: {
+            id: true,
+            trip_id: true,
+            amount: true,
+            notes: true,
+            trips: {
+              select: {
+                id: true,
+                trip_code: true,
+                status: true,
+                financial_status: true,
+              },
+            },
+          },
+        },
       },
     });
 
-    return res.json({ items, total: items.length });
+    return res.json({
+      items: items.map((inv) => ({
+        ...inv,
+        lines_count: (inv.invoice_trip_lines || []).length,
+      })),
+      total: items.length,
+    });
   } catch (e) {
     console.error("listArInvoices error:", e);
     return res.status(500).json({ message: "Failed to load AR invoices" });
@@ -101,12 +146,105 @@ async function listArInvoices(req, res) {
 }
 
 // =======================
+// GET /finance/ar/invoices/:id
+// =======================
+async function getArInvoiceById(req, res) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const id = String(req.params?.id || "").trim();
+    if (!id) return res.status(400).json({ message: "id is required" });
+
+    const invoice = await prisma.ar_invoices.findUnique({
+      where: { id },
+      include: {
+        clients: { select: { id: true, name: true } },
+        client_contracts: { select: { id: true, contract_no: true, status: true } },
+        users_created: { select: { id: true, full_name: true, email: true, role: true } },
+        users_approved: { select: { id: true, full_name: true, email: true, role: true } },
+        invoice_trip_lines: {
+          orderBy: { trip_id: "asc" },
+          include: {
+            trips: {
+              select: {
+                id: true,
+                trip_code: true,
+                status: true,
+                financial_status: true,
+                scheduled_at: true,
+                clients: { select: { id: true, name: true } },
+                site: { select: { id: true, name: true } },
+                pickup_site: { select: { id: true, name: true } },
+                dropoff_site: { select: { id: true, name: true } },
+                routes: {
+                  select: {
+                    id: true,
+                    name: true,
+                    code: true,
+                    origin_label: true,
+                    destination_label: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        payments: {
+          orderBy: { created_at: "desc" },
+          include: {
+            ar_payments: {
+              select: {
+                id: true,
+                payment_date: true,
+                amount: true,
+                method: true,
+                reference: true,
+                status: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    const postedPaid = (invoice.payments || [])
+      .filter((p) => p.ar_payments?.status === "POSTED")
+      .reduce((s, p) => s + Number(p.amount_allocated || 0), 0);
+
+    return res.json({
+      invoice,
+      totals: {
+        allocated_posted: Math.round(postedPaid * 100) / 100,
+        remaining:
+          Math.round((Number(invoice.total_amount || 0) - postedPaid) * 100) / 100,
+      },
+    });
+  } catch (e) {
+    console.error("getArInvoiceById error:", e);
+    return res.status(500).json({ message: "Failed to load invoice details" });
+  }
+}
+
+// =======================
 // POST /finance/ar/invoices
+// body:
+// {
+//   client_id,
+//   contract_id?,
+//   issue_date?,
+//   due_date?,
+//   amount?,
+//   vat_amount?,
+//   notes?,
+//   trip_lines?: [{ trip_id, amount, notes? }]
+// }
 // =======================
 async function createArInvoice(req, res) {
   try {
     const userId = getUserId(req);
-    const role = getUserRole(req);
 
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -123,25 +261,42 @@ async function createArInvoice(req, res) {
     const issue_date = toDateOrNull(req.body?.issue_date) || new Date();
     const due_date = toDateOrNull(req.body?.due_date);
 
-    const amount = toMoney(req.body?.amount);
+    const rawAmount = toMoney(req.body?.amount);
+    const tripLines = normalizeTripLines(req.body?.trip_lines);
+
     if (!client_id) {
       return res.status(400).json({ message: "client_id is required" });
     }
+
+    if (tripLines.some((x) => !isUuid(x.trip_id))) {
+      return res.status(400).json({
+        message: "Each trip_lines[].trip_id must be a valid uuid",
+      });
+    }
+
+    if (tripLines.some((x) => x.amount == null)) {
+      return res.status(400).json({
+        message: "Each trip_lines[].amount is required and must be >= 0",
+      });
+    }
+
+    const linesAmount = tripLines.reduce((s, x) => s + Number(x.amount || 0), 0);
+    const amount =
+      tripLines.length > 0
+        ? Math.round(linesAmount * 100) / 100
+        : rawAmount;
+
     if (amount == null) {
-      return res
-        .status(400)
-        .json({ message: "amount is required and must be >= 0" });
+      return res.status(400).json({
+        message: "amount is required when trip_lines are not provided",
+      });
     }
 
     const vat_amount_input = toMoney(req.body?.vat_amount);
     const vat_amount = vat_amount_input == null ? 0 : vat_amount_input;
     const total_amount = Math.round((amount + vat_amount) * 100) / 100;
 
-    const notes =
-      req.body?.notes != null ? String(req.body.notes) : null;
-    const source_trip_id = req.body?.source_trip_id
-      ? String(req.body.source_trip_id).trim()
-      : null;
+    const notes = req.body?.notes != null ? String(req.body.notes) : null;
 
     let created = null;
 
@@ -178,9 +333,37 @@ async function createArInvoice(req, res) {
             }
           }
 
+          if (tripLines.length > 0) {
+            const trips = await tx.trips.findMany({
+              where: {
+                id: { in: tripLines.map((x) => x.trip_id) },
+              },
+              select: {
+                id: true,
+                client_id: true,
+                trip_code: true,
+              },
+            });
+
+            if (trips.length !== tripLines.length) {
+              const err = new Error("One or more trips not found");
+              err.status = 404;
+              throw err;
+            }
+
+            const wrongClientTrip = trips.find((t) => t.client_id !== client_id);
+            if (wrongClientTrip) {
+              const err = new Error(
+                `Trip does not belong to this client: ${wrongClientTrip.trip_code || wrongClientTrip.id}`
+              );
+              err.status = 400;
+              throw err;
+            }
+          }
+
           const invoice_no = await generateInvoiceNo(tx, issue_date);
 
-          return tx.ar_invoices.create({
+          const invoice = await tx.ar_invoices.create({
             data: {
               client_id,
               contract_id,
@@ -193,7 +376,39 @@ async function createArInvoice(req, res) {
               status: "DRAFT",
               created_by: userId,
               notes,
-              source_trip_id,
+            },
+          });
+
+          if (tripLines.length > 0) {
+            for (const line of tripLines) {
+              await tx.ar_invoice_trip_lines.create({
+                data: {
+                  invoice_id: invoice.id,
+                  trip_id: line.trip_id,
+                  amount: line.amount,
+                  notes: line.notes || null,
+                },
+              });
+            }
+          }
+
+          return tx.ar_invoices.findUnique({
+            where: { id: invoice.id },
+            include: {
+              clients: { select: { id: true, name: true } },
+              client_contracts: { select: { id: true, contract_no: true } },
+              invoice_trip_lines: {
+                include: {
+                  trips: {
+                    select: {
+                      id: true,
+                      trip_code: true,
+                      status: true,
+                      financial_status: true,
+                    },
+                  },
+                },
+              },
             },
           });
         });
@@ -471,10 +686,7 @@ async function createArPayment(req, res) {
     const client_id = String(req.body?.client_id || "").trim();
     const payment_date = toDateOrNull(req.body?.payment_date) || new Date();
     const amount = toMoney(req.body?.amount);
-
-    const method = req.body?.method
-      ? String(req.body.method).trim()
-      : "BANK_TRANSFER";
+    const method = normalizePaymentMethod(req.body?.method);
 
     const reference =
       req.body?.reference != null ? String(req.body.reference) : null;
@@ -485,6 +697,11 @@ async function createArPayment(req, res) {
     }
     if (amount == null || amount <= 0) {
       return res.status(400).json({ message: "amount must be > 0" });
+    }
+    if (!method) {
+      return res.status(400).json({
+        message: "Invalid method. Allowed: CASH | BANK_TRANSFER | CHEQUE | CARD | OTHER",
+      });
     }
 
     const created = await prisma.$transaction(async (tx) => {
@@ -761,15 +978,18 @@ async function allocateArPayment(req, res) {
       }
 
       const invAgg = await tx.ar_payment_allocations.aggregate({
-        where: { invoice_id },
+        where: {
+          invoice_id,
+          ar_payments: { status: "POSTED" },
+        },
         _sum: { amount_allocated: true },
       });
 
-      const invAllocatedAll = Number(invAgg?._sum?.amount_allocated || 0);
+      const invAllocatedPosted = Number(invAgg?._sum?.amount_allocated || 0);
       const invTotal = Number(inv.total_amount || 0);
       const invRemaining = Math.max(
         0,
-        Math.round((invTotal - invAllocatedAll) * 100) / 100
+        Math.round((invTotal - invAllocatedPosted) * 100) / 100
       );
 
       if (amount > invRemaining) {
@@ -938,7 +1158,7 @@ async function updateArPaymentDraft(req, res) {
     const amount =
       req.body?.amount != null ? toMoney(req.body.amount) : Number(p.amount);
     const method =
-      req.body?.method != null ? String(req.body.method).trim() : p.method;
+      req.body?.method != null ? normalizePaymentMethod(req.body.method) : p.method;
     const reference =
       req.body?.reference !== undefined
         ? req.body.reference == null
@@ -954,6 +1174,11 @@ async function updateArPaymentDraft(req, res) {
 
     if (amount == null || amount <= 0) {
       return res.status(400).json({ message: "amount must be > 0" });
+    }
+    if (!method) {
+      return res.status(400).json({
+        message: "Invalid method. Allowed: CASH | BANK_TRANSFER | CHEQUE | CARD | OTHER",
+      });
     }
 
     const agg = await prisma.ar_payment_allocations.aggregate({
@@ -1071,6 +1296,7 @@ async function deleteArPaymentDraft(req, res) {
 
 module.exports = {
   listArInvoices,
+  getArInvoiceById,
   createArInvoice,
   submitArInvoice,
   approveArInvoice,

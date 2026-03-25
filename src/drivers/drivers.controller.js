@@ -1,7 +1,3 @@
-// src/drivers/drivers.controller.js
-// FINAL: driver compliance fields + enum validation + license expiry guard
-// + driver financial summary
-
 const prisma = require("../prisma");
 
 const DRIVER_STATUS = ["ACTIVE", "INACTIVE", "DISABLED"];
@@ -98,6 +94,11 @@ function applyDriverStateRules(res, data, incoming) {
   }
 
   return true;
+}
+
+function buildTripLocationLabel(trip) {
+  if (!trip) return null;
+  return trip?.sites?.name || null;
 }
 
 // GET /drivers/active
@@ -241,6 +242,7 @@ async function getDriverFinancialSummary(req, res) {
         trips: {
           select: {
             id: true,
+            trip_code: true,
             status: true,
             scheduled_at: true,
             created_at: true,
@@ -283,6 +285,7 @@ async function getDriverFinancialSummary(req, res) {
           trips: {
             select: {
               id: true,
+              trip_code: true,
               status: true,
               clients: { select: { name: true } },
               sites: { select: { name: true } },
@@ -310,12 +313,13 @@ async function getDriverFinancialSummary(req, res) {
       .filter((e) => e.approval_status === "APPROVED")
       .reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const pendingExpenses = expenses
-      .filter((e) => e.approval_status === "PENDING")
+      .filter((e) => ["PENDING", "APPEALED"].includes(String(e.approval_status || "").toUpperCase()))
       .reduce((sum, e) => sum + Number(e.amount || 0), 0);
 
     const recentTrips = assignments.slice(0, 20).map((a) => ({
       assignment_id: a.id,
       trip_id: a.trip_id,
+      trip_code: a.trips?.trip_code || null,
       assigned_at: a.assigned_at,
       is_active: a.is_active,
       unassigned_at: a.unassigned_at,
@@ -324,7 +328,7 @@ async function getDriverFinancialSummary(req, res) {
       created_at: a.trips?.created_at || null,
       financial_status: a.trips?.financial_status || null,
       client: a.trips?.clients?.name || null,
-      site: a.trips?.sites?.name || null,
+      site: buildTripLocationLabel(a.trips),
       vehicle: a.vehicles
         ? {
             id: a.vehicles.id,
@@ -338,6 +342,7 @@ async function getDriverFinancialSummary(req, res) {
     const recentExpenses = expenses.slice(0, 20).map((e) => ({
       id: e.id,
       trip_id: e.trip_id,
+      trip_code: e.trips?.trip_code || null,
       expense_type: e.expense_type,
       amount: Number(e.amount || 0),
       notes: e.notes,
@@ -346,7 +351,7 @@ async function getDriverFinancialSummary(req, res) {
       created_at: e.created_at,
       trip_status: e.trips?.status || null,
       client: e.trips?.clients?.name || null,
-      site: e.trips?.sites?.name || null,
+      site: buildTripLocationLabel(e.trips),
       vehicle: e.vehicles
         ? {
             id: e.vehicles.id,
@@ -417,7 +422,10 @@ async function createDriver(req, res) {
     const reasonUpper = disable_reason ? upper(disable_reason) : null;
 
     if (!validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
-    if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) {
+    if (
+      reasonUpper &&
+      !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
+    ) {
       return;
     }
 
@@ -525,7 +533,10 @@ async function updateDriver(req, res) {
     let reasonUpper;
     if (disable_reason !== undefined) {
       reasonUpper = disable_reason ? upper(disable_reason) : null;
-      if (reasonUpper && !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)) {
+      if (
+        reasonUpper &&
+        !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
+      ) {
         return;
       }
       data.disable_reason = reasonUpper;

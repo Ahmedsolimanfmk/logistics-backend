@@ -1,10 +1,3 @@
-// src/cash/cash.controller.js
-// FINAL: COMPANY + ADVANCE (enum payment_source) + backward compatibility
-// + approve/reject/appeal/resolve/reopen + audits + trip finance helpers
-// + unified auth/access helpers
-// + vendors via vendor_id relation (vendor_name derived in response only)
-// + enum fixes aligned with Prisma schema
-
 const prisma = require("../prisma");
 const {
   getUserId,
@@ -147,7 +140,7 @@ function parseOptionalDate(v) {
 }
 
 function safeUpper(v) {
-  return String(v || "").toUpperCase();
+  return String(v || "").trim().toUpperCase();
 }
 
 function isAdvanceOpenStatus(s) {
@@ -160,6 +153,35 @@ function isAdvanceSettledStatus(s) {
 
 function isAdvanceCancelledStatus(s) {
   return ["CANCELLED", "CANCELED"].includes(safeUpper(s));
+}
+
+function normalizePaidMethod(v) {
+  if (v === undefined || v === null || String(v).trim() === "") return null;
+
+  const s = safeUpper(v);
+
+  if (["CASH"].includes(s)) return "CASH";
+  if (["BANK_TRANSFER", "BANK", "TRANSFER"].includes(s)) return "BANK_TRANSFER";
+  if (["CHEQUE", "CHECK"].includes(s)) return "CHEQUE";
+  if (["CARD", "POS"].includes(s)) return "CARD";
+  if (["WALLET"].includes(s)) return "WALLET";
+  if (["OTHER"].includes(s)) return "OTHER";
+
+  return undefined;
+}
+
+function normalizeAdvanceSettlementType(v) {
+  const s = safeUpper(v);
+
+  if (!s) return null;
+
+  // legacy mappings
+  if (["RETURN", "FULL"].includes(s)) return "FULL";
+  if (["SHORTAGE", "PARTIAL"].includes(s)) return "PARTIAL";
+  if (["ADJUSTMENT", "ADJUSTED"].includes(s)) return "ADJUSTED";
+  if (["CANCELLED", "CANCELED"].includes(s)) return "CANCELLED";
+
+  return undefined;
 }
 
 // =======================
@@ -398,11 +420,12 @@ async function closeCashAdvance(req, res) {
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
     const { settlement_type, amount, reference, notes } = req.body || {};
-    const stType = String(settlement_type || "").toUpperCase();
+    const stType = normalizeAdvanceSettlementType(settlement_type);
 
-    if (!["RETURN", "SHORTAGE", "ADJUSTMENT"].includes(stType)) {
+    if (stType === undefined) {
       return res.status(400).json({
-        message: "settlement_type must be RETURN | SHORTAGE | ADJUSTMENT",
+        message:
+          "settlement_type must be FULL | PARTIAL | ADJUSTED | CANCELLED (legacy RETURN/SHORTAGE/ADJUSTMENT also accepted)",
       });
     }
 
@@ -448,34 +471,33 @@ async function closeCashAdvance(req, res) {
 
     const remaining = advanceAmount - totalApproved;
     const shortage = totalApproved - advanceAmount;
-
     const amt = Number(amount);
 
-    if (stType === "RETURN") {
+    if (stType === "FULL") {
       if (remaining < 0) {
         return res.status(400).json({
-          message: "Cannot RETURN when there is a shortage. Use SHORTAGE or ADJUSTMENT.",
+          message: "Cannot use FULL settlement when there is a shortage. Use PARTIAL or ADJUSTED.",
           totals: { advanceAmount, totalApproved, remaining, shortage },
         });
       }
       if (Number(remaining.toFixed(2)) !== Number(amt.toFixed(2))) {
         return res.status(400).json({
-          message: "For settlement with RETURN, amount must equal remaining exactly",
+          message: "For FULL settlement, amount must equal remaining exactly",
           totals: { advanceAmount, totalApproved, remaining },
         });
       }
     }
 
-    if (stType === "SHORTAGE") {
+    if (stType === "PARTIAL") {
       if (shortage <= 0) {
         return res.status(400).json({
-          message: "No shortage detected. Use RETURN or ADJUSTMENT.",
+          message: "No shortage detected. Use FULL or ADJUSTED.",
           totals: { advanceAmount, totalApproved, remaining, shortage },
         });
       }
       if (Number(shortage.toFixed(2)) !== Number(amt.toFixed(2))) {
         return res.status(400).json({
-          message: "For settlement with SHORTAGE, amount must equal shortage exactly",
+          message: "For PARTIAL settlement, amount must equal shortage exactly",
           totals: { advanceAmount, totalApproved, shortage },
         });
       }
@@ -698,6 +720,13 @@ async function createCashExpense(req, res) {
         return res.status(400).json({ message: "Invalid invoice_date" });
       }
 
+      const normalizedPaidMethod = normalizePaidMethod(paid_method);
+      if (normalizedPaidMethod === undefined) {
+        return res.status(400).json({
+          message: "Invalid paid_method. Allowed: CASH | BANK_TRANSFER | CHEQUE | CARD | WALLET | OTHER",
+        });
+      }
+
       if (trip_id) {
         const trip = await prisma.trips.findUnique({
           where: { id: trip_id },
@@ -733,7 +762,7 @@ async function createCashExpense(req, res) {
 
           invoice_no: invoice_no ? String(invoice_no).trim() : null,
           invoice_date: invDate,
-          paid_method: paid_method ? String(paid_method).toUpperCase() : null,
+          paid_method: normalizedPaidMethod,
           payment_ref: payment_ref ? String(payment_ref) : null,
           vat_amount: vat_amount !== undefined && vat_amount !== null ? vat_amount : null,
           invoice_total: invoice_total !== undefined && invoice_total !== null ? invoice_total : null,
@@ -1166,6 +1195,7 @@ async function approveCashExpense(req, res) {
           rejection_reason: null,
           resolved_at: st === "APPEALED" ? new Date() : expense.resolved_at,
           resolved_by: st === "APPEALED" ? actorId : expense.resolved_by,
+          appeal_status: st === "APPEALED" ? "ACCEPTED" : expense.appeal_status,
         },
         include: {
           vendors: {
@@ -1236,6 +1266,7 @@ async function rejectCashExpense(req, res) {
           rejection_reason: reason,
           resolved_at: st === "APPEALED" ? new Date() : expense.resolved_at,
           resolved_by: st === "APPEALED" ? actorId : expense.resolved_by,
+          appeal_status: st === "APPEALED" ? "REJECTED" : expense.appeal_status,
         },
         include: {
           vendors: {
@@ -1307,6 +1338,7 @@ async function appealRejectedExpense(req, res) {
           appealed_at: new Date(),
           appealed_by: actorId,
           appeal_reason,
+          appeal_status: "OPEN",
           resolved_at: null,
           resolved_by: null,
         },
@@ -1384,6 +1416,7 @@ async function resolveAppeal(req, res) {
             rejection_reason: null,
             resolved_at: new Date(),
             resolved_by: actorId,
+            appeal_status: "ACCEPTED",
           },
           include: {
             vendors: {
@@ -1401,6 +1434,7 @@ async function resolveAppeal(req, res) {
             rejection_reason: notes,
             resolved_at: new Date(),
             resolved_by: actorId,
+            appeal_status: "REJECTED",
           },
           include: {
             vendors: {
@@ -1467,6 +1501,7 @@ async function reopenRejectedExpense(req, res) {
           appealed_at: null,
           appealed_by: null,
           appeal_reason: null,
+          appeal_status: null,
           resolved_at: null,
           resolved_by: null,
         },
@@ -1643,7 +1678,10 @@ async function openTripFinanceReview(req, res) {
 
     const updated = await prisma.trips.update({
       where: { id: trip_id },
-      data: { financial_status: "UNDER_REVIEW" },
+      data: {
+        financial_status: "UNDER_REVIEW",
+        financial_review_opened_at: new Date(),
+      },
     });
 
     return res.json({
@@ -1673,7 +1711,10 @@ async function closeTripFinance(req, res) {
 
     const trip = await prisma.trips.findUnique({
       where: { id: trip_id },
-      select: { id: true, financial_status: true },
+      select: {
+        id: true,
+        financial_status: true,
+      },
     });
 
     if (!trip) return res.status(404).json({ message: "Trip not found" });
@@ -1685,12 +1726,78 @@ async function closeTripFinance(req, res) {
       });
     }
 
+    const [pendingExpenseCount, currentRevenue, currentApprovedRevenue] = await Promise.all([
+      prisma.cash_expenses.count({
+        where: {
+          trip_id,
+          approval_status: { in: ["PENDING", "APPEALED"] },
+        },
+      }),
+      prisma.trip_revenues.findFirst({
+        where: {
+          trip_id,
+          is_current: true,
+        },
+        select: {
+          id: true,
+          is_current: true,
+          is_approved: true,
+          version_no: true,
+          amount: true,
+          currency: true,
+        },
+      }),
+      prisma.trip_revenues.findFirst({
+        where: {
+          trip_id,
+          is_current: true,
+          is_approved: true,
+        },
+        select: {
+          id: true,
+          is_current: true,
+          is_approved: true,
+          version_no: true,
+          amount: true,
+          currency: true,
+        },
+      }),
+    ]);
+
+    if (pendingExpenseCount > 0) {
+      return res.status(409).json({
+        message: "Cannot close trip finance while there are pending/appealed expenses",
+        pending_expense_count: pendingExpenseCount,
+      });
+    }
+
+    if (!currentRevenue) {
+      return res.status(409).json({
+        message: "Cannot close trip finance without a current revenue record",
+      });
+    }
+
+    if (!currentApprovedRevenue) {
+      return res.status(409).json({
+        message: "Cannot close trip finance until current revenue is approved",
+        current_revenue: currentRevenue,
+      });
+    }
+
     const updated = await prisma.trips.update({
       where: { id: trip_id },
-      data: { financial_status: "CLOSED" },
+      data: {
+        financial_status: "CLOSED",
+        financial_closed_at: new Date(),
+        financial_closed_by: actorId,
+      },
     });
 
-    return res.json({ message: "Trip finance CLOSED", trip: updated });
+    return res.json({
+      message: "Trip finance CLOSED",
+      trip: updated,
+      current_revenue: currentApprovedRevenue,
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to close trip finance",

@@ -1,8 +1,4 @@
-// =======================
-// src/maintenance/maintenance.inventory.controller.js
-// =======================
-
-const prisma = require("./prisma");
+const prisma = require("../prisma");
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
@@ -24,7 +20,6 @@ function isUuid(v) {
 }
 
 // POST /maintenance/work-orders/:id/issues
-// body: { notes? }
 async function createIssueForWorkOrder(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -49,24 +44,18 @@ async function createIssueForWorkOrder(req, res) {
     if (!wo) return res.status(404).json({ message: "Work order not found" });
 
     const st = String(wo.status || "").toUpperCase();
-    if (["COMPLETED", "CANCELED"].includes(st)) {
+    if (["COMPLETED", "CANCELED", "CANCELLED"].includes(st)) {
       return res.status(409).json({ message: `Work order is ${wo.status}. No issues allowed.` });
     }
 
-    // ✅ inventory_issues schema عندك:
-    // id, work_order_id, created_at, issued_at, issued_by, notes
     const issue = await prisma.inventory_issues.create({
       data: {
-        // ربط بالـ Work Order (Relation required)
         maintenance_work_orders: {
           connect: { id: wo.id },
         },
-
-        // حقول مطلوبة (NOT NULL)
         issued_by: userId,
         issued_at: now,
         created_at: now,
-
         notes: notes ? String(notes).trim() : null,
       },
     });
@@ -79,7 +68,6 @@ async function createIssueForWorkOrder(req, res) {
 }
 
 // POST /maintenance/issues/:issueId/lines
-// body: { lines: [{ part_id, qty, unit_cost, notes? }] }
 async function addIssueLines(req, res) {
   try {
     const userId = getAuthUserId(req);
@@ -104,8 +92,6 @@ async function addIssueLines(req, res) {
     });
     if (!issue) return res.status(404).json({ message: "Issue not found" });
 
-    // ✅ inventory_issue_lines schema عندك:
-    // id, issue_id, part_id, qty, unit_cost, total_cost, notes, created_at
     const payload = [];
     for (const [idx, l] of lines.entries()) {
       const part_id = l?.part_id;
@@ -134,7 +120,6 @@ async function addIssueLines(req, res) {
       });
     }
 
-    // ensure parts exist
     const partIds = [...new Set(payload.map((p) => p.part_id))];
     const parts = await prisma.parts.findMany({
       where: { id: { in: partIds } },
@@ -144,9 +129,8 @@ async function addIssueLines(req, res) {
       return res.status(400).json({ message: "One or more part_id not found" });
     }
 
-    const now = new Date();
     const created = await prisma.$transaction(async (tx) => {
-      const inserted = await Promise.all(
+      return Promise.all(
         payload.map((p) =>
           tx.inventory_issue_lines.create({
             data: {
@@ -160,8 +144,6 @@ async function addIssueLines(req, res) {
           })
         )
       );
-
-      return inserted;
     });
 
     return res.status(201).json({ message: "Lines added", lines: created });

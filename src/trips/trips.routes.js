@@ -1,7 +1,3 @@
-// =======================
-// src/trips/trips.routes.js
-// =======================
-
 const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
 const { isAdminOrAccountant } = require("../auth/access");
@@ -13,7 +9,9 @@ const { requireTripStartFinishPermission } = require("./trip-permissions.middlew
 // Guard helper
 function mustBeFn(name, fn) {
   if (typeof fn !== "function") {
-    throw new TypeError(`[trips.routes] Handler "${name}" is not a function. Check exports.`);
+    throw new TypeError(
+      `[trips.routes] Handler "${name}" is not a function. Check exports.`
+    );
   }
   return fn;
 }
@@ -45,15 +43,24 @@ function requireAdminOrAccountant(req, res, next) {
 const createTrip = mustBeFn("createTrip", tripsController.createTrip);
 const getTrips = mustBeFn("getTrips", tripsController.getTrips);
 const getTripById = mustBeFn("getTripById", tripsController.getTripById);
-const getTripFinanceSummary = mustBeFn("getTripFinanceSummary", tripsController.getTripFinanceSummary);
+const getTripFinanceSummary = mustBeFn(
+  "getTripFinanceSummary",
+  tripsController.getTripFinanceSummary
+);
 
 const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
 const startTrip = mustBeFn("startTrip", tripsController.startTrip);
 const finishTrip = mustBeFn("finishTrip", tripsController.finishTrip);
 
 // finance state handlers
-const openTripFinanceReview = mustBeFn("openTripFinanceReview", cashController.openTripFinanceReview);
-const closeTripFinance = mustBeFn("closeTripFinance", cashController.closeTripFinance);
+const openTripFinanceReview = mustBeFn(
+  "openTripFinanceReview",
+  cashController.openTripFinanceReview
+);
+const closeTripFinance = mustBeFn(
+  "closeTripFinance",
+  cashController.closeTripFinance
+);
 
 // =======================
 // Routes (JWT required)
@@ -67,12 +74,32 @@ router.get("/:id", requireUuidParam("id"), getTripById);
 
 // Finance
 router.get("/:id/finance/summary", requireUuidParam("id"), getTripFinanceSummary);
-router.post("/:id/finance/open-review", requireUuidParam("id"), requireAdminOrAccountant, openTripFinanceReview);
-router.post("/:id/finance/close", requireUuidParam("id"), requireAdminOrAccountant, closeTripFinance);
+router.post(
+  "/:id/finance/open-review",
+  requireUuidParam("id"),
+  requireAdminOrAccountant,
+  openTripFinanceReview
+);
+router.post(
+  "/:id/finance/close",
+  requireUuidParam("id"),
+  requireAdminOrAccountant,
+  closeTripFinance
+);
 
 // Assign / Start / Finish
 router.post("/:id/assign", requireUuidParam("id"), assignTrip);
-router.post("/:id/start", requireUuidParam("id"), requireTripStartFinishPermission, startTrip);
-router.post("/:id/finish", requireUuidParam("id"), requireTripStartFinishPermission, finishTrip);
+router.post(
+  "/:id/start",
+  requireUuidParam("id"),
+  requireTripStartFinishPermission,
+  startTrip
+);
+router.post(
+  "/:id/finish",
+  requireUuidParam("id"),
+  requireTripStartFinishPermission,
+  finishTrip
+);
 
 module.exports = router;

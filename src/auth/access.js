@@ -1,5 +1,3 @@
-// src/auth/access.js
-
 const { ROLES } = require("./roles");
 
 function roleUpper(role) {
@@ -41,6 +39,14 @@ function isFieldSupervisor(userOrReq) {
   return hasRole(userOrReq, ROLES.FIELD_SUPERVISOR);
 }
 
+function isOperations(userOrReq) {
+  return hasRole(userOrReq, ROLES.OPERATIONS);
+}
+
+function isMaintenanceManager(userOrReq) {
+  return hasRole(userOrReq, ROLES.MAINTENANCE_MANAGER);
+}
+
 function isAdminOrContractManager(userOrReq) {
   return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
 }
@@ -51,6 +57,28 @@ function canManageTripRevenue(userOrReq) {
 
 function canViewTripProfitability(userOrReq) {
   return hasRole(userOrReq, ROLES.ADMIN, ROLES.ACCOUNTANT);
+}
+
+function canManageContractPricing(userOrReq) {
+  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+}
+
+function canManageMasterData(userOrReq) {
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.CONTRACT_MANAGER,
+    ROLES.MAINTENANCE_MANAGER
+  );
+}
+
+function canManageRoutesAndZones(userOrReq) {
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.CONTRACT_MANAGER,
+    ROLES.OPERATIONS
+  );
 }
 
 function assertRole(userOrReq, ...allowedRoles) {
@@ -77,8 +105,13 @@ module.exports = {
   isAdminOrAccountant,
   isAdminOrStorekeeper,
   isFieldSupervisor,
+  isOperations,
+  isMaintenanceManager,
   isAdminOrContractManager,
   canManageTripRevenue,
   canViewTripProfitability,
+  canManageContractPricing,
+  canManageMasterData,
+  canManageRoutesAndZones,
   assertRole,
 };

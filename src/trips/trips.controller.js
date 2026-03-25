@@ -1,10 +1,3 @@
-// =======================
-// src/trips/trips.controller.js
-// FINAL: enforce driver/vehicle compliance on ASSIGN + START
-// + trip finance summary
-// + profitability in trips list
-// =======================
-
 const prisma = require("../prisma");
 const { ROLES } = require("../auth/roles");
 const tripFinanceService = require("./trip-finance.service");
@@ -17,12 +10,13 @@ function getAuthUserId(req) {
 }
 
 function getAuthRole(req) {
-  return req.user?.role || "";
+  return String(req.user?.role || "").toUpperCase();
 }
 
 function canViewAllTrips(role) {
   return [
     ROLES.ADMIN,
+    ROLES.OPERATIONS,
     ROLES.GENERAL_SUPERVISOR,
     ROLES.DEPT_MANAGER,
     ROLES.GENERAL_MANAGER,
@@ -71,6 +65,17 @@ function upper(v) {
 
 function toAmount(v) {
   return Number(v || 0);
+}
+
+function toNullableNumber(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTripType(v) {
+  if (v === undefined || v === null || v === "") return null;
+  return upper(v);
 }
 
 // =======================
@@ -173,6 +178,177 @@ async function runComplianceCheck(driver_id, vehicle_id) {
 }
 
 // =======================
+// Shared validators
+// =======================
+async function validateTripReferences({
+  client_id,
+  contract_id,
+  site_id,
+  pickup_site_id,
+  dropoff_site_id,
+  route_id,
+  cargo_type_id,
+}) {
+  const client = await prisma.clients.findUnique({
+    where: { id: client_id },
+    select: { id: true, name: true, is_active: true },
+  });
+
+  if (!client) {
+    const err = new Error("Client not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const [contract, site, pickupSite, dropoffSite, route, cargoType] = await Promise.all([
+    contract_id
+      ? prisma.client_contracts.findUnique({
+          where: { id: contract_id },
+          select: {
+            id: true,
+            client_id: true,
+            contract_no: true,
+            status: true,
+            start_date: true,
+            end_date: true,
+            currency: true,
+          },
+        })
+      : null,
+    site_id
+      ? prisma.sites.findUnique({
+          where: { id: site_id },
+          select: { id: true, client_id: true, name: true },
+        })
+      : null,
+    pickup_site_id
+      ? prisma.sites.findUnique({
+          where: { id: pickup_site_id },
+          select: { id: true, client_id: true, zone_id: true, name: true },
+        })
+      : null,
+    dropoff_site_id
+      ? prisma.sites.findUnique({
+          where: { id: dropoff_site_id },
+          select: { id: true, client_id: true, zone_id: true, name: true },
+        })
+      : null,
+    route_id
+      ? prisma.routes.findUnique({
+          where: { id: route_id },
+          select: {
+            id: true,
+            client_id: true,
+            pickup_site_id: true,
+            dropoff_site_id: true,
+            name: true,
+            code: true,
+            origin_label: true,
+            destination_label: true,
+          },
+        })
+      : null,
+    cargo_type_id
+      ? prisma.cargo_types.findUnique({
+          where: { id: cargo_type_id },
+          select: { id: true, code: true, name: true },
+        })
+      : null,
+  ]);
+
+  if (contract_id && !contract) {
+    const err = new Error("Contract not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (contract && contract.client_id !== client_id) {
+    const err = new Error("contract_id does not belong to client_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (contract) {
+    const st = upper(contract.status);
+    if (st !== "ACTIVE") {
+      const err = new Error("Selected contract is not ACTIVE");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (contract.end_date && new Date(contract.end_date).getTime() < Date.now()) {
+      const err = new Error("Selected contract is expired");
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  if (site_id && !site) {
+    const err = new Error("Site not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (site && site.client_id !== client_id) {
+    const err = new Error("site_id does not belong to client_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (pickup_site_id && !pickupSite) {
+    const err = new Error("Pickup site not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (pickupSite && pickupSite.client_id !== client_id) {
+    const err = new Error("pickup_site_id does not belong to client_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (dropoff_site_id && !dropoffSite) {
+    const err = new Error("Dropoff site not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (dropoffSite && dropoffSite.client_id !== client_id) {
+    const err = new Error("dropoff_site_id does not belong to client_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (route_id && !route) {
+    const err = new Error("Route not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (route && route.client_id && route.client_id !== client_id) {
+    const err = new Error("route_id does not belong to client_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (cargo_type_id && !cargoType) {
+    const err = new Error("Cargo type not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return {
+    client,
+    contract: contract || null,
+    site: site || null,
+    pickupSite: pickupSite || null,
+    dropoffSite: dropoffSite || null,
+    route: route || null,
+    cargoType: cargoType || null,
+  };
+}
+
+// =======================
 // GET /trips
 // =======================
 async function getTrips(req, res) {
@@ -180,7 +356,7 @@ async function getTrips(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
@@ -200,6 +376,27 @@ async function getTrips(req, res) {
 
     if (String(req.query.financial_closed_at || "").toLowerCase() === "null") {
       where.financial_closed_at = null;
+    }
+
+    if (req.query.client_id) {
+      if (!isUuid(String(req.query.client_id))) {
+        return res.status(400).json({ message: "Invalid client_id" });
+      }
+      where.client_id = String(req.query.client_id);
+    }
+
+    if (req.query.contract_id) {
+      if (!isUuid(String(req.query.contract_id))) {
+        return res.status(400).json({ message: "Invalid contract_id" });
+      }
+      where.contract_id = String(req.query.contract_id);
+    }
+
+    if (req.query.route_id) {
+      if (!isUuid(String(req.query.route_id))) {
+        return res.status(400).json({ message: "Invalid route_id" });
+      }
+      where.route_id = String(req.query.route_id);
     }
 
     if (canViewAllTrips(role)) {
@@ -224,12 +421,38 @@ async function getTrips(req, res) {
           trip_type: true,
           notes: true,
           client_id: true,
+          contract_id: true,
           site_id: true,
+          pickup_site_id: true,
+          dropoff_site_id: true,
+          route_id: true,
+          cargo_type_id: true,
+          cargo_weight: true,
           agreed_revenue: true,
           revenue_currency: true,
+          revenue_entry_mode: true,
           financial_closed_at: true,
+
           clients: { select: { id: true, name: true } },
-          sites: { select: { id: true, name: true } },
+          client_contracts: {
+            select: { id: true, contract_no: true, status: true, currency: true },
+          },
+          site: { select: { id: true, name: true } },
+          pickup_site: { select: { id: true, name: true, zone_id: true } },
+          dropoff_site: { select: { id: true, name: true, zone_id: true } },
+          routes: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              origin_label: true,
+              destination_label: true,
+              distance_km: true,
+            },
+          },
+          cargo_types: {
+            select: { id: true, code: true, name: true },
+          },
         },
       }),
       prisma.trips.count({ where }),
@@ -240,11 +463,13 @@ async function getTrips(req, res) {
       return res.json({ page, pageSize, total, items: [] });
     }
 
-    const [latestAssignments, revenues, approvedExpenses] = await Promise.all([
+    const [activeAssignments, currentRevenues, approvedExpenses] = await Promise.all([
       prisma.trip_assignments.findMany({
-        where: { trip_id: { in: tripIds } },
+        where: {
+          trip_id: { in: tripIds },
+          is_active: true,
+        },
         orderBy: { assigned_at: "desc" },
-        distinct: ["trip_id"],
         select: {
           id: true,
           trip_id: true,
@@ -263,6 +488,7 @@ async function getTrips(req, res) {
               is_active: true,
               license_expiry_date: true,
               disable_reason: true,
+              vehicle_class_id: true,
             },
           },
           drivers: {
@@ -275,12 +501,18 @@ async function getTrips(req, res) {
               disable_reason: true,
             },
           },
-          users_trip_assignments_supervisor: { select: { id: true, full_name: true } },
+          users_trip_assignments_supervisor: {
+            select: { id: true, full_name: true },
+          },
         },
       }),
+
       prisma.trip_revenues.findMany({
-        where: { trip_id: { in: tripIds } },
-        orderBy: { entered_at: "desc" },
+        where: {
+          trip_id: { in: tripIds },
+          is_current: true,
+        },
+        orderBy: [{ is_approved: "desc" }, { version_no: "desc" }],
         select: {
           id: true,
           trip_id: true,
@@ -288,8 +520,14 @@ async function getTrips(req, res) {
           currency: true,
           source: true,
           entered_at: true,
+          is_current: true,
+          version_no: true,
+          is_approved: true,
+          pricing_rule_id: true,
+          contract_id: true,
         },
       }),
+
       prisma.cash_expenses.findMany({
         where: {
           trip_id: { in: tripIds },
@@ -305,10 +543,15 @@ async function getTrips(req, res) {
       }),
     ]);
 
-    const assignmentByTripId = new Map(latestAssignments.map((a) => [a.trip_id, a]));
+    const assignmentByTripId = new Map();
+    for (const a of activeAssignments) {
+      if (!assignmentByTripId.has(a.trip_id)) {
+        assignmentByTripId.set(a.trip_id, a);
+      }
+    }
 
     const revenueByTripId = new Map();
-    for (const row of revenues) {
+    for (const row of currentRevenues) {
       if (!revenueByTripId.has(row.trip_id)) {
         revenueByTripId.set(row.trip_id, row);
       }
@@ -360,13 +603,19 @@ async function getTrips(req, res) {
         profit,
         profit_status,
         currency: revenueRow?.currency || t.revenue_currency || "EGP",
-        trip_assignments: assignmentByTripId.get(t.id) ? [assignmentByTripId.get(t.id)] : [],
+        current_revenue: revenueRow || null,
+        trip_assignments: assignmentByTripId.get(t.id)
+          ? [assignmentByTripId.get(t.id)]
+          : [],
       };
     });
 
     return res.json({ page, pageSize, total, items });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch trips", error: e.message });
+    return res.status(500).json({
+      message: "Failed to fetch trips",
+      error: e.message,
+    });
   }
 }
 
@@ -378,7 +627,7 @@ async function getTripById(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
@@ -388,25 +637,73 @@ async function getTripById(req, res) {
       where: { id },
       include: {
         clients: true,
-        sites: true,
+        client_contracts: true,
+        site: true,
+        pickup_site: true,
+        dropoff_site: true,
+        routes: true,
+        cargo_types: true,
         trip_assignments: {
           orderBy: { assigned_at: "desc" },
-          include: { vehicles: true, drivers: true, users_trip_assignments_supervisor: true },
+          include: {
+            vehicles: true,
+            drivers: true,
+            users_trip_assignments_supervisor: true,
+          },
         },
-        trip_events: { orderBy: { created_at: "desc" }, take: 50 },
+        trip_events: {
+          orderBy: { created_at: "desc" },
+          take: 50,
+        },
+        trip_revenues: {
+          orderBy: [{ is_current: "desc" }, { version_no: "desc" }],
+          take: 10,
+          include: {
+            users_entered: {
+              select: { id: true, full_name: true, email: true, role: true },
+            },
+            users_approved: {
+              select: { id: true, full_name: true, email: true, role: true },
+            },
+            users_replaced: {
+              select: { id: true, full_name: true, email: true, role: true },
+            },
+            contract_pricing_rules: {
+              select: {
+                id: true,
+                priority: true,
+                base_price: true,
+                currency: true,
+              },
+            },
+            client_contracts: {
+              select: {
+                id: true,
+                contract_no: true,
+                status: true,
+                currency: true,
+              },
+            },
+          },
+        },
       },
     });
 
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (role === ROLES.FIELD_SUPERVISOR) {
-      const ok = (trip.trip_assignments || []).some((a) => a.field_supervisor_id === userId);
+      const ok = (trip.trip_assignments || []).some(
+        (a) => a.field_supervisor_id === userId
+      );
       if (!ok) return res.status(403).json({ message: "Forbidden" });
     }
 
     return res.json(trip);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch trip", error: e.message });
+    return res.status(500).json({
+      message: "Failed to fetch trip",
+      error: e.message,
+    });
   }
 }
 
@@ -418,7 +715,7 @@ async function getTripFinanceSummary(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
@@ -460,31 +757,151 @@ async function createTrip(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
-    const { client_id, site_id, scheduled_at, trip_type, notes } = req.body || {};
+    const {
+      client_id,
+      contract_id,
+      site_id,
+      pickup_site_id,
+      dropoff_site_id,
+      route_id,
+      scheduled_at,
+      trip_type,
+      cargo_type_id,
+      cargo_weight,
+      origin,
+      destination,
+      notes,
+    } = req.body || {};
 
-    if (!isUuid(client_id)) return res.status(400).json({ message: "Invalid client_id" });
-    if (!isUuid(site_id)) return res.status(400).json({ message: "Invalid site_id" });
+    if (!isUuid(client_id)) {
+      return res.status(400).json({ message: "Invalid client_id" });
+    }
+
+    if (contract_id && !isUuid(contract_id)) {
+      return res.status(400).json({ message: "Invalid contract_id" });
+    }
+
+    if (site_id && !isUuid(site_id)) {
+      return res.status(400).json({ message: "Invalid site_id" });
+    }
+
+    if (pickup_site_id && !isUuid(pickup_site_id)) {
+      return res.status(400).json({ message: "Invalid pickup_site_id" });
+    }
+
+    if (dropoff_site_id && !isUuid(dropoff_site_id)) {
+      return res.status(400).json({ message: "Invalid dropoff_site_id" });
+    }
+
+    if (route_id && !isUuid(route_id)) {
+      return res.status(400).json({ message: "Invalid route_id" });
+    }
+
+    if (cargo_type_id && !isUuid(cargo_type_id)) {
+      return res.status(400).json({ message: "Invalid cargo_type_id" });
+    }
+
+    const normalizedTripType = normalizeTripType(trip_type);
+    const normalizedCargoWeight = toNullableNumber(cargo_weight);
+
+    if (cargo_weight !== undefined && normalizedCargoWeight === null) {
+      return res.status(400).json({ message: "Invalid cargo_weight" });
+    }
+
+    if (normalizedCargoWeight !== null && normalizedCargoWeight < 0) {
+      return res.status(400).json({ message: "cargo_weight must be >= 0" });
+    }
+
+    const hasRoute = !!route_id;
+    const hasPickupDropoff = !!pickup_site_id && !!dropoff_site_id;
+    const hasLegacySite = !!site_id;
+
+    if (!hasRoute && !hasPickupDropoff && !hasLegacySite) {
+      return res.status(400).json({
+        message:
+          "You must provide route_id, or both pickup_site_id and dropoff_site_id, or transitional site_id",
+      });
+    }
+
+    const refs = await validateTripReferences({
+      client_id,
+      contract_id: contract_id || null,
+      site_id: site_id || null,
+      pickup_site_id: pickup_site_id || null,
+      dropoff_site_id: dropoff_site_id || null,
+      route_id: route_id || null,
+      cargo_type_id: cargo_type_id || null,
+    });
+
+    const effectivePickupSiteId =
+      pickup_site_id || refs.route?.pickup_site_id || null;
+
+    const effectiveDropoffSiteId =
+      dropoff_site_id || refs.route?.dropoff_site_id || null;
+
+    if (
+      refs.route?.pickup_site_id &&
+      effectivePickupSiteId &&
+      refs.route.pickup_site_id !== effectivePickupSiteId
+    ) {
+      return res.status(400).json({
+        message: "pickup_site_id does not match route pickup_site_id",
+      });
+    }
+
+    if (
+      refs.route?.dropoff_site_id &&
+      effectiveDropoffSiteId &&
+      refs.route.dropoff_site_id !== effectiveDropoffSiteId
+    ) {
+      return res.status(400).json({
+        message: "dropoff_site_id does not match route dropoff_site_id",
+      });
+    }
 
     const created = await prisma.trips.create({
       data: {
         client_id,
-        site_id,
+        contract_id: refs.contract?.id || null,
+        site_id: site_id || null,
+        pickup_site_id: effectivePickupSiteId,
+        dropoff_site_id: effectiveDropoffSiteId,
+        route_id: route_id || null,
+        cargo_type_id: cargo_type_id || null,
         created_by: userId,
         scheduled_at: scheduled_at ? new Date(scheduled_at) : null,
-        trip_type: trip_type || null,
-        notes: notes || null,
+        trip_type: normalizedTripType,
+        cargo_weight: normalizedCargoWeight,
+        origin: origin
+          ? String(origin).trim()
+          : refs.route?.origin_label || null,
+        destination: destination
+          ? String(destination).trim()
+          : refs.route?.destination_label || null,
+        notes: notes ? String(notes).trim() : null,
         status: "DRAFT",
         financial_status: "OPEN",
       },
-      include: { clients: true, sites: true },
+      include: {
+        clients: true,
+        client_contracts: true,
+        site: true,
+        pickup_site: true,
+        dropoff_site: true,
+        routes: true,
+        cargo_types: true,
+      },
     });
 
     return res.status(201).json(created);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to create trip", error: e.message });
+    return res.status(e.statusCode || 500).json({
+      message: e?.message || "Failed to create trip",
+      error: e.message,
+    });
   }
 }
 
@@ -496,7 +913,7 @@ async function assignTrip(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
@@ -513,12 +930,16 @@ async function assignTrip(req, res) {
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "DRAFT") {
-      return res.status(400).json({ message: `Trip must be DRAFT to assign (current=${trip.status})` });
+      return res.status(400).json({
+        message: `Trip must be DRAFT to assign (current=${trip.status})`,
+      });
     }
 
     const compliance = await runComplianceCheck(driver_id, vehicle_id);
     if (!compliance.ok) {
-      return res.status(compliance.status || 400).json({ message: compliance.message });
+      return res.status(compliance.status || 400).json({
+        message: compliance.message,
+      });
     }
 
     const [busyDriver, busyVehicle] = await Promise.all([
@@ -532,8 +953,17 @@ async function assignTrip(req, res) {
       }),
     ]);
 
-    if (busyDriver) return res.status(400).json({ message: "Driver is already assigned to another active trip" });
-    if (busyVehicle) return res.status(400).json({ message: "Vehicle is already assigned to another active trip" });
+    if (busyDriver) {
+      return res.status(400).json({
+        message: "Driver is already assigned to another active trip",
+      });
+    }
+
+    if (busyVehicle) {
+      return res.status(400).json({
+        message: "Vehicle is already assigned to another active trip",
+      });
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.trip_assignments.updateMany({
@@ -561,7 +991,11 @@ async function assignTrip(req, res) {
           trip_id: id,
           event_type: "ASSIGN",
           created_by_user: userId,
-          payload: { vehicle_id, driver_id, field_supervisor_id: field_supervisor_id || null },
+          payload: {
+            vehicle_id,
+            driver_id,
+            field_supervisor_id: field_supervisor_id || null,
+          },
         },
       });
 
@@ -570,7 +1004,10 @@ async function assignTrip(req, res) {
 
     return res.json({ message: "Assigned", ...updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to assign trip", error: e.message });
+    return res.status(500).json({
+      message: "Failed to assign trip",
+      error: e.message,
+    });
   }
 }
 
@@ -582,7 +1019,7 @@ async function startTrip(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
@@ -602,25 +1039,50 @@ async function startTrip(req, res) {
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "ASSIGNED") {
-      return res.status(400).json({ message: `Trip must be ASSIGNED to start (current=${trip.status})` });
+      return res.status(400).json({
+        message: `Trip must be ASSIGNED to start (current=${trip.status})`,
+      });
     }
 
     const activeAssignment = (trip.trip_assignments || [])[0];
-    if (!activeAssignment) return res.status(400).json({ message: "Trip has no active assignment" });
+    if (!activeAssignment) {
+      return res.status(400).json({ message: "Trip has no active assignment" });
+    }
 
-    const compliance = await runComplianceCheck(activeAssignment.driver_id, activeAssignment.vehicle_id);
+    const compliance = await runComplianceCheck(
+      activeAssignment.driver_id,
+      activeAssignment.vehicle_id
+    );
+
     if (!compliance.ok) {
-      return res.status(compliance.status || 400).json({ message: `Cannot start trip: ${compliance.message}` });
+      return res.status(compliance.status || 400).json({
+        message: `Cannot start trip: ${compliance.message}`,
+      });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
       const t = await tx.trips.update({
         where: { id },
-        data: { status: "IN_PROGRESS" },
+        data: {
+          status: "IN_PROGRESS",
+          actual_departure_at: trip.actual_departure_at || new Date(),
+        },
+      });
+
+      await tx.vehicles.update({
+        where: { id: activeAssignment.vehicle_id },
+        data: {
+          status: "ON_TRIP",
+        },
       });
 
       await tx.trip_events.create({
-        data: { trip_id: id, event_type: "START", created_by_user: userId, payload: {} },
+        data: {
+          trip_id: id,
+          event_type: "START",
+          created_by_user: userId,
+          payload: {},
+        },
       });
 
       return t;
@@ -628,7 +1090,10 @@ async function startTrip(req, res) {
 
     return res.json({ message: "Started", trip: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to start trip", error: e.message });
+    return res.status(500).json({
+      message: "Failed to start trip",
+      error: e.message,
+    });
   }
 }
 
@@ -640,18 +1105,36 @@ async function finishTrip(req, res) {
     const userId = getAuthUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-    const role = String(getAuthRole(req)).toUpperCase();
+    const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
 
-    const trip = await prisma.trips.findUnique({ where: { id } });
+    const trip = await prisma.trips.findUnique({
+      where: { id },
+      include: {
+        trip_assignments: {
+          where: { is_active: true },
+          take: 1,
+          select: {
+            id: true,
+            vehicle_id: true,
+            driver_id: true,
+          },
+        },
+      },
+    });
+
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "IN_PROGRESS") {
-      return res.status(400).json({ message: `Trip must be IN_PROGRESS to finish (current=${trip.status})` });
+      return res.status(400).json({
+        message: `Trip must be IN_PROGRESS to finish (current=${trip.status})`,
+      });
     }
+
+    const activeAssignment = trip.trip_assignments?.[0] || null;
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.trip_assignments.updateMany({
@@ -661,11 +1144,31 @@ async function finishTrip(req, res) {
 
       const t = await tx.trips.update({
         where: { id },
-        data: { status: "COMPLETED" },
+        data: {
+          status: "COMPLETED",
+          actual_arrival_at: trip.actual_arrival_at || new Date(),
+        },
       });
 
+      if (activeAssignment?.vehicle_id) {
+        await tx.vehicles.updateMany({
+          where: {
+            id: activeAssignment.vehicle_id,
+            status: "ON_TRIP",
+          },
+          data: {
+            status: "AVAILABLE",
+          },
+        });
+      }
+
       await tx.trip_events.create({
-        data: { trip_id: id, event_type: "FINISH", created_by_user: userId, payload: {} },
+        data: {
+          trip_id: id,
+          event_type: "FINISH",
+          created_by_user: userId,
+          payload: {},
+        },
       });
 
       return t;
@@ -673,7 +1176,10 @@ async function finishTrip(req, res) {
 
     return res.json({ message: "Finished", trip: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to finish trip", error: e.message });
+    return res.status(500).json({
+      message: "Failed to finish trip",
+      error: e.message,
+    });
   }
 }
 

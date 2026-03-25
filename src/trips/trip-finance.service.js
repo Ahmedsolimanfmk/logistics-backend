@@ -4,7 +4,7 @@ const prisma = require("../prisma");
 // Helpers
 // =======================
 function safeUpper(v) {
-  return String(v || "").toUpperCase();
+  return String(v || "").trim().toUpperCase();
 }
 
 function toAmount(v) {
@@ -32,49 +32,89 @@ async function getTripFinanceSummary(tripId) {
     throw err;
   }
 
-  const revenueRow = await prisma.trip_revenues.findFirst({
-    where: { trip_id: tripId },
-    orderBy: { entered_at: "desc" },
-    select: {
-      id: true,
-      amount: true,
-      currency: true,
-      source: true,
-      entered_at: true,
-      approved_at: true,
-      notes: true,
-    },
-  });
+  const [
+    currentRevenueRow,
+    currentApprovedRevenueRow,
+    approvedExpenses,
+    pendingExpenses,
+  ] = await Promise.all([
+    prisma.trip_revenues.findFirst({
+      where: {
+        trip_id: tripId,
+        is_current: true,
+      },
+      orderBy: { version_no: "desc" },
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        source: true,
+        entered_at: true,
+        approved_at: true,
+        notes: true,
+        is_current: true,
+        version_no: true,
+        is_approved: true,
+        approval_notes: true,
+        pricing_rule_id: true,
+        pricing_rule_snapshot: true,
+      },
+    }),
 
-  const approvedExpenses = await prisma.cash_expenses.findMany({
-    where: {
-      trip_id: tripId,
-      approval_status: "APPROVED",
-    },
-    select: {
-      id: true,
-      amount: true,
-      payment_source: true,
-      expense_type: true,
-      approval_status: true,
-      created_at: true,
-    },
-  });
+    prisma.trip_revenues.findFirst({
+      where: {
+        trip_id: tripId,
+        is_current: true,
+        is_approved: true,
+      },
+      orderBy: { version_no: "desc" },
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        source: true,
+        entered_at: true,
+        approved_at: true,
+        notes: true,
+        is_current: true,
+        version_no: true,
+        is_approved: true,
+        approval_notes: true,
+        pricing_rule_id: true,
+        pricing_rule_snapshot: true,
+      },
+    }),
 
-  const pendingExpenses = await prisma.cash_expenses.findMany({
-    where: {
-      trip_id: tripId,
-      approval_status: { in: ["PENDING", "APPEALED"] },
-    },
-    select: {
-      id: true,
-      amount: true,
-      payment_source: true,
-      expense_type: true,
-      approval_status: true,
-      created_at: true,
-    },
-  });
+    prisma.cash_expenses.findMany({
+      where: {
+        trip_id: tripId,
+        approval_status: "APPROVED",
+      },
+      select: {
+        id: true,
+        amount: true,
+        payment_source: true,
+        expense_type: true,
+        approval_status: true,
+        created_at: true,
+      },
+    }),
+
+    prisma.cash_expenses.findMany({
+      where: {
+        trip_id: tripId,
+        approval_status: { in: ["PENDING", "APPEALED"] },
+      },
+      select: {
+        id: true,
+        amount: true,
+        payment_source: true,
+        expense_type: true,
+        approval_status: true,
+        created_at: true,
+      },
+    }),
+  ]);
 
   let expenses = 0;
   let companyExpenses = 0;
@@ -101,8 +141,10 @@ async function getTripFinanceSummary(tripId) {
     0
   );
 
-  const revenue = revenueRow
-    ? toAmount(revenueRow.amount)
+  const revenueSourceRow = currentApprovedRevenueRow || currentRevenueRow || null;
+
+  const revenue = revenueSourceRow
+    ? toAmount(revenueSourceRow.amount)
     : toAmount(trip.agreed_revenue);
 
   const profit = revenue - expenses;
@@ -125,8 +167,12 @@ async function getTripFinanceSummary(tripId) {
     profit,
     profit_status: profitStatus,
 
-    currency: revenueRow?.currency || trip.revenue_currency || "EGP",
-    revenue_record: revenueRow || null,
+    currency: revenueSourceRow?.currency || trip.revenue_currency || "EGP",
+
+    revenue_record: revenueSourceRow,
+    current_revenue_record: currentRevenueRow || null,
+    current_approved_revenue_record: currentApprovedRevenueRow || null,
+
     breakdown_by_type: breakdownByType,
 
     expenses_items: approvedExpenses,

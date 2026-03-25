@@ -29,6 +29,9 @@ const analyticsRoutes = require("./analytics/analytics.routes");
 const aiAnalyticsRoutes = require("./ai-analytics/ai-analytics.routes");
 const tripRevenuesRoutes = require("./trip-revenues/trip-revenues.routes");
 const vendorsRoutes = require("./vendors/vendors.routes");
+const contractsRoutes = require("./contracts/contracts.routes");
+const pricingRoutes = require("./pricing/pricing.routes");
+const contractPricingRoutes = require("./contract-pricing/contract-pricing.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -102,6 +105,9 @@ app.use("/finance/ar", authRequired, arRoutes);
 app.use("/analytics", authRequired, analyticsRoutes);
 app.use("/ai-analytics", authRequired, aiAnalyticsRoutes);
 app.use("/vendors", authRequired, vendorsRoutes);
+app.use("/contracts", authRequired, contractsRoutes);
+app.use("/pricing-rules", authRequired, pricingRoutes);
+app.use("/contract-pricing", authRequired, contractPricingRoutes);
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);

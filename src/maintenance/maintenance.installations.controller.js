@@ -1,8 +1,4 @@
-// =======================
-// src/maintenance/maintenance.installations.controller.js
-// =======================
-
-const prisma = require("./prisma");
+const prisma = require("../prisma");
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
@@ -15,7 +11,6 @@ function isUuid(v) {
   );
 }
 
-// ✅ helper for Prisma Decimal / numbers
 function toNum(v) {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number") return v;
@@ -27,16 +22,6 @@ function toNum(v) {
 
 /**
  * POST /maintenance/work-orders/:id/installations
- * body:
- * {
- *   "items": [
- *     // ✅ Serial item (from inventory issue)
- *     { "part_id": "...", "part_item_id": "...", "qty_installed": 1, "odometer": 125000, "notes": "..." },
- *
- *     // ✅ Bulk item (non-serial)
- *     { "part_id": "...", "qty_installed": 2, "odometer": 125000, "notes": "..." }
- *   ]
- * }
  */
 async function addInstallations(req, res) {
   try {
@@ -68,9 +53,6 @@ async function addInstallations(req, res) {
 
     const now = new Date();
 
-    // -----------------------
-    // validate & normalize payload
-    // -----------------------
     const payload = [];
     for (const [idx, it] of items.entries()) {
       const part_id = String(it?.part_id || "").trim();
@@ -85,7 +67,6 @@ async function addInstallations(req, res) {
         return res.status(400).json({ message: `items[${idx}].part_id must be uuid` });
       }
 
-      // ✅ serial must be qty = 1
       if (part_item_id) {
         if (!isUuid(part_item_id)) {
           return res.status(400).json({ message: `items[${idx}].part_item_id must be uuid` });
@@ -94,7 +75,6 @@ async function addInstallations(req, res) {
           return res.status(400).json({ message: `items[${idx}].qty_installed must be 1 for serial items` });
         }
       } else {
-        // bulk
         if (!Number.isFinite(qty) || qty <= 0) {
           return res.status(400).json({ message: `items[${idx}].qty_installed must be > 0` });
         }
@@ -116,7 +96,6 @@ async function addInstallations(req, res) {
       });
     }
 
-    // ensure parts exist
     const partIds = [...new Set(payload.map((p) => p.part_id))];
     const parts = await prisma.parts.findMany({
       where: { id: { in: partIds } },
@@ -129,20 +108,10 @@ async function addInstallations(req, res) {
     const vehicleId = wo.vehicle_id;
 
     const created = await prisma.$transaction(async (tx) => {
-      // -----------------------
-      // ✅ NEW: Enforce "install only what was issued for THIS work order"
-      //   - Serial: part_item must be issued via inventory_issue_lines under inventory_issues(work_order_id=WO)
-      //   - Bulk: total installed for part <= total issued for part under same WO
-      // -----------------------
-
-      // -----------------------
-      // Serial validation (ISSUED -> INSTALLED) + ✅ verify issued to THIS WO
-      // -----------------------
       const serialItems = payload.filter((p) => Boolean(p.part_item_id));
       if (serialItems.length) {
         const serialIds = serialItems.map((p) => p.part_item_id);
 
-        // ✅ verify that each serial was issued on this work order
         const issuedSerialLines = await tx.inventory_issue_lines.findMany({
           where: {
             part_item_id: { in: serialIds },
@@ -179,15 +148,15 @@ async function addInstallations(req, res) {
             e.statusCode = 400;
             throw e;
           }
-          // ✅ لازم تكون ISSUED (يعني اتصرفت من المخزن)
           if (pi.status !== "ISSUED") {
-            const e = new Error(`part_item must be ISSUED before install (current=${pi.status}): ${p.part_item_id}`);
+            const e = new Error(
+              `part_item must be ISSUED before install (current=${pi.status}): ${p.part_item_id}`
+            );
             e.statusCode = 409;
             throw e;
           }
         }
 
-        // update part_items -> INSTALLED
         const upd = await tx.part_items.updateMany({
           where: { id: { in: serialIds }, status: "ISSUED" },
           data: {
@@ -205,14 +174,10 @@ async function addInstallations(req, res) {
         }
       }
 
-      // -----------------------
-      // ✅ NEW: Bulk validation: do not allow installed > issued for this WO
-      // -----------------------
       const bulkItems = payload.filter((p) => !p.part_item_id);
       if (bulkItems.length) {
         const bulkPartIds = [...new Set(bulkItems.map((b) => b.part_id))];
 
-        // sum issued qty by part_id for this WO
         const issuedAgg = await tx.inventory_issue_lines.groupBy({
           by: ["part_id"],
           where: {
@@ -222,7 +187,6 @@ async function addInstallations(req, res) {
           _sum: { qty: true },
         });
 
-        // sum installed qty by part_id for this WO (existing)
         const installedAgg = await tx.work_order_installations.groupBy({
           by: ["part_id"],
           where: {
@@ -233,9 +197,10 @@ async function addInstallations(req, res) {
         });
 
         const issuedMap = new Map(issuedAgg.map((x) => [x.part_id, toNum(x._sum?.qty)]));
-        const installedMap = new Map(installedAgg.map((x) => [x.part_id, toNum(x._sum?.qty_installed)]));
+        const installedMap = new Map(
+          installedAgg.map((x) => [x.part_id, toNum(x._sum?.qty_installed)])
+        );
 
-        // accumulate new payload by part
         const addMap = new Map();
         for (const b of bulkItems) {
           addMap.set(b.part_id, (addMap.get(b.part_id) || 0) + toNum(b.qty_installed));
@@ -247,18 +212,16 @@ async function addInstallations(req, res) {
           const addNow = toNum(addMap.get(partId));
           const next = installed + addNow;
 
-          // allow tiny epsilon
           if (next > issued + 0.0005) {
-            const e = new Error(`Installed qty exceeds issued qty for this work order (part=${partId})`);
+            const e = new Error(
+              `Installed qty exceeds issued qty for this work order (part=${partId})`
+            );
             e.statusCode = 409;
             throw e;
           }
         }
       }
 
-      // -----------------------
-      // Create installations rows
-      // -----------------------
       const rows = await Promise.all(
         payload.map((p) =>
           tx.work_order_installations.create({
@@ -266,10 +229,7 @@ async function addInstallations(req, res) {
               maintenance_work_orders: { connect: { id: workOrderId } },
               vehicles: { connect: { id: vehicleId } },
               parts: { connect: { id: p.part_id } },
-
-              // ✅ link serial if provided
               ...(p.part_item_id ? { part_items: { connect: { id: p.part_item_id } } } : {}),
-
               qty_installed: p.qty_installed,
               installed_by: userId,
               installed_at: now,
@@ -280,7 +240,6 @@ async function addInstallations(req, res) {
         )
       );
 
-      // optional: لو الـ work order كان OPEN خليه IN_PROGRESS
       if (String(wo.status || "").toUpperCase() === "OPEN") {
         await tx.maintenance_work_orders.update({
           where: { id: wo.id },

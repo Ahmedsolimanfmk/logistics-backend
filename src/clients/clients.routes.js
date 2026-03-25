@@ -1,22 +1,22 @@
-// =======================
-// src/clients/clients.routes.js
-// =======================
-
 const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
 
 const clientsController = require("./clients.controller");
 
-router.get("/", authRequired, clientsController.listClients);
-router.post("/", authRequired, clientsController.createClient);
-router.put("/:id", authRequired, clientsController.updateClient);
+router.use(authRequired);
 
-// ✅ profile update endpoint (no name required)
-router.put("/:id/profile", authRequired, clientsController.updateClientProfile);
+router.get("/", clientsController.listClients);
+router.get("/:id", clientsController.getClientById);
 
-router.patch("/:id/toggle", authRequired, clientsController.toggleClient);
+router.post("/", clientsController.createClient);
+router.put("/:id", clientsController.updateClient);
 
-router.get("/:id/details", authRequired, clientsController.getClientDetails);
-router.get("/:id/dashboard", authRequired, clientsController.getClientDashboard);
+// profile update endpoint
+router.put("/:id/profile", clientsController.updateClientProfile);
+
+router.patch("/:id/toggle", clientsController.toggleClient);
+
+router.get("/:id/details", clientsController.getClientDetails);
+router.get("/:id/dashboard", clientsController.getClientDashboard);
 
 module.exports = router;

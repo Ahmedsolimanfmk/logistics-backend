@@ -1,8 +1,4 @@
-// =======================
-// src/maintenance/maintenance.vehicles.controller.js
-// =======================
-
-const prisma = require("./prisma");
+const prisma = require("../prisma");
 
 function getAuthUserId(req) {
   return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
@@ -34,7 +30,6 @@ async function listVehicleOptions(req, res) {
 
     const role = req.user?.role || null;
 
-    // ADMIN/ACCOUNTANT: كل العربيات النشطة
     if (isAdminOrAccountant(role)) {
       const rows = await prisma.vehicles.findMany({
         where: { is_active: true },
@@ -58,7 +53,6 @@ async function listVehicleOptions(req, res) {
       });
     }
 
-    // FIELD_SUPERVISOR: عربياته من portfolio
     const rows = await prisma.vehicle_portfolio.findMany({
       where: {
         field_supervisor_id: userId,
@@ -94,29 +88,6 @@ async function listVehicleOptions(req, res) {
   } catch (e) {
     console.log("LIST VEHICLE OPTIONS ERROR:", e);
     return res.status(500).json({ message: "Failed to load vehicle options" });
-  }
-}
-
-// GET /maintenance/requests/:id
-async function getMaintenanceRequestById(req, res) {
-  try {
-    const userId = getAuthUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-
-    const { id } = req.params;
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid request id" });
-
-    const row = await prisma.maintenance_requests.findUnique({ where: { id } });
-    if (!row) return res.status(404).json({ message: "Not found" });
-
-    const role = req.user?.role || null;
-    if (!isAdminOrAccountant(role) && row.requested_by !== userId) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    return res.json(row);
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to load request" });
   }
 }
 
