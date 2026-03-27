@@ -51,27 +51,14 @@ async function ensureClientExists(clientId) {
   return client;
 }
 
-async function ensureZoneExists(zoneId) {
-  if (!zoneId) return null;
-  if (!isUuid(zoneId)) throw buildError("Invalid zone_id");
-
-  const zone = await prisma.zones.findUnique({
-    where: { id: zoneId },
-    select: { id: true, name: true, code: true, is_active: true },
-  });
-
-  if (!zone) throw buildError("Zone not found", 404);
-  return zone;
-}
-
 function buildListWhere(query = {}) {
   const where = {};
 
   const search = s(query.search);
   const client_id = s(query.client_id);
-  const zone_id = s(query.zone_id);
   const city = s(query.city);
   const site_type = s(query.site_type);
+  const zone = s(query.zone);
   const is_active = toBool(query.is_active, null);
 
   if (search) {
@@ -81,6 +68,11 @@ function buildListWhere(query = {}) {
       { city: { contains: search, mode: "insensitive" } },
       { site_type: { contains: search, mode: "insensitive" } },
       { zone: { contains: search, mode: "insensitive" } },
+      {
+        clients: {
+          name: { contains: search, mode: "insensitive" },
+        },
+      },
     ];
   }
 
@@ -89,17 +81,16 @@ function buildListWhere(query = {}) {
     where.client_id = client_id;
   }
 
-  if (zone_id) {
-    if (!isUuid(zone_id)) throw buildError("Invalid zone_id");
-    where.zone_id = zone_id;
-  }
-
   if (city) {
     where.city = { contains: city, mode: "insensitive" };
   }
 
   if (site_type) {
     where.site_type = { contains: site_type, mode: "insensitive" };
+  }
+
+  if (zone) {
+    where.zone = { contains: zone, mode: "insensitive" };
   }
 
   if (typeof is_active === "boolean") {
@@ -111,15 +102,6 @@ function buildListWhere(query = {}) {
 
 // =======================
 // GET /sites
-// query:
-//  - page
-//  - limit
-//  - search
-//  - client_id
-//  - zone_id
-//  - city
-//  - site_type
-//  - is_active
 // =======================
 exports.listSites = async (req, res) => {
   try {
@@ -140,7 +122,15 @@ exports.listSites = async (req, res) => {
         take: limit,
         include: {
           clients: { select: { id: true, name: true } },
-          zones: { select: { id: true, name: true, code: true, is_active: true } },
+          site_trips: {
+            select: {
+              id: true,
+              trip_code: true,
+              status: true,
+              financial_status: true,
+              created_at: true,
+            },
+          },
         },
       }),
       prisma.sites.count({ where }),
@@ -183,7 +173,21 @@ exports.getSiteById = async (req, res) => {
       where: { id },
       include: {
         clients: { select: { id: true, name: true } },
-        zones: { select: { id: true, name: true, code: true, is_active: true } },
+        site_trips: {
+          orderBy: { created_at: "desc" },
+          select: {
+            id: true,
+            trip_code: true,
+            status: true,
+            financial_status: true,
+            created_at: true,
+            scheduled_at: true,
+            origin: true,
+            destination: true,
+            agreed_revenue: true,
+            revenue_currency: true,
+          },
+        },
       },
     });
 
@@ -218,7 +222,6 @@ exports.createSite = async (req, res) => {
     const site_type = s(req.body?.site_type);
     const city = s(req.body?.city);
     const zone = s(req.body?.zone);
-    const zone_id = s(req.body?.zone_id);
     const latitude = toDecimalOrNull(req.body?.latitude);
     const longitude = toDecimalOrNull(req.body?.longitude);
     const is_active =
@@ -232,7 +235,6 @@ exports.createSite = async (req, res) => {
     }
 
     await ensureClientExists(client_id);
-    const zoneRow = await ensureZoneExists(zone_id);
 
     if (req.body?.latitude !== undefined && latitude === null) {
       return res.status(400).json({
@@ -255,15 +257,13 @@ exports.createSite = async (req, res) => {
         client_id,
         site_type,
         city,
-        zone: zone || zoneRow?.name || null,
-        zone_id: zoneRow?.id || null,
+        zone,
         latitude,
         longitude,
         is_active,
       },
       include: {
         clients: { select: { id: true, name: true } },
-        zones: { select: { id: true, name: true, code: true, is_active: true } },
       },
     });
 
@@ -300,7 +300,6 @@ exports.updateSite = async (req, res) => {
       select: {
         id: true,
         client_id: true,
-        zone_id: true,
       },
     });
 
@@ -336,16 +335,6 @@ exports.updateSite = async (req, res) => {
       data.client_id = nextClientId;
     }
 
-    if (req.body.zone_id !== undefined) {
-      const nextZoneId = s(req.body.zone_id);
-      const zoneRow = await ensureZoneExists(nextZoneId);
-      data.zone_id = zoneRow?.id || null;
-
-      if (req.body.zone === undefined) {
-        data.zone = zoneRow?.name || null;
-      }
-    }
-
     if (req.body.latitude !== undefined) {
       const latitude = toDecimalOrNull(req.body.latitude);
       if (latitude === null && req.body.latitude !== null && req.body.latitude !== "") {
@@ -373,7 +362,6 @@ exports.updateSite = async (req, res) => {
       data,
       include: {
         clients: { select: { id: true, name: true } },
-        zones: { select: { id: true, name: true, code: true, is_active: true } },
       },
     });
 
@@ -422,7 +410,6 @@ exports.toggleSite = async (req, res) => {
       data: { is_active: !existing.is_active },
       include: {
         clients: { select: { id: true, name: true } },
-        zones: { select: { id: true, name: true, code: true, is_active: true } },
       },
     });
 
