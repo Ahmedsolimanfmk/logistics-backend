@@ -3,7 +3,6 @@
 const prisma = require("../maintenance/prisma");
 const {
   getUserId,
-  getUserRole,
   isAdminOrAccountant,
   isAdminOrStorekeeper,
 } = require("../auth/access");
@@ -66,6 +65,10 @@ async function listReceipts(req, res) {
     const status = String(req.query.status || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
 
+    if (warehouse_id && !isUuid(warehouse_id)) {
+      return res.status(400).json({ message: "warehouse_id is invalid" });
+    }
+
     const where = {};
     if (status) where.status = status;
     if (warehouse_id) where.warehouse_id = warehouse_id;
@@ -77,8 +80,17 @@ async function listReceipts(req, res) {
         orderBy: [{ created_at: "desc" }],
         include: {
           warehouses: true,
-          items: true,
-          bulk_lines: true,
+          vendors: true,
+          items: {
+            include: {
+              parts: true,
+            },
+          },
+          bulk_lines: {
+            include: {
+              parts: true,
+            },
+          },
         },
       });
     } catch (e) {
@@ -94,15 +106,20 @@ async function listReceipts(req, res) {
         orderBy: [{ created_at: "desc" }],
         include: {
           warehouses: true,
-          items: true,
+          vendors: true,
+          items: {
+            include: {
+              parts: true,
+            },
+          },
         },
       });
     }
 
-    res.json({ items: rows });
+    return res.json({ items: rows });
   } catch (err) {
     console.error("listReceipts error:", err);
-    res.status(500).json({ message: "Failed to list receipts" });
+    return res.status(500).json({ message: "Failed to list receipts" });
   }
 }
 
@@ -117,6 +134,7 @@ async function getReceipt(req, res) {
         where: { id },
         include: {
           warehouses: true,
+          vendors: true,
           items: { include: { parts: true } },
           bulk_lines: { include: { parts: true } },
           cash_expenses: true,
@@ -134,6 +152,7 @@ async function getReceipt(req, res) {
         where: { id },
         include: {
           warehouses: true,
+          vendors: true,
           items: { include: { parts: true } },
           cash_expenses: true,
         },
@@ -141,10 +160,10 @@ async function getReceipt(req, res) {
     }
 
     if (!row) return res.status(404).json({ message: "Receipt not found" });
-    res.json(row);
+    return res.json(row);
   } catch (err) {
     console.error("getReceipt error:", err);
-    res.status(500).json({ message: "Failed to get receipt" });
+    return res.status(500).json({ message: "Failed to get receipt" });
   }
 }
 
@@ -153,7 +172,8 @@ async function createReceipt(req, res) {
     const created_by = getUserId(req);
 
     const warehouse_id = String(req.body?.warehouse_id || "").trim();
-    const supplier_name = String(req.body?.supplier_name || "").trim();
+    const vendor_id =
+      req.body?.vendor_id != null ? String(req.body.vendor_id).trim() : null;
     const invoice_no =
       req.body?.invoice_no != null ? String(req.body.invoice_no).trim() : null;
 
@@ -170,9 +190,11 @@ async function createReceipt(req, res) {
     if (!isUuid(warehouse_id)) {
       return res.status(400).json({ message: "warehouse_id is required" });
     }
-    if (!supplier_name) {
-      return res.status(400).json({ message: "supplier_name is required" });
+
+    if (vendor_id && !isUuid(vendor_id)) {
+      return res.status(400).json({ message: "vendor_id is invalid" });
     }
+
     if (invoice_date && Number.isNaN(invoice_date.getTime())) {
       return res.status(400).json({ message: "invoice_date is invalid" });
     }
@@ -253,7 +275,7 @@ async function createReceipt(req, res) {
       created = await prisma.inventory_receipts.create({
         data: {
           warehouse_id,
-          supplier_name,
+          vendor_id,
           invoice_no,
           invoice_date,
           status: "DRAFT",
@@ -271,7 +293,8 @@ async function createReceipt(req, res) {
             create: bulk_lines.map((bl) => {
               const qty = Number(bl.qty);
               const unit_cost = toMoney(bl.unit_cost);
-              const total_cost = unit_cost == null ? null : unit_cost * qty;
+              const total_cost =
+                unit_cost == null ? null : toMoney(unit_cost * qty);
 
               return {
                 part_id: String(bl.part_id).trim(),
@@ -283,7 +306,12 @@ async function createReceipt(req, res) {
             }),
           },
         },
-        include: { items: true, bulk_lines: true },
+        include: {
+          warehouses: true,
+          vendors: true,
+          items: { include: { parts: true } },
+          bulk_lines: { include: { parts: true } },
+        },
       });
     } catch (e) {
       if (
@@ -296,7 +324,7 @@ async function createReceipt(req, res) {
       created = await prisma.inventory_receipts.create({
         data: {
           warehouse_id,
-          supplier_name,
+          vendor_id,
           invoice_no,
           invoice_date,
           status: "DRAFT",
@@ -311,7 +339,11 @@ async function createReceipt(req, res) {
             })),
           },
         },
-        include: { items: true },
+        include: {
+          warehouses: true,
+          vendors: true,
+          items: { include: { parts: true } },
+        },
       });
 
       if (bulk_lines.length) {
@@ -322,7 +354,7 @@ async function createReceipt(req, res) {
       }
     }
 
-    res.status(201).json(created);
+    return res.status(201).json(created);
   } catch (err) {
     if (String(err?.code) === "P2002") {
       return res.status(409).json({
@@ -331,7 +363,7 @@ async function createReceipt(req, res) {
     }
 
     console.error("createReceipt error:", err);
-    res.status(500).json({ message: "Failed to create receipt" });
+    return res.status(500).json({ message: "Failed to create receipt" });
   }
 }
 
@@ -382,8 +414,12 @@ async function submitReceipt(req, res) {
         throw e;
       }
 
-      const hasSerialItems = !!receipt.items && receipt.items.length > 0;
-      const hasBulkLines = !!receipt.bulk_lines && receipt.bulk_lines.length > 0;
+      const safeBulkLines = Array.isArray(receipt.bulk_lines)
+        ? receipt.bulk_lines
+        : [];
+
+      const hasSerialItems = Array.isArray(receipt.items) && receipt.items.length > 0;
+      const hasBulkLines = safeBulkLines.length > 0;
 
       if (!hasSerialItems && !hasBulkLines) {
         const e = new Error("Receipt has no items");
@@ -401,7 +437,7 @@ async function submitReceipt(req, res) {
       });
     });
 
-    res.json({ message: "Receipt submitted", receipt: updated });
+    return res.json({ message: "Receipt submitted", receipt: updated });
   } catch (err) {
     const sc = err?.statusCode || 500;
     if (sc !== 500) {
@@ -409,7 +445,7 @@ async function submitReceipt(req, res) {
     }
 
     console.error("submitReceipt error:", err);
-    res.status(500).json({ message: "Failed to submit receipt" });
+    return res.status(500).json({ message: "Failed to submit receipt" });
   }
 }
 
@@ -432,7 +468,11 @@ async function postReceipt(req, res) {
       try {
         receipt = await tx.inventory_receipts.findUnique({
           where: { id },
-          include: { items: true, bulk_lines: true },
+          include: {
+            items: true,
+            bulk_lines: true,
+            vendors: true,
+          },
         });
       } catch (e) {
         if (
@@ -444,7 +484,10 @@ async function postReceipt(req, res) {
 
         receipt = await tx.inventory_receipts.findUnique({
           where: { id },
-          include: { items: true },
+          include: {
+            items: true,
+            vendors: true,
+          },
         });
       }
 
@@ -460,8 +503,13 @@ async function postReceipt(req, res) {
         throw e;
       }
 
-      const hasSerialItems = !!receipt.items && receipt.items.length > 0;
-      const hasBulkLines = !!receipt.bulk_lines && receipt.bulk_lines.length > 0;
+      const safeItems = Array.isArray(receipt.items) ? receipt.items : [];
+      const safeBulkLines = Array.isArray(receipt.bulk_lines)
+        ? receipt.bulk_lines
+        : [];
+
+      const hasSerialItems = safeItems.length > 0;
+      const hasBulkLines = safeBulkLines.length > 0;
 
       if (!hasSerialItems && !hasBulkLines) {
         const e = new Error("Receipt has no items");
@@ -470,8 +518,8 @@ async function postReceipt(req, res) {
       }
 
       if (hasSerialItems) {
-        const internalSerials = receipt.items.map((x) => x.internal_serial);
-        const manufacturerSerials = receipt.items.map((x) => x.manufacturer_serial);
+        const internalSerials = safeItems.map((x) => x.internal_serial);
+        const manufacturerSerials = safeItems.map((x) => x.manufacturer_serial);
 
         const existing = await tx.part_items.findFirst({
           where: {
@@ -492,7 +540,7 @@ async function postReceipt(req, res) {
         }
 
         await tx.part_items.createMany({
-          data: receipt.items.map((it) => ({
+          data: safeItems.map((it) => ({
             part_id: it.part_id,
             warehouse_id: receipt.warehouse_id,
             internal_serial: it.internal_serial,
@@ -510,7 +558,7 @@ async function postReceipt(req, res) {
       if (hasBulkLines) {
         const agg = new Map();
 
-        for (const bl of receipt.bulk_lines) {
+        for (const bl of safeBulkLines) {
           const pid = String(bl.part_id);
           const qty = Number(bl.qty || 0);
           if (!Number.isFinite(qty) || qty <= 0) continue;
@@ -556,13 +604,13 @@ async function postReceipt(req, res) {
       }
 
       const serialTotal = hasSerialItems
-        ? receipt.items.reduce((sum, it) => {
+        ? safeItems.reduce((sum, it) => {
             const n = it.unit_cost == null ? 0 : Number(it.unit_cost);
             return sum + (Number.isFinite(n) ? n : 0);
           }, 0)
         : 0;
 
-      const total = serialTotal + bulkTotal;
+      const total = toMoney(serialTotal + bulkTotal) || 0;
 
       const posted = await tx.inventory_receipts.update({
         where: { id: receipt.id },
@@ -578,20 +626,23 @@ async function postReceipt(req, res) {
           payment_source: "COMPANY",
           expense_type: "SPARE_PARTS_PURCHASE",
           amount: total,
-          vendor_name: receipt.supplier_name,
+          vendor_id: receipt.vendor_id || null,
           invoice_no: receipt.invoice_no,
           invoice_date: receipt.invoice_date,
           invoice_total: total,
           created_by: userId,
           inventory_receipt_id: receipt.id,
           approval_status: "PENDING",
+          notes: receipt.vendors?.name
+            ? `Inventory receipt posted for vendor: ${receipt.vendors.name}`
+            : "Inventory receipt posted",
         },
       });
 
       return { posted, cashExpense };
     });
 
-    res.json({
+    return res.json({
       message: "Receipt posted",
       receipt: result.posted,
       cash_expense: result.cashExpense,
@@ -609,7 +660,7 @@ async function postReceipt(req, res) {
     }
 
     console.error("postReceipt error:", err);
-    res.status(500).json({ message: "Failed to post receipt" });
+    return res.status(500).json({ message: "Failed to post receipt" });
   }
 }
 

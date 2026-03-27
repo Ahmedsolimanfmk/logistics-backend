@@ -1,4 +1,3 @@
-// src/dashboard/dashboard.service.js
 const prisma = require("../prisma");
 const { DateTime } = require("luxon");
 const {
@@ -18,7 +17,6 @@ function normalizeUuidOrNull(v) {
   return String(v).trim();
 }
 
-// ===== Zero-fill + Cairo label =====
 function fillMissingBuckets(points, from, to, trunc) {
   const zone = CAIRO_TZ;
   const map = new Map();
@@ -52,11 +50,6 @@ function fillMissingBuckets(points, from, to, trunc) {
   return result;
 }
 
-/**
- * ===============================
- * ✅ SIMPLE IN-MEMORY CACHE (30s)
- * ===============================
- */
 const _cache = new Map();
 const CACHE_TTL_MS = 30_000;
 
@@ -108,22 +101,6 @@ function daysBetweenCairo(fromDate, toDate) {
   return Math.round(to.diff(from, "days").days);
 }
 
-/**
- * ===============================
- * AR Due Alerts Helper
- * ===============================
- * Rules:
- * - status in APPROVED / PARTIALLY_PAID
- * - due_date exists
- * - outstanding = total_amount - allocated payments
- * - overdue   => due_date < today (Cairo day start)
- * - due soon  => today <= due_date < today + 8 days
- *                (اليوم + 7 أيام قادمة)
- *
- * ملاحظة:
- * ar_invoices لا تحتوي على site_id في الـ schema الحالي
- * لذلك الفلترة هنا ستكون على clientId فقط.
- */
 async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
   const todayStartCairo = DateTime.now().setZone(CAIRO_TZ).startOf("day");
   const dueSoonEndExclusiveCairo = todayStartCairo.plus({ days: 8 });
@@ -208,7 +185,6 @@ async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
   overdueInvoices.sort((a, b) => {
     const aDue = new Date(a.due_date).getTime();
     const bDue = new Date(b.due_date).getTime();
-
     if (aDue !== bDue) return aDue - bDue;
     return b.outstanding_amount - a.outstanding_amount;
   });
@@ -216,7 +192,6 @@ async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
   dueSoonInvoices.sort((a, b) => {
     const aDue = new Date(a.due_date).getTime();
     const bDue = new Date(b.due_date).getTime();
-
     if (aDue !== bDue) return aDue - bDue;
     return b.outstanding_amount - a.outstanding_amount;
   });
@@ -241,12 +216,6 @@ async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
   };
 }
 
-/**
- * ===============================
- * ✅ Dashboard Summary (TAB-BASED)
- * ===============================
- * tabs: operations | finance | maintenance
- */
 exports.getSummary = async (user, filters = {}) => {
   const tab = String(filters.tab || "operations").toLowerCase();
 
@@ -283,9 +252,6 @@ exports.getSummary = async (user, filters = {}) => {
     ...(siteId ? { site_id: siteId } : {}),
   };
 
-  // =========================
-  // OPERATIONS TAB
-  // =========================
   const loadOperations = async () => {
     let tripsTodayByStatus = [];
     if (!isSupervisor) {
@@ -399,7 +365,7 @@ exports.getSummary = async (user, filters = {}) => {
         financial_status: true,
         financial_review_opened_at: true,
         clients: { select: { name: true } },
-        sites: { select: { name: true } },
+        site: { select: { name: true } },
       },
       orderBy: { created_at: "desc" },
       take: 10,
@@ -417,16 +383,13 @@ exports.getSummary = async (user, filters = {}) => {
       financial_status: t.financial_status,
       financial_review_opened_at: t.financial_review_opened_at,
       client: t.clients?.name,
-      site: t.sites?.name,
+      site: t.site?.name,
     }));
 
     out.alerts.active_trips_now_count = active_trips_now.length;
     out.alerts.trips_completed_not_closed = needingClose.length;
   };
 
-  // =========================
-  // FINANCE TAB
-  // =========================
   const loadFinance = async () => {
     const expensesAgg = await prisma.cash_expenses.groupBy({
       by: ["approval_status"],
@@ -522,7 +485,7 @@ exports.getSummary = async (user, filters = {}) => {
           select: {
             id: true,
             clients: { select: { name: true } },
-            sites: { select: { name: true } },
+            site: { select: { name: true } },
             status: true,
           },
         },
@@ -541,7 +504,7 @@ exports.getSummary = async (user, filters = {}) => {
       cash_advance_id: e.cash_advance_id,
       trip_status: e.trips?.status,
       client: e.trips?.clients?.name,
-      site: e.trips?.sites?.name,
+      site: e.trips?.site?.name,
     }));
 
     const openAdvancesList = await prisma.$queryRaw`
@@ -575,9 +538,6 @@ exports.getSummary = async (user, filters = {}) => {
       };
     });
 
-    // =========================
-    // ✅ NEW: AR DUE ALERTS
-    // =========================
     const arDue = await getArDueAlerts({
       clientId,
       top: 10,
@@ -596,7 +556,6 @@ exports.getSummary = async (user, filters = {}) => {
       total: arDue.ar_overdue_total,
     };
 
-    // Placeholder AP
     out.cards.ap_due_soon = {
       enabled: false,
       count: 0,
@@ -634,9 +593,6 @@ exports.getSummary = async (user, filters = {}) => {
     out.alerts.ap_overdue_total = 0;
   };
 
-  // =========================
-  // MAINTENANCE TAB
-  // =========================
   const loadMaintenance = async () => {
     const dayFrom = today.from;
     const dayTo = today.to;
@@ -761,9 +717,6 @@ exports.getSummary = async (user, filters = {}) => {
   return out;
 };
 
-// ===============================
-// Trends (Single Metric)
-// ===============================
 exports.getTrends = async (user, params) => {
   const metric = params.metric || "trips_created";
   const bucket = params.bucket || "daily";
@@ -879,9 +832,6 @@ exports.getTrends = async (user, params) => {
   };
 };
 
-// ===============================
-// Trends Bundle
-// ===============================
 exports.getTrendsBundle = async (user, params) => {
   const bucket = params.bucket || "daily";
   const trunc = bucketToDateTrunc(bucket);

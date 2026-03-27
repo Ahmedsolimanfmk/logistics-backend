@@ -1,9 +1,6 @@
-// src/dashboard/dashboard.controller.js
-
 const dashboardService = require("./dashboard.service");
 const prisma = require("../prisma");
 
-// helpers
 function parseIntSafe(v, fallback) {
   const n = parseInt(String(v ?? ""), 10);
   return Number.isFinite(n) ? n : fallback;
@@ -14,7 +11,6 @@ function daysDiff(from, to) {
   return Math.ceil(ms / (1000 * 60 * 60 * 24));
 }
 
-// Summary
 async function getDashboardSummary(req, res, next) {
   try {
     const user = req.user;
@@ -27,9 +23,9 @@ async function getDashboardSummary(req, res, next) {
     };
 
     const data = await dashboardService.getSummary(user, filters);
-    res.json(data);
+    return res.json(data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 
@@ -48,9 +44,9 @@ async function getDashboardTrends(req, res, next) {
     };
 
     const data = await dashboardService.getTrends(user, params);
-    res.json(data);
+    return res.json(data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 
@@ -68,13 +64,12 @@ async function getDashboardTrendsBundle(req, res, next) {
     };
 
     const data = await dashboardService.getTrendsBundle(user, params);
-    res.json(data);
+    return res.json(data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 
-// Compliance alerts
 // GET /dashboard/compliance-alerts?days=30&limit=100
 async function getComplianceAlerts(req, res, next) {
   try {
@@ -286,7 +281,7 @@ async function getComplianceAlerts(req, res, next) {
       },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 }
 

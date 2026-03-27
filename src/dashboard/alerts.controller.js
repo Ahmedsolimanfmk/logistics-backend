@@ -28,9 +28,9 @@ exports.getDashboardAlerts = async (req, res, next) => {
     };
 
     const data = await alertsService.getAlerts(user, filters);
-    res.json(data);
+    return res.json(data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
@@ -45,9 +45,9 @@ exports.getDashboardAlertsSummary = async (req, res, next) => {
     };
 
     const data = await alertsService.getAlertsSummary(user, filters);
-    res.json(data);
+    return res.json(data);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
@@ -63,12 +63,12 @@ exports.markAlertRead = async (req, res, next) => {
     }
 
     const data = await alertsService.markAlertRead(user, alertKey);
-    res.json({
+    return res.json({
       ok: true,
       item: data,
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };
 
@@ -85,11 +85,11 @@ exports.markAllDashboardAlertsRead = async (req, res, next) => {
 
     const data = await alertsService.markAllAlertsRead(user, filters);
 
-    res.json({
+    return res.json({
       ok: true,
       updated: Number(data.updated || 0),
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 };

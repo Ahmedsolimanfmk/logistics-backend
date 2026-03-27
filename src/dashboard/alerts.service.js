@@ -35,8 +35,12 @@ function toJsDate(v) {
 }
 
 function daysBetweenCairo(fromDate, toDate) {
-  const from = DateTime.fromJSDate(toJsDate(fromDate), { zone: CAIRO_TZ }).startOf("day");
-  const to = DateTime.fromJSDate(toJsDate(toDate), { zone: CAIRO_TZ }).startOf("day");
+  const from = DateTime.fromJSDate(toJsDate(fromDate), {
+    zone: CAIRO_TZ,
+  }).startOf("day");
+  const to = DateTime.fromJSDate(toJsDate(toDate), {
+    zone: CAIRO_TZ,
+  }).startOf("day");
   return Math.round(to.diff(from, "days").days);
 }
 
@@ -98,7 +102,7 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
         financial_status: true,
         financial_review_opened_at: true,
         clients: { select: { name: true } },
-        sites: { select: { name: true } },
+        site: { select: { name: true } },
       },
       orderBy: { created_at: "asc" },
       take: 50,
@@ -141,7 +145,11 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
       severity: "danger",
       area: "operations",
       title: "رحلة تحتاج إغلاق مالي",
-      message: `الرحلة ${String(r.id).slice(0, 8)} تحتاج إغلاق مالي${r.client_name || r.clients?.name ? ` — العميل ${r.client_name || r.clients?.name}` : ""}`,
+      message: `الرحلة ${String(r.id).slice(0, 8)} تحتاج إغلاق مالي${
+        r.client_name || r.clients?.name
+          ? ` — العميل ${r.client_name || r.clients?.name}`
+          : ""
+      }`,
       entity_type: "trip",
       entity_id: r.id,
       href: `/trips/${r.id}`,
@@ -149,7 +157,7 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
       meta: {
         trip_id: r.id,
         client: r.client_name || r.clients?.name || null,
-        site: r.site_name || r.sites?.name || null,
+        site: r.site_name || r.site?.name || null,
         financial_status: r.financial_status || null,
         age_days: ageDays,
       },
@@ -205,7 +213,9 @@ async function getFinanceAlerts({ clientId = null }) {
     const outstandingAmount = totalAmount - allocatedAmount;
     if (!(outstandingAmount > 0)) continue;
 
-    const dueDateCairo = DateTime.fromJSDate(dueDate, { zone: CAIRO_TZ }).startOf("day");
+    const dueDateCairo = DateTime.fromJSDate(dueDate, {
+      zone: CAIRO_TZ,
+    }).startOf("day");
 
     if (dueDateCairo < todayStartCairo) {
       const daysOverdue = daysBetweenCairo(dueDate, new Date());
@@ -238,7 +248,10 @@ async function getFinanceAlerts({ clientId = null }) {
       continue;
     }
 
-    if (dueDateCairo >= todayStartCairo && dueDateCairo < dueSoonEndExclusiveCairo) {
+    if (
+      dueDateCairo >= todayStartCairo &&
+      dueDateCairo < dueSoonEndExclusiveCairo
+    ) {
       const daysToDue = daysBetweenCairo(new Date(), dueDate);
       alerts.push(
         buildAlert({
@@ -786,9 +799,7 @@ async function applyReadState(user, items) {
     },
   });
 
-  const readsMap = new Map(
-    (reads || []).map((r) => [String(r.alert_key), r])
-  );
+  const readsMap = new Map((reads || []).map((r) => [String(r.alert_key), r]));
 
   return items.map((item) => {
     const found = readsMap.get(String(item.alert_key || item.id));
@@ -814,7 +825,12 @@ async function getBaseAlerts(user, filters = {}) {
 
   const areas = area
     ? [area]
-    : ["operations", "finance", "maintenance", ...(isAdminOrHR(user?.role) ? ["compliance"] : [])];
+    : [
+        "operations",
+        "finance",
+        "maintenance",
+        ...(isAdminOrHR(user?.role) ? ["compliance"] : []),
+      ];
 
   const parts = await Promise.all([
     areas.includes("operations")

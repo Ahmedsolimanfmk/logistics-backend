@@ -79,6 +79,12 @@ function normalizeTripType(v) {
   return upper(v);
 }
 
+function normalizeString(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
 // =======================
 // Compliance enforcement
 // =======================
@@ -185,10 +191,6 @@ async function validateTripReferences({
   client_id,
   contract_id,
   site_id,
-  pickup_site_id,
-  dropoff_site_id,
-  route_id,
-  cargo_type_id,
 }) {
   const client = await prisma.clients.findUnique({
     where: { id: client_id },
@@ -201,7 +203,7 @@ async function validateTripReferences({
     throw err;
   }
 
-  const [contract, site, pickupSite, dropoffSite, route, cargoType] = await Promise.all([
+  const [contract, site] = await Promise.all([
     contract_id
       ? prisma.client_contracts.findUnique({
           where: { id: contract_id },
@@ -219,40 +221,7 @@ async function validateTripReferences({
     site_id
       ? prisma.sites.findUnique({
           where: { id: site_id },
-          select: { id: true, client_id: true, name: true },
-        })
-      : null,
-    pickup_site_id
-      ? prisma.sites.findUnique({
-          where: { id: pickup_site_id },
-          select: { id: true, client_id: true, zone_id: true, name: true },
-        })
-      : null,
-    dropoff_site_id
-      ? prisma.sites.findUnique({
-          where: { id: dropoff_site_id },
-          select: { id: true, client_id: true, zone_id: true, name: true },
-        })
-      : null,
-    route_id
-      ? prisma.routes.findUnique({
-          where: { id: route_id },
-          select: {
-            id: true,
-            client_id: true,
-            pickup_site_id: true,
-            dropoff_site_id: true,
-            name: true,
-            code: true,
-            origin_label: true,
-            destination_label: true,
-          },
-        })
-      : null,
-    cargo_type_id
-      ? prisma.cargo_types.findUnique({
-          where: { id: cargo_type_id },
-          select: { id: true, code: true, name: true },
+          select: { id: true, client_id: true, name: true, is_active: true },
         })
       : null,
   ]);
@@ -296,56 +265,10 @@ async function validateTripReferences({
     throw err;
   }
 
-  if (pickup_site_id && !pickupSite) {
-    const err = new Error("Pickup site not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  if (pickupSite && pickupSite.client_id !== client_id) {
-    const err = new Error("pickup_site_id does not belong to client_id");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (dropoff_site_id && !dropoffSite) {
-    const err = new Error("Dropoff site not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  if (dropoffSite && dropoffSite.client_id !== client_id) {
-    const err = new Error("dropoff_site_id does not belong to client_id");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (route_id && !route) {
-    const err = new Error("Route not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  if (route && route.client_id && route.client_id !== client_id) {
-    const err = new Error("route_id does not belong to client_id");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (cargo_type_id && !cargoType) {
-    const err = new Error("Cargo type not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
   return {
     client,
     contract: contract || null,
     site: site || null,
-    pickupSite: pickupSite || null,
-    dropoffSite: dropoffSite || null,
-    route: route || null,
-    cargoType: cargoType || null,
   };
 }
 
@@ -429,7 +352,6 @@ async function getTrips(req, res) {
           actual_departure_at: true,
           financial_closed_at: true,
           financial_review_opened_at: true,
-
           clients: {
             select: { id: true, name: true },
           },
@@ -604,6 +526,7 @@ async function getTrips(req, res) {
     });
   }
 }
+
 // =======================
 // GET /trips/:id
 // =======================
@@ -695,6 +618,7 @@ async function getTripById(req, res) {
     });
   }
 }
+
 // =======================
 // GET /trips/:id/finance/summary
 // =======================
@@ -739,7 +663,6 @@ async function getTripFinanceSummary(req, res) {
 
 // =======================
 // POST /trips/:id/auto-price
-// Manual endpoint to resolve + save revenue
 // =======================
 async function autoPriceTrip(req, res) {
   try {
@@ -790,16 +713,16 @@ async function createTrip(req, res) {
       client_id,
       contract_id,
       site_id,
-      pickup_site_id,
-      dropoff_site_id,
-      route_id,
       scheduled_at,
       trip_type,
-      cargo_type_id,
+      cargo_type,
       cargo_weight,
       origin,
       destination,
       notes,
+      agreed_revenue,
+      revenue_currency,
+      revenue_entry_mode,
     } = req.body || {};
 
     if (!isUuid(client_id)) {
@@ -814,100 +737,60 @@ async function createTrip(req, res) {
       return res.status(400).json({ message: "Invalid site_id" });
     }
 
-    if (pickup_site_id && !isUuid(pickup_site_id)) {
-      return res.status(400).json({ message: "Invalid pickup_site_id" });
-    }
-
-    if (dropoff_site_id && !isUuid(dropoff_site_id)) {
-      return res.status(400).json({ message: "Invalid dropoff_site_id" });
-    }
-
-    if (route_id && !isUuid(route_id)) {
-      return res.status(400).json({ message: "Invalid route_id" });
-    }
-
-    if (cargo_type_id && !isUuid(cargo_type_id)) {
-      return res.status(400).json({ message: "Invalid cargo_type_id" });
-    }
-
     const normalizedTripType = normalizeTripType(trip_type);
-    const normalizedCargoWeight = toNullableNumber(cargo_weight);
+    const normalizedCargoType = normalizeString(cargo_type);
+    const normalizedOrigin = normalizeString(origin);
+    const normalizedDestination = normalizeString(destination);
+    const normalizedNotes = normalizeString(notes);
+    const normalizedRevenueCurrency = normalizeString(revenue_currency);
+    const normalizedRevenueEntryMode = normalizeString(revenue_entry_mode);
 
+    const normalizedCargoWeight = toNullableNumber(cargo_weight);
     if (cargo_weight !== undefined && normalizedCargoWeight === null) {
       return res.status(400).json({ message: "Invalid cargo_weight" });
     }
-
     if (normalizedCargoWeight !== null && normalizedCargoWeight < 0) {
       return res.status(400).json({ message: "cargo_weight must be >= 0" });
     }
 
-    const hasRoute = !!route_id;
-    const hasPickupDropoff = !!pickup_site_id && !!dropoff_site_id;
-    const hasLegacySite = !!site_id;
+    const normalizedAgreedRevenue = toNullableNumber(agreed_revenue);
+    if (agreed_revenue !== undefined && normalizedAgreedRevenue === null) {
+      return res.status(400).json({ message: "Invalid agreed_revenue" });
+    }
+    if (normalizedAgreedRevenue !== null && normalizedAgreedRevenue < 0) {
+      return res.status(400).json({ message: "agreed_revenue must be >= 0" });
+    }
 
-    if (!hasRoute && !hasPickupDropoff && !hasLegacySite) {
-      return res.status(400).json({
-        message:
-          "You must provide route_id, or both pickup_site_id and dropoff_site_id, or transitional site_id",
-      });
+    let scheduledAtValue = null;
+    if (scheduled_at !== undefined && scheduled_at !== null && String(scheduled_at).trim() !== "") {
+      scheduledAtValue = new Date(scheduled_at);
+      if (Number.isNaN(scheduledAtValue.getTime())) {
+        return res.status(400).json({ message: "Invalid scheduled_at" });
+      }
     }
 
     const refs = await validateTripReferences({
       client_id,
       contract_id: contract_id || null,
       site_id: site_id || null,
-      pickup_site_id: pickup_site_id || null,
-      dropoff_site_id: dropoff_site_id || null,
-      route_id: route_id || null,
-      cargo_type_id: cargo_type_id || null,
     });
-
-    const effectivePickupSiteId =
-      pickup_site_id || refs.route?.pickup_site_id || null;
-
-    const effectiveDropoffSiteId =
-      dropoff_site_id || refs.route?.dropoff_site_id || null;
-
-    if (
-      refs.route?.pickup_site_id &&
-      effectivePickupSiteId &&
-      refs.route.pickup_site_id !== effectivePickupSiteId
-    ) {
-      return res.status(400).json({
-        message: "pickup_site_id does not match route pickup_site_id",
-      });
-    }
-
-    if (
-      refs.route?.dropoff_site_id &&
-      effectiveDropoffSiteId &&
-      refs.route.dropoff_site_id !== effectiveDropoffSiteId
-    ) {
-      return res.status(400).json({
-        message: "dropoff_site_id does not match route dropoff_site_id",
-      });
-    }
 
     const created = await prisma.trips.create({
       data: {
         client_id,
         contract_id: refs.contract?.id || null,
-        site_id: site_id || null,
-        pickup_site_id: effectivePickupSiteId,
-        dropoff_site_id: effectiveDropoffSiteId,
-        route_id: route_id || null,
-        cargo_type_id: cargo_type_id || null,
+        site_id: refs.site?.id || null,
         created_by: userId,
-        scheduled_at: scheduled_at ? new Date(scheduled_at) : null,
+        scheduled_at: scheduledAtValue,
         trip_type: normalizedTripType,
+        cargo_type: normalizedCargoType,
         cargo_weight: normalizedCargoWeight,
-        origin: origin
-          ? String(origin).trim()
-          : refs.route?.origin_label || null,
-        destination: destination
-          ? String(destination).trim()
-          : refs.route?.destination_label || null,
-        notes: notes ? String(notes).trim() : null,
+        origin: normalizedOrigin,
+        destination: normalizedDestination,
+        notes: normalizedNotes,
+        agreed_revenue: normalizedAgreedRevenue,
+        revenue_currency: normalizedRevenueCurrency,
+        revenue_entry_mode: normalizedRevenueEntryMode,
         status: "DRAFT",
         financial_status: "OPEN",
       },
@@ -915,10 +798,6 @@ async function createTrip(req, res) {
         clients: true,
         client_contracts: true,
         site: true,
-        pickup_site: true,
-        dropoff_site: true,
-        routes: true,
-        cargo_types: true,
       },
     });
 
@@ -1125,7 +1004,6 @@ async function startTrip(req, res) {
 
 // =======================
 // POST /trips/:id/finish
-// Auto-calculate revenue after completion if possible
 // =======================
 async function finishTrip(req, res) {
   try {

@@ -1,7 +1,3 @@
-// =======================
-// src/dashboard/dashboard.routes.js
-// =======================
-
 const express = require("express");
 const router = express.Router();
 
@@ -22,6 +18,9 @@ const {
   markAllDashboardAlertsRead,
 } = require("./alerts.controller");
 
+// Protect all dashboard routes
+router.use(authRequired);
+
 // KPIs summary
 router.get("/summary", getDashboardSummary);
 
@@ -34,8 +33,8 @@ router.get("/trends/bundle", getDashboardTrendsBundle);
 // Central alerts
 router.get("/alerts", getDashboardAlerts);
 router.get("/alerts/summary", getDashboardAlertsSummary);
-router.patch("/alerts/read", authRequired, markAlertRead);
-router.patch("/alerts/read-all", authRequired, markAllDashboardAlertsRead);
+router.patch("/alerts/read", markAlertRead);
+router.patch("/alerts/read-all", markAllDashboardAlertsRead);
 
 // Compliance alerts
 router.get("/compliance-alerts", requireAdminOrHR, getComplianceAlerts);
