@@ -1,22 +1,14 @@
-const router = require("express").Router();
-const { authRequired } = require("../auth/jwt.middleware");
-const { isAdminOrAccountant } = require("../auth/access");
+const prisma = require("../prisma");
+const { ROLES } = require("../auth/roles");
 
-const tripsController = require("./trips.controller");
-const cashController = require("../cash/cash.controller");
-const { requireTripStartFinishPermission } = require("./trip-permissions.middleware");
-
-// Guard helper
-function mustBeFn(name, fn) {
-  if (typeof fn !== "function") {
-    throw new TypeError(
-      `[trips.routes] Handler "${name}" is not a function. Check exports.`
-    );
-  }
-  return fn;
+function getAuthUserId(req) {
+  return req.user?.sub || req.user?.id || null;
 }
 
-// UUID validator
+function getAuthRole(req) {
+  return String(req.user?.role || "").trim().toUpperCase();
+}
+
 function isUuid(v) {
   return (
     typeof v === "string" &&
@@ -24,82 +16,67 @@ function isUuid(v) {
   );
 }
 
-function requireUuidParam(paramName = "id") {
-  return (req, res, next) => {
-    const v = req.params?.[paramName];
-    if (!isUuid(v)) return res.status(404).json({ message: "Not found" });
-    return next();
-  };
+function canManageAllTrips(role) {
+  return [
+    ROLES.ADMIN,
+    ROLES.OPERATIONS,
+    ROLES.GENERAL_SUPERVISOR,
+    ROLES.DEPT_MANAGER,
+    ROLES.GENERAL_MANAGER,
+    ROLES.GENERAL_RESPONSIBLE,
+  ].includes(role);
 }
 
-function requireAdminOrAccountant(req, res, next) {
-  if (!isAdminOrAccountant(req)) {
+async function requireTripStartFinishPermission(req, res, next) {
+  try {
+    const userId = getAuthUserId(req);
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const role = getAuthRole(req);
+    const tripId = req.params?.id;
+
+    if (!isUuid(tripId)) {
+      return res.status(400).json({ message: "Invalid trip id" });
+    }
+
+    // أدوار الإدارة والتشغيل المسموح لها على كل الرحلات
+    if (canManageAllTrips(role)) {
+      return next();
+    }
+
+    // المشرف الميداني: لازم يكون متعيّن على الرحلة
+    if (role === ROLES.FIELD_SUPERVISOR) {
+      const assignment = await prisma.trip_assignments.findFirst({
+        where: {
+          trip_id: tripId,
+          field_supervisor_id: userId,
+          is_active: true,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!assignment) {
+        return res.status(403).json({
+          message: "Forbidden: you are not assigned to this trip",
+        });
+      }
+
+      return next();
+    }
+
     return res.status(403).json({ message: "Forbidden" });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to verify trip permission",
+      error: error?.message || "Unknown error",
+    });
   }
-  return next();
 }
 
-// === Bind handlers safely ===
-const createTrip = mustBeFn("createTrip", tripsController.createTrip);
-const getTrips = mustBeFn("getTrips", tripsController.getTrips);
-const getTripById = mustBeFn("getTripById", tripsController.getTripById);
-const getTripFinanceSummary = mustBeFn(
-  "getTripFinanceSummary",
-  tripsController.getTripFinanceSummary
-);
-
-const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
-const startTrip = mustBeFn("startTrip", tripsController.startTrip);
-const finishTrip = mustBeFn("finishTrip", tripsController.finishTrip);
-
-// finance state handlers
-const openTripFinanceReview = mustBeFn(
-  "openTripFinanceReview",
-  cashController.openTripFinanceReview
-);
-const closeTripFinance = mustBeFn(
-  "closeTripFinance",
-  cashController.closeTripFinance
-);
-
-// =======================
-// Routes (JWT required)
-// =======================
-router.use(authRequired);
-
-// List / Create / Details
-router.get("/", getTrips);
-router.post("/", createTrip);
-router.get("/:id", requireUuidParam("id"), getTripById);
-
-// Finance
-router.get("/:id/finance/summary", requireUuidParam("id"), getTripFinanceSummary);
-router.post(
-  "/:id/finance/open-review",
-  requireUuidParam("id"),
-  requireAdminOrAccountant,
-  openTripFinanceReview
-);
-router.post(
-  "/:id/finance/close",
-  requireUuidParam("id"),
-  requireAdminOrAccountant,
-  closeTripFinance
-);
-
-// Assign / Start / Finish
-router.post("/:id/assign", requireUuidParam("id"), assignTrip);
-router.post(
-  "/:id/start",
-  requireUuidParam("id"),
+module.exports = {
   requireTripStartFinishPermission,
-  startTrip
-);
-router.post(
-  "/:id/finish",
-  requireUuidParam("id"),
-  requireTripStartFinishPermission,
-  finishTrip
-);
-
-module.exports = router;
+};
