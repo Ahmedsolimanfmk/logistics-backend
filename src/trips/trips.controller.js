@@ -393,13 +393,6 @@ async function getTrips(req, res) {
       where.contract_id = String(req.query.contract_id);
     }
 
-    if (req.query.route_id) {
-      if (!isUuid(String(req.query.route_id))) {
-        return res.status(400).json({ message: "Invalid route_id" });
-      }
-      where.route_id = String(req.query.route_id);
-    }
-
     if (canViewAllTrips(role)) {
       // no extra filter
     } else if (role === ROLES.FIELD_SUPERVISOR) {
@@ -418,41 +411,33 @@ async function getTrips(req, res) {
           status: true,
           financial_status: true,
           created_at: true,
+          updated_at: true,
           scheduled_at: true,
           trip_type: true,
           notes: true,
           client_id: true,
           contract_id: true,
           site_id: true,
-          pickup_site_id: true,
-          dropoff_site_id: true,
-          route_id: true,
-          cargo_type_id: true,
+          cargo_type: true,
           cargo_weight: true,
           agreed_revenue: true,
           revenue_currency: true,
           revenue_entry_mode: true,
+          origin: true,
+          destination: true,
+          actual_arrival_at: true,
+          actual_departure_at: true,
           financial_closed_at: true,
+          financial_review_opened_at: true,
 
-          clients: { select: { id: true, name: true } },
+          clients: {
+            select: { id: true, name: true },
+          },
           client_contracts: {
             select: { id: true, contract_no: true, status: true, currency: true },
           },
-          site: { select: { id: true, name: true } },
-          pickup_site: { select: { id: true, name: true, zone_id: true } },
-          dropoff_site: { select: { id: true, name: true, zone_id: true } },
-          routes: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              origin_label: true,
-              destination_label: true,
-              distance_km: true,
-            },
-          },
-          cargo_types: {
-            select: { id: true, code: true, name: true },
+          site: {
+            select: { id: true, name: true, address: true, is_active: true },
           },
         },
       }),
@@ -619,7 +604,6 @@ async function getTrips(req, res) {
     });
   }
 }
-
 // =======================
 // GET /trips/:id
 // =======================
@@ -640,10 +624,6 @@ async function getTripById(req, res) {
         clients: true,
         client_contracts: true,
         site: true,
-        pickup_site: true,
-        dropoff_site: true,
-        routes: true,
-        cargo_types: true,
         trip_assignments: {
           orderBy: { assigned_at: "desc" },
           include: {
@@ -687,6 +667,14 @@ async function getTripById(req, res) {
             },
           },
         },
+        cash_expenses: {
+          orderBy: { created_at: "desc" },
+        },
+        invoice_trip_lines: {
+          include: {
+            ar_invoices: true,
+          },
+        },
       },
     });
 
@@ -707,7 +695,6 @@ async function getTripById(req, res) {
     });
   }
 }
-
 // =======================
 // GET /trips/:id/finance/summary
 // =======================
