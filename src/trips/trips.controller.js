@@ -418,25 +418,20 @@ async function getTrips(req, res) {
       }),
 
       prisma.trip_revenues.findMany({
-        where: {
-          trip_id: { in: tripIds },
-          is_current: true,
-        },
-        orderBy: [{ is_approved: "desc" }, { version_no: "desc" }],
-        select: {
-          id: true,
-          trip_id: true,
-          amount: true,
-          currency: true,
-          source: true,
-          entered_at: true,
-          is_current: true,
-          version_no: true,
-          is_approved: true,
-          pricing_rule_id: true,
-          contract_id: true,
-        },
-      }),
+  where: {
+    trip_id: { in: tripIds },
+  },
+  orderBy: [{ entered_at: "desc" }],
+  select: {
+    id: true,
+    trip_id: true,
+    amount: true,
+    currency: true,
+    source: true,
+    entered_at: true,
+    contract_id: true,
+  },
+}),
 
       prisma.cash_expenses.findMany({
         where: {
@@ -462,10 +457,10 @@ async function getTrips(req, res) {
 
     const revenueByTripId = new Map();
     for (const row of currentRevenues) {
-      if (!revenueByTripId.has(row.trip_id)) {
-        revenueByTripId.set(row.trip_id, row);
-      }
-    }
+  if (!revenueByTripId.has(row.trip_id)) {
+    revenueByTripId.set(row.trip_id, row);
+  }
+}
 
     const expensesAggByTripId = new Map();
     for (const row of approvedExpenses) {
@@ -562,7 +557,7 @@ async function getTripById(req, res) {
           take: 50,
         },
         trip_revenues: {
-          orderBy: [{ is_current: "desc" }, { version_no: "desc" }],
+  orderBy: [{ entered_at: "desc" }],
           take: 10,
           include: {
             users_entered: {
