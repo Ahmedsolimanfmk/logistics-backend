@@ -1,6 +1,7 @@
 const prisma = require("../prisma");
 const { ROLES } = require("../auth/roles");
 const tripFinanceService = require("./trip-finance.service");
+const tripRevenuesService = require("../trip-revenues/trip-revenues.service");
 
 // =======================
 // Helpers
@@ -750,6 +751,44 @@ async function getTripFinanceSummary(req, res) {
 }
 
 // =======================
+// POST /trips/:id/auto-price
+// Manual endpoint to resolve + save revenue
+// =======================
+async function autoPriceTrip(req, res) {
+  try {
+    const userId = getAuthUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const role = getAuthRole(req);
+    if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
+
+    const { id } = req.params;
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
+
+    const { contract_id, notes, auto_approve } = req.body || {};
+
+    const result = await tripRevenuesService.autoCalculateTripRevenue({
+      trip_id: id,
+      contract_id: contract_id || null,
+      entered_by: userId,
+      notes: notes || "AUTO_CALCULATED_MANUALLY",
+      autoApprove: !!auto_approve,
+    });
+
+    return res.json({
+      success: true,
+      message: "Trip revenue calculated successfully",
+      data: result,
+    });
+  } catch (e) {
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e?.message || "Failed to auto-calculate trip revenue",
+    });
+  }
+}
+
+// =======================
 // POST /trips
 // =======================
 async function createTrip(req, res) {
@@ -1099,6 +1138,7 @@ async function startTrip(req, res) {
 
 // =======================
 // POST /trips/:id/finish
+// Auto-calculate revenue after completion if possible
 // =======================
 async function finishTrip(req, res) {
   try {
@@ -1174,7 +1214,26 @@ async function finishTrip(req, res) {
       return t;
     });
 
-    return res.json({ message: "Finished", trip: updated });
+    let autoPricing = null;
+    let autoPricingWarning = null;
+
+    try {
+      autoPricing = await tripRevenuesService.autoCalculateTripRevenue({
+        trip_id: id,
+        entered_by: userId,
+        notes: "AUTO_CALCULATED_ON_FINISH",
+        autoApprove: false,
+      });
+    } catch (autoErr) {
+      autoPricingWarning = autoErr?.message || "Auto pricing skipped";
+    }
+
+    return res.json({
+      message: "Finished",
+      trip: updated,
+      auto_pricing: autoPricing,
+      auto_pricing_warning: autoPricingWarning,
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to finish trip",
@@ -1187,6 +1246,7 @@ module.exports = {
   getTrips,
   getTripById,
   getTripFinanceSummary,
+  autoPriceTrip,
   createTrip,
   assignTrip,
   startTrip,

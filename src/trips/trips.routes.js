@@ -47,6 +47,7 @@ const getTripFinanceSummary = mustBeFn(
   "getTripFinanceSummary",
   tripsController.getTripFinanceSummary
 );
+const autoPriceTrip = mustBeFn("autoPriceTrip", tripsController.autoPriceTrip);
 
 const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
 const startTrip = mustBeFn("startTrip", tripsController.startTrip);
@@ -74,12 +75,15 @@ router.get("/:id", requireUuidParam("id"), getTripById);
 
 // Finance
 router.get("/:id/finance/summary", requireUuidParam("id"), getTripFinanceSummary);
+router.post("/:id/auto-price", requireUuidParam("id"), autoPriceTrip);
+
 router.post(
   "/:id/finance/open-review",
   requireUuidParam("id"),
   requireAdminOrAccountant,
   openTripFinanceReview
 );
+
 router.post(
   "/:id/finance/close",
   requireUuidParam("id"),
@@ -89,12 +93,14 @@ router.post(
 
 // Assign / Start / Finish
 router.post("/:id/assign", requireUuidParam("id"), assignTrip);
+
 router.post(
   "/:id/start",
   requireUuidParam("id"),
   requireTripStartFinishPermission,
   startTrip
 );
+
 router.post(
   "/:id/finish",
   requireUuidParam("id"),

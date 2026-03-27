@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const tripFinanceService = require("../trips/trip-finance.service");
+const contractPricingService = require("../contract-pricing/contract-pricing.service");
 
 // =======================
 // Helpers
@@ -69,6 +70,14 @@ async function getTripOrThrow(tripId) {
           name: true,
         },
       },
+      routes: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          distance_km: true,
+        },
+      },
       trip_assignments: {
         where: { is_active: true },
         take: 1,
@@ -98,6 +107,7 @@ async function getTripOrThrow(tripId) {
     pickup_zone_id: trip.pickup_site?.zone_id || null,
     dropoff_zone_id: trip.dropoff_site?.zone_id || null,
     vehicle_class_id: activeAssignment?.vehicles?.vehicle_class_id || null,
+    route_distance_km: trip.routes?.distance_km || null,
   };
 }
 
@@ -207,6 +217,7 @@ async function validatePricingRuleForTrip({ trip, pricing_rule_id, contract_id }
       is_active: true,
       notes: true,
       updated_at: true,
+      created_at: true,
     },
   });
 
@@ -323,12 +334,24 @@ function validatePricingRuleAgainstTrip(rule, trip) {
   }
 }
 
-function buildPricingRuleSnapshot(rule) {
+function buildPricingRuleSnapshot(rule, resolver = null) {
   if (!rule) return null;
 
   return {
     rule_id: rule.id,
     captured_at: new Date().toISOString(),
+    resolver: resolver
+      ? {
+          matched: !!resolver.matched,
+          matched_rules_count: resolver.matched_rules_count || 0,
+          resolved_amount:
+            resolver.resolved_rule?.resolved_amount ?? null,
+          resolved_currency:
+            resolver.resolved_rule?.resolved_currency ||
+            rule.currency ||
+            null,
+        }
+      : null,
     data: {
       id: rule.id,
       contract_id: rule.contract_id,
@@ -353,6 +376,7 @@ function buildPricingRuleSnapshot(rule) {
       is_active: rule.is_active,
       notes: rule.notes,
       updated_at: rule.updated_at,
+      created_at: rule.created_at || null,
     },
   };
 }
@@ -499,7 +523,7 @@ async function createOrUpdateRevenue({
     trip.revenue_currency ||
     "EGP";
 
-  const pricingRuleSnapshot = buildPricingRuleSnapshot(pricingRule);
+  const pricingRuleSnapshot = buildPricingRuleSnapshot(pricingRule, null);
 
   const current = await prisma.trip_revenues.findFirst({
     where: {
@@ -634,6 +658,131 @@ async function approveCurrentRevenue({
   return updated;
 }
 
+/**
+ * Auto resolve contract price for trip, then create/update trip revenue.
+ * This is the main automation layer for Phase 1.
+ */
+async function autoCalculateTripRevenue({
+  trip_id,
+  entered_by,
+  notes,
+  contract_id = null,
+  autoApprove = false,
+}) {
+  const trip = await getTripOrThrow(trip_id);
+
+  if (upper(trip.financial_status) === "CLOSED") {
+    const err = new Error("Trip finance is CLOSED. Revenue cannot be auto-calculated");
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const resolver = await contractPricingService.resolveTripPrice({
+    tripId: trip_id,
+    contractId: contract_id || trip.contract_id || null,
+  });
+
+  if (!resolver?.matched || !resolver?.resolved_rule) {
+    const err = new Error("No matching pricing rule found for trip");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const effectiveContractId =
+    resolver.trip?.contract_id ||
+    resolver.resolved_rule?.contract_id ||
+    trip.contract_id ||
+    null;
+
+  const pricingRuleId = resolver.resolved_rule.id;
+  const amount = Number(resolver.resolved_rule.resolved_amount || 0);
+  const currency =
+    resolver.resolved_rule.resolved_currency ||
+    resolver.resolved_rule.currency ||
+    trip.revenue_currency ||
+    "EGP";
+
+  const rule = await validatePricingRuleForTrip({
+    trip,
+    pricing_rule_id: pricingRuleId,
+    contract_id: effectiveContractId,
+  });
+
+  validatePricingRuleAgainstTrip(rule, trip);
+
+  const pricingRuleSnapshot = buildPricingRuleSnapshot(rule, resolver);
+
+  const current = await prisma.trip_revenues.findFirst({
+    where: {
+      trip_id,
+      is_current: true,
+    },
+    select: {
+      id: true,
+      version_no: true,
+    },
+  });
+
+  const created = await prisma.$transaction(async (tx) => {
+    if (current) {
+      await tx.trip_revenues.update({
+        where: { id: current.id },
+        data: {
+          is_current: false,
+          replaced_at: new Date(),
+          replaced_by: entered_by || null,
+        },
+      });
+    }
+
+    const newRow = await tx.trip_revenues.create({
+      data: {
+        trip_id,
+        client_id: trip.client_id,
+        contract_id: effectiveContractId,
+        invoice_id: null,
+        pricing_rule_id: pricingRuleId,
+        pricing_rule_snapshot: pricingRuleSnapshot,
+        amount,
+        currency,
+        source: "CONTRACT",
+        entered_by: entered_by || null,
+        notes:
+          notes ||
+          "AUTO_CALCULATED_FROM_PRICING_RULE",
+        version_no: current ? current.version_no + 1 : 1,
+        is_current: true,
+        is_approved: !!autoApprove,
+        approved_by: autoApprove ? entered_by || null : null,
+        approved_at: autoApprove ? new Date() : null,
+        approval_notes: autoApprove ? "AUTO_APPROVED" : null,
+        replaced_at: null,
+        replaced_by: null,
+      },
+      include: includeRevenueRelations(),
+    });
+
+    await tx.trips.update({
+      where: { id: trip_id },
+      data: {
+        contract_id: effectiveContractId,
+        agreed_revenue: amount,
+        revenue_currency: currency,
+        revenue_entry_mode: "CONTRACT",
+      },
+    });
+
+    return newRow;
+  });
+
+  return {
+    success: true,
+    trip_id,
+    resolver,
+    revenue: created,
+  };
+}
+
 async function getTripProfitability(tripId) {
   return tripFinanceService.getTripFinanceSummary(tripId);
 }
@@ -643,5 +792,6 @@ module.exports = {
   getRevenueHistoryByTripId,
   createOrUpdateRevenue,
   approveCurrentRevenue,
+  autoCalculateTripRevenue,
   getTripProfitability,
 };
