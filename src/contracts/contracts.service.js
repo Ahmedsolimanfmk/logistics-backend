@@ -98,7 +98,7 @@ async function getContractById(id) {
     where: { id },
     include: {
       clients: true,
-      pricing_rules: true,
+      contract_pricing_rules: true,
     },
   });
 
