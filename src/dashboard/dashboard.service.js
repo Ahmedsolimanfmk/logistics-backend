@@ -712,7 +712,7 @@ exports.getSummary = async (user, filters = {}) => {
   if (tab === "finance") await loadFinance();
   else if (tab === "maintenance") await loadMaintenance();
   else await loadOperations();
-
+console.log("dashboard summary version: site-not-sites");
   cacheSet(key, out);
   return out;
 };
