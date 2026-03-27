@@ -264,7 +264,7 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
         client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.sites?.name || "موقع غير معروف",
+        site_name: row.site?.name || "موقع غير معروف",
       })),
     },
     summary: {
@@ -341,7 +341,7 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
         client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.sites?.name || "موقع غير معروف",
+        site_name: row.site?.name || "موقع غير معروف",
       })),
       total_need_financial_closure: rows.length,
     },

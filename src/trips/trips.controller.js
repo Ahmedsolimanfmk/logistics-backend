@@ -386,19 +386,21 @@ async function getTrips(req, res) {
           vehicle_id: true,
           driver_id: true,
           field_supervisor_id: true,
-          vehicles: {
-            select: {
-              id: true,
-              fleet_no: true,
-              plate_no: true,
-              display_name: true,
-              status: true,
-              is_active: true,
-              license_expiry_date: true,
-              disable_reason: true,
-              vehicle_class_id: true,
-            },
-          },
+         vehicles: {
+  select: {
+    id: true,
+    fleet_no: true,
+    plate_no: true,
+    display_name: true,
+    status: true,
+    is_active: true,
+    license_expiry_date: true,
+    disable_reason: true,
+    supervisor_id: true,
+    license_no: true,
+    license_issue_date: true,
+  },
+},
           drivers: {
             select: {
               id: true,

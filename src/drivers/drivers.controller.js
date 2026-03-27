@@ -98,7 +98,7 @@ function applyDriverStateRules(res, data, incoming) {
 
 function buildTripLocationLabel(trip) {
   if (!trip) return null;
-  return trip?.sites?.name || null;
+  return trip?.site?.name || null;
 }
 
 // GET /drivers/active
