@@ -7,45 +7,148 @@ datasource db {
 }
 
 model users {
-  id                                             String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  id                                             String                  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   full_name                                      String
-  phone                                          String?                @unique
-  email                                          String?                @unique
+  phone                                          String?                 @unique
+  email                                          String?                 @unique
   password_hash                                  String
-  is_active                                      Boolean                @default(true)
-  created_at                                     DateTime               @default(now()) @db.Timestamptz(6)
-  updated_at                                     DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
+  is_active                                      Boolean                 @default(true)
+  created_at                                     DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at                                     DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
   role                                           user_role
-  ar_invoices_approved                           ar_invoices[]          @relation("ar_invoices_approved_by")
-  ar_invoices_created                            ar_invoices[]          @relation("ar_invoices_created_by")
-  ar_payments_approved                           ar_payments[]          @relation("ar_payments_approved_by")
-  ar_payments_created                            ar_payments[]          @relation("ar_payments_created_by")
-  cash_advances_supervisor                       cash_advances[]        @relation("cash_advances_supervisor")
-  cash_advances_issued                           cash_advances[]        @relation("cash_advances_issued_by")
+
+  ar_invoices_approved                           ar_invoices[]           @relation("ar_invoices_approved_by")
+  ar_invoices_created                            ar_invoices[]           @relation("ar_invoices_created_by")
+  ar_payments_approved                           ar_payments[]           @relation("ar_payments_approved_by")
+  ar_payments_created                            ar_payments[]           @relation("ar_payments_created_by")
+  cash_advances_supervisor                       cash_advances[]         @relation("cash_advances_supervisor")
+  cash_advances_issued                           cash_advances[]         @relation("cash_advances_issued_by")
   cash_expense_audits                            cash_expense_audits[]
-  cash_expenses_cash_expenses_appealed_byTousers cash_expenses[]        @relation("cash_expenses_appealed_byTousers")
-  cash_expenses_approved                         cash_expenses[]        @relation("cash_expenses_approved_by")
-  cash_expenses_created                          cash_expenses[]        @relation("cash_expenses_created_by")
-  cash_expenses_rejected                         cash_expenses[]        @relation("cash_expenses_rejected_by")
-  cash_expenses_resolved                         cash_expenses[]        @relation("cash_expenses_resolved_by")
-  inventory_issues_issued                        inventory_issues[]     @relation("inventory_issues_issued_by")
-  inventory_receipts_created_by                  inventory_receipts[]   @relation("inventory_receipts_created_by")
-  inventory_receipts_submitted_by                inventory_receipts[]   @relation("inventory_receipts_submitted_by")
-  inventory_requests_created                     inventory_requests[]   @relation("inventory_requests_created_by")
-  maintenance_requests_created                   maintenance_requests[] @relation("maintenance_requests_requested_by")
-  maintenance_requests_reviewed                  maintenance_requests[] @relation("maintenance_requests_reviewed_by")
-  trip_assignments_supervisor                    trip_assignments[]     @relation("trip_assignments_supervisor")
-  trip_events_created                            trip_events[]          @relation("trip_events_created_by")
-  trip_revenues_approved                         trip_revenues[]        @relation("trip_revenues_approved_by")
-  trip_revenues_entered                          trip_revenues[]        @relation("trip_revenues_entered_by")
-  trips_created                                  trips[]                @relation("trips_created_by")
-  trips_trips_financial_closed_byTousers         trips[]                @relation("trips_financial_closed_byTousers")
-  trips_trips_general_supervisor_idTousers       trips[]                @relation("trips_general_supervisor_idTousers")
-  vehicle_portfolio                              vehicle_portfolio[]
-  supervised_vehicles                            vehicles[]             @relation("vehicles_supervisor")
+  cash_expenses_cash_expenses_appealed_byTousers cash_expenses[]         @relation("cash_expenses_appealed_byTousers")
+  cash_expenses_approved                         cash_expenses[]         @relation("cash_expenses_approved_by")
+  cash_expenses_created                          cash_expenses[]         @relation("cash_expenses_created_by")
+  cash_expenses_rejected                         cash_expenses[]         @relation("cash_expenses_rejected_by")
+  cash_expenses_resolved                         cash_expenses[]         @relation("cash_expenses_resolved_by")
+  inventory_issues_issued                        inventory_issues[]      @relation("inventory_issues_issued_by")
+  inventory_receipts_created_by                  inventory_receipts[]    @relation("inventory_receipts_created_by")
+  inventory_receipts_submitted_by                inventory_receipts[]    @relation("inventory_receipts_submitted_by")
+  inventory_requests_created                     inventory_requests[]    @relation("inventory_requests_created_by")
+  maintenance_requests_created                   maintenance_requests[]  @relation("maintenance_requests_requested_by")
+  maintenance_requests_reviewed                  maintenance_requests[]  @relation("maintenance_requests_reviewed_by")
+  trip_assignments_supervisor                    trip_assignments[]      @relation("trip_assignments_supervisor")
+  trip_events_created                            trip_events[]           @relation("trip_events_created_by")
+  trip_revenues_approved                         trip_revenues[]         @relation("trip_revenues_approved_by")
+  trip_revenues_entered                          trip_revenues[]         @relation("trip_revenues_entered_by")
+  trips_created                                  trips[]                 @relation("trips_created_by")
+  trips_trips_financial_closed_byTousers         trips[]                 @relation("trips_financial_closed_byTousers")
+  trips_trips_general_supervisor_idTousers       trips[]                 @relation("trips_general_supervisor_idTousers")
+  supervisor_assignments                         supervisor_assignments[]
   vendor_transactions_created                    vendor_transactions[]
 
   @@map("users")
+}
+
+model departments {
+  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  code                   String                   @unique
+  name                   String
+  description            String?
+  is_active              Boolean                  @default(true)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+
+  fleets                 fleets[]
+  supervisor_assignments supervisor_assignments[]
+
+  @@index([is_active], map: "idx_departments_is_active")
+  @@map("departments")
+}
+
+model fleets {
+  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  department_id          String                   @db.Uuid
+  code                   String                   @unique
+  name                   String
+  description            String?
+  is_active              Boolean                  @default(true)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+
+  departments            departments              @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  fleet_vehicles         fleet_vehicles[]
+  fleet_site_assignments fleet_site_assignments[]
+  supervisor_assignments supervisor_assignments[]
+
+  @@index([department_id], map: "idx_fleets_department_id")
+  @@index([is_active], map: "idx_fleets_is_active")
+  @@map("fleets")
+}
+
+model fleet_vehicles {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  fleet_id      String    @db.Uuid
+  vehicle_id    String    @db.Uuid
+  assigned_at   DateTime  @default(now()) @db.Timestamptz(6)
+  unassigned_at DateTime? @db.Timestamptz(6)
+  is_active     Boolean   @default(true)
+  notes         String?
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  fleets        fleets    @relation(fields: [fleet_id], references: [id], onDelete: Cascade)
+  vehicles      vehicles  @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+
+  @@index([fleet_id], map: "idx_fleet_vehicles_fleet_id")
+  @@index([vehicle_id], map: "idx_fleet_vehicles_vehicle_id")
+  @@index([is_active], map: "idx_fleet_vehicles_is_active")
+  @@map("fleet_vehicles")
+}
+
+model fleet_site_assignments {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  fleet_id      String    @db.Uuid
+  site_id       String    @db.Uuid
+  assigned_at   DateTime  @default(now()) @db.Timestamptz(6)
+  unassigned_at DateTime? @db.Timestamptz(6)
+  is_active     Boolean   @default(true)
+  notes         String?
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  fleets        fleets    @relation(fields: [fleet_id], references: [id], onDelete: Cascade)
+  sites         sites     @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@index([fleet_id], map: "idx_fleet_site_assignments_fleet_id")
+  @@index([site_id], map: "idx_fleet_site_assignments_site_id")
+  @@index([is_active], map: "idx_fleet_site_assignments_is_active")
+  @@map("fleet_site_assignments")
+}
+
+model supervisor_assignments {
+  id            String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  supervisor_id String             @db.Uuid
+  department_id String?            @db.Uuid
+  fleet_id      String?            @db.Uuid
+  site_id       String?            @db.Uuid
+  role_scope    supervisor_scope
+  assigned_at   DateTime           @default(now()) @db.Timestamptz(6)
+  unassigned_at DateTime?          @db.Timestamptz(6)
+  is_active     Boolean            @default(true)
+  notes         String?
+  created_at    DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+
+  users         users              @relation(fields: [supervisor_id], references: [id], onDelete: Cascade)
+  departments   departments?       @relation(fields: [department_id], references: [id], onDelete: Cascade)
+  fleets        fleets?            @relation(fields: [fleet_id], references: [id], onDelete: Cascade)
+  sites         sites?             @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@index([supervisor_id], map: "idx_supervisor_assignments_supervisor_id")
+  @@index([department_id], map: "idx_supervisor_assignments_department_id")
+  @@index([fleet_id], map: "idx_supervisor_assignments_fleet_id")
+  @@index([site_id], map: "idx_supervisor_assignments_site_id")
+  @@index([is_active], map: "idx_supervisor_assignments_is_active")
+  @@map("supervisor_assignments")
 }
 
 model vendors {
@@ -70,6 +173,7 @@ model vendors {
   notes                   String?
   created_at              DateTime                  @default(now()) @db.Timestamptz(6)
   updated_at              DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+
   cash_expenses           cash_expenses[]
   inventory_receipts      inventory_receipts[]
   maintenance_work_orders maintenance_work_orders[]
@@ -95,6 +199,7 @@ model vendor_transactions {
   created_by                   String?                   @db.Uuid
   created_at                   DateTime                  @default(now()) @db.Timestamptz(6)
   status                       vendor_transaction_status @default(APPROVED)
+
   users                        users?                    @relation(fields: [created_by], references: [id])
   cash_expense                 cash_expenses?            @relation(fields: [related_cash_expense_id], references: [id])
   inventory_receipt            inventory_receipts?       @relation(fields: [related_inventory_receipt_id], references: [id])
@@ -118,75 +223,69 @@ model vehicles {
   gps_device_id            String?
   is_active                Boolean                    @default(true)
   plate_no                 String                     @unique
-  supervisor_id            String?                    @db.Uuid
-  vehicle_class_id         String?                    @db.Uuid
   disable_reason           vehicle_disable_reason?
   license_expiry_date      DateTime?                  @db.Timestamptz(6)
   license_issue_date       DateTime?                  @db.Timestamptz(6)
   license_no               String?
   status                   vehicle_status             @default(AVAILABLE)
+
   cash_expenses            cash_expenses[]
   maintenance_requests     maintenance_requests[]
   maintenance_work_orders  maintenance_work_orders[]
   installed_part_items     part_items[]               @relation("part_items_installed_vehicle")
   trip_assignments         trip_assignments[]
-  vehicle_portfolio        vehicle_portfolio[]
-  supervisor               users?                     @relation("vehicles_supervisor", fields: [supervisor_id], references: [id], onUpdate: NoAction)
-  vehicle_classes          vehicle_classes?           @relation(fields: [vehicle_class_id], references: [id], onUpdate: NoAction)
   work_order_installations work_order_installations[]
+  fleet_assignments        fleet_vehicles[]
 
-  @@index([supervisor_id], map: "idx_vehicles_supervisor_id")
-  @@index([vehicle_class_id], map: "idx_vehicles_vehicle_class_id")
   @@index([license_expiry_date], map: "idx_vehicles_license_expiry")
   @@index([status], map: "idx_vehicles_status")
   @@map("vehicles")
 }
 
 model clients {
-  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  name                   String
-  is_active              Boolean                  @default(true)
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  contact_email          String?
-  contact_name           String?
-  contact_phone          String?
-  email                  String?
-  hq_address             String?
-  notes                  String?
-  phone                  String?
-  tax_no                 String?
-  ar_invoices            ar_invoices[]
-  ar_payments            ar_payments[]
-  contracts              client_contracts[]
-  sites                  sites[]
-  trip_revenues          trip_revenues[]
-  trips                  trips[]
-  routes                 routes[]
-  contract_pricing_rules contract_pricing_rules[]
+  id            String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name          String
+  is_active     Boolean            @default(true)
+  created_at    DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  contact_email String?
+  contact_name  String?
+  contact_phone String?
+  email         String?
+  hq_address    String?
+  notes         String?
+  phone         String?
+  tax_no        String?
+
+  ar_invoices   ar_invoices[]
+  ar_payments   ar_payments[]
+  contracts     client_contracts[]
+  sites         sites[]
+  trip_revenues trip_revenues[]
+  trips         trips[]
 
   @@index([name], map: "idx_clients_name")
   @@map("clients")
 }
 
 model client_contracts {
-  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  client_id              String                   @db.Uuid
-  contract_no            String?                  @unique
-  start_date             DateTime                 @db.Timestamptz(6)
-  end_date               DateTime?                @db.Timestamptz(6)
-  billing_cycle          contract_billing_cycle   @default(MONTHLY)
-  contract_value         Decimal?                 @db.Decimal(12, 2)
-  currency               String?                  @default("EGP")
-  status                 contract_status          @default(ACTIVE)
-  notes                  String?
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  ar_invoices            ar_invoices[]
-  clients                clients                  @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  trip_revenues          trip_revenues[]
-  trips                  trips[]
-  contract_pricing_rules contract_pricing_rules[]
+  id             String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  client_id      String                 @db.Uuid
+  contract_no    String?                @unique
+  start_date     DateTime               @db.Timestamptz(6)
+  end_date       DateTime?              @db.Timestamptz(6)
+  billing_cycle  contract_billing_cycle @default(MONTHLY)
+  contract_value Decimal?               @db.Decimal(12, 2)
+  currency       String?                @default("EGP")
+  status         contract_status        @default(ACTIVE)
+  notes          String?
+  created_at     DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
+
+  ar_invoices    ar_invoices[]
+  clients        clients                @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  trip_revenues  trip_revenues[]
+  trips          trips[]
 
   @@index([client_id], map: "idx_client_contracts_client_id")
   @@index([status], map: "idx_client_contracts_status")
@@ -210,6 +309,7 @@ model ar_invoices {
   approved_at        DateTime?                @db.Timestamptz(6)
   rejection_reason   String?
   notes              String?
+
   invoice_trip_lines ar_invoice_trip_lines[]
   users_approved     users?                   @relation("ar_invoices_approved_by", fields: [approved_by], references: [id])
   clients            clients                  @relation(fields: [client_id], references: [id], onDelete: Cascade)
@@ -239,6 +339,7 @@ model ar_payments {
   approved_by      String?                  @db.Uuid
   approved_at      DateTime?                @db.Timestamptz(6)
   rejection_reason String?
+
   allocations      ar_payment_allocations[]
   users_approved   users?                   @relation("ar_payments_approved_by", fields: [approved_by], references: [id])
   clients          clients                  @relation(fields: [client_id], references: [id], onDelete: Cascade)
@@ -256,6 +357,7 @@ model ar_payment_allocations {
   invoice_id       String      @db.Uuid
   amount_allocated Decimal     @db.Decimal(12, 2)
   created_at       DateTime    @default(now()) @db.Timestamptz(6)
+
   ar_invoices      ar_invoices @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
   ar_payments      ar_payments @relation(fields: [payment_id], references: [id], onDelete: Cascade)
 
@@ -271,6 +373,7 @@ model ar_invoice_trip_lines {
   trip_id     String      @db.Uuid
   amount      Decimal     @db.Decimal(12, 2)
   notes       String?
+
   ar_invoices ar_invoices @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
   trips       trips       @relation(fields: [trip_id], references: [id], onDelete: Cascade)
 
@@ -281,26 +384,20 @@ model ar_invoice_trip_lines {
 }
 
 model sites {
-  id                    String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  client_id             String                   @db.Uuid
-  zone_id               String?                  @db.Uuid
-  name                  String
-  address               String?
-  is_active             Boolean                  @default(true)
-  created_at            DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  clients               clients                  @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  zones                 zones?                   @relation(fields: [zone_id], references: [id], onUpdate: NoAction)
-  site_trips            trips[]                  @relation("trips_site")
-  pickup_routes         routes[]                 @relation("routes_pickup_site")
-  dropoff_routes        routes[]                 @relation("routes_dropoff_site")
-  pickup_trip_refs      trips[]                  @relation("trips_pickup_site")
-  dropoff_trip_refs     trips[]                  @relation("trips_dropoff_site")
-  pricing_rules_pickup  contract_pricing_rules[] @relation("pricing_rules_pickup_site")
-  pricing_rules_dropoff contract_pricing_rules[] @relation("pricing_rules_dropoff_site")
+  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  client_id              String                   @db.Uuid
+  name                   String
+  address                String?
+  is_active              Boolean                  @default(true)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+
+  clients                clients                  @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  site_trips             trips[]                  @relation("trips_site")
+  fleet_site_assignments fleet_site_assignments[]
+  supervisor_assignments supervisor_assignments[]
 
   @@index([client_id], map: "idx_sites_client_id")
-  @@index([zone_id], map: "idx_sites_zone_id")
   @@map("sites")
 }
 
@@ -308,10 +405,6 @@ model trips {
   id                                       String                  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   client_id                                String                  @db.Uuid
   site_id                                  String                  @db.Uuid
-  pickup_site_id                           String?                 @db.Uuid
-  dropoff_site_id                          String?                 @db.Uuid
-  route_id                                 String?                 @db.Uuid
-  cargo_type_id                            String?                 @db.Uuid
   created_by                               String                  @db.Uuid
   general_supervisor_id                    String?                 @db.Uuid
   scheduled_at                             DateTime?               @db.Timestamptz(6)
@@ -335,6 +428,7 @@ model trips {
   status                                   trip_status             @default(DRAFT)
   financial_status                         trip_financial_status   @default(OPEN)
   contract_id                              String?                 @db.Uuid
+
   invoice_trip_lines                       ar_invoice_trip_lines[]
   cash_expenses                            cash_expenses[]
   trip_assignments                         trip_assignments[]
@@ -346,10 +440,6 @@ model trips {
   users_trips_financial_closed_byTousers   users?                  @relation("trips_financial_closed_byTousers", fields: [financial_closed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_trips_general_supervisor_idTousers users?                  @relation("trips_general_supervisor_idTousers", fields: [general_supervisor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   site                                     sites                   @relation("trips_site", fields: [site_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  pickup_site                              sites?                  @relation("trips_pickup_site", fields: [pickup_site_id], references: [id], onUpdate: NoAction)
-  dropoff_site                             sites?                  @relation("trips_dropoff_site", fields: [dropoff_site_id], references: [id], onUpdate: NoAction)
-  routes                                   routes?                 @relation(fields: [route_id], references: [id], onUpdate: NoAction)
-  cargo_types                              cargo_types?            @relation(fields: [cargo_type_id], references: [id], onUpdate: NoAction)
 
   @@index([created_at], map: "idx_trips_created_at")
   @@index([status], map: "idx_trips_status")
@@ -357,10 +447,6 @@ model trips {
   @@index([client_id], map: "idx_trips_client_id")
   @@index([contract_id], map: "idx_trips_contract_id")
   @@index([site_id], map: "idx_trips_site_id")
-  @@index([pickup_site_id], map: "idx_trips_pickup_site_id")
-  @@index([dropoff_site_id], map: "idx_trips_dropoff_site_id")
-  @@index([route_id], map: "idx_trips_route_id")
-  @@index([cargo_type_id], map: "idx_trips_cargo_type_id")
   @@index([created_at])
   @@map("trips")
 }
@@ -379,6 +465,7 @@ model trip_revenues {
   entered_at       DateTime            @default(now()) @db.Timestamptz(6)
   approved_at      DateTime?           @db.Timestamptz(6)
   notes            String?
+
   users_approved   users?              @relation("trip_revenues_approved_by", fields: [approved_by], references: [id])
   clients          clients             @relation(fields: [client_id], references: [id], onDelete: Cascade)
   client_contracts client_contracts?   @relation(fields: [contract_id], references: [id])
@@ -401,6 +488,7 @@ model trip_assignments {
   assigned_at                       DateTime  @default(now()) @db.Timestamptz(6)
   is_active                         Boolean   @default(true)
   unassigned_at                     DateTime? @db.Timestamptz(6)
+
   drivers                           drivers   @relation(fields: [driver_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_trip_assignments_supervisor users?    @relation("trip_assignments_supervisor", fields: [field_supervisor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   trips                             trips     @relation(fields: [trip_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -419,153 +507,13 @@ model trip_events {
   created_by_user                     String?  @db.Uuid
   payload                             Json?
   created_at                          DateTime @default(now()) @db.Timestamptz(6)
+
   users_trip_events_created_byTousers users?   @relation("trip_events_created_by", fields: [created_by_user], references: [id], onDelete: NoAction, onUpdate: NoAction)
   trips                               trips    @relation(fields: [trip_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([trip_id], map: "idx_trip_events_trip_id")
   @@index([event_type], map: "idx_trip_events_event_type")
   @@map("trip_events")
-}
-
-model vehicle_classes {
-  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  code                   String                   @unique
-  name                   String
-  description            String?
-  is_active              Boolean                  @default(true)
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  vehicles               vehicles[]
-  contract_pricing_rules contract_pricing_rules[]
-
-  @@index([name], map: "idx_vehicle_classes_name")
-  @@index([is_active], map: "idx_vehicle_classes_is_active")
-  @@map("vehicle_classes")
-}
-
-model cargo_types {
-  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  code                   String                   @unique
-  name                   String
-  description            String?
-  is_active              Boolean                  @default(true)
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  trips                  trips[]
-  contract_pricing_rules contract_pricing_rules[]
-
-  @@index([name], map: "idx_cargo_types_name")
-  @@index([is_active], map: "idx_cargo_types_is_active")
-  @@map("cargo_types")
-}
-
-model zones {
-  id               String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  code             String?                  @unique
-  name             String
-  description      String?
-  is_active        Boolean                  @default(true)
-  created_at       DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at       DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  sites            sites[]
-  routes_from_zone contract_pricing_rules[] @relation("pricing_rules_from_zone")
-  routes_to_zone   contract_pricing_rules[] @relation("pricing_rules_to_zone")
-
-  @@index([name], map: "idx_zones_name")
-  @@index([is_active], map: "idx_zones_is_active")
-  @@map("zones")
-}
-
-model routes {
-  id                     String                   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  client_id              String?                  @db.Uuid
-  pickup_site_id         String?                  @db.Uuid
-  dropoff_site_id        String?                  @db.Uuid
-  code                   String?                  @unique
-  name                   String
-  origin_label           String?
-  destination_label      String?
-  distance_km            Decimal?                 @db.Decimal(12, 3)
-  is_active              Boolean                  @default(true)
-  notes                  String?
-  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
-  clients                clients?                 @relation(fields: [client_id], references: [id], onUpdate: NoAction)
-  pickup_site            sites?                   @relation("routes_pickup_site", fields: [pickup_site_id], references: [id], onUpdate: NoAction)
-  dropoff_site           sites?                   @relation("routes_dropoff_site", fields: [dropoff_site_id], references: [id], onUpdate: NoAction)
-  trips                  trips[]
-  contract_pricing_rules contract_pricing_rules[]
-
-  @@index([client_id], map: "idx_routes_client_id")
-  @@index([pickup_site_id], map: "idx_routes_pickup_site_id")
-  @@index([dropoff_site_id], map: "idx_routes_dropoff_site_id")
-  @@index([is_active], map: "idx_routes_is_active")
-  @@map("routes")
-}
-
-model contract_pricing_rules {
-  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  contract_id      String    @db.Uuid
-  client_id        String    @db.Uuid
-  route_id         String?   @db.Uuid
-  pickup_site_id   String?   @db.Uuid
-  dropoff_site_id  String?   @db.Uuid
-  from_zone_id     String?   @db.Uuid
-  to_zone_id       String?   @db.Uuid
-  vehicle_class_id String?   @db.Uuid
-  cargo_type_id    String?   @db.Uuid
-  trip_type        String?
-  min_weight       Decimal?  @db.Decimal(12, 3)
-  max_weight       Decimal?  @db.Decimal(12, 3)
-  base_price       Decimal   @db.Decimal(12, 2)
-  currency         String?   @default("EGP")
-  price_per_ton    Decimal?  @db.Decimal(12, 2)
-  price_per_km     Decimal?  @db.Decimal(12, 2)
-  priority         Int       @default(100)
-  effective_from   DateTime? @db.Timestamptz(6)
-  effective_to     DateTime? @db.Timestamptz(6)
-  is_active        Boolean   @default(true)
-  notes            String?
-  created_at       DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at       DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
-
-  clients          clients          @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  client_contracts client_contracts @relation(fields: [contract_id], references: [id], onDelete: Cascade)
-  routes           routes?          @relation(fields: [route_id], references: [id], onUpdate: NoAction)
-  pickup_site      sites?           @relation("pricing_rules_pickup_site", fields: [pickup_site_id], references: [id], onUpdate: NoAction)
-  dropoff_site     sites?           @relation("pricing_rules_dropoff_site", fields: [dropoff_site_id], references: [id], onUpdate: NoAction)
-  from_zone        zones?           @relation("pricing_rules_from_zone", fields: [from_zone_id], references: [id], onUpdate: NoAction)
-  to_zone          zones?           @relation("pricing_rules_to_zone", fields: [to_zone_id], references: [id], onUpdate: NoAction)
-  vehicle_classes  vehicle_classes? @relation(fields: [vehicle_class_id], references: [id], onUpdate: NoAction)
-  cargo_types      cargo_types?     @relation(fields: [cargo_type_id], references: [id], onUpdate: NoAction)
-
-  @@index([contract_id], map: "idx_contract_pricing_rules_contract_id")
-  @@index([client_id], map: "idx_contract_pricing_rules_client_id")
-  @@index([route_id], map: "idx_contract_pricing_rules_route_id")
-  @@index([pickup_site_id], map: "idx_contract_pricing_rules_pickup_site_id")
-  @@index([dropoff_site_id], map: "idx_contract_pricing_rules_dropoff_site_id")
-  @@index([from_zone_id], map: "idx_contract_pricing_rules_from_zone_id")
-  @@index([to_zone_id], map: "idx_contract_pricing_rules_to_zone_id")
-  @@index([vehicle_class_id], map: "idx_contract_pricing_rules_vehicle_class_id")
-  @@index([cargo_type_id], map: "idx_contract_pricing_rules_cargo_type_id")
-  @@index([trip_type], map: "idx_contract_pricing_rules_trip_type")
-  @@index([priority], map: "idx_contract_pricing_rules_priority")
-  @@index([is_active], map: "idx_contract_pricing_rules_is_active")
-  @@map("contract_pricing_rules")
-}
-
-model vehicle_portfolio {
-  id                  String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  vehicle_id          String   @db.Uuid
-  field_supervisor_id String   @db.Uuid
-  is_active           Boolean  @default(true)
-  created_at          DateTime @default(now()) @db.Timestamptz(6)
-  updated_at          DateTime @default(now()) @updatedAt @db.Timestamptz(6)
-  users               users    @relation(fields: [field_supervisor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vehicles            vehicles @relation(fields: [vehicle_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([vehicle_id, field_supervisor_id], map: "uq_vehicle_portfolio_vehicle_supervisor")
-  @@map("vehicle_portfolio")
 }
 
 model cash_advances {
@@ -582,6 +530,7 @@ model cash_advances {
   settlement_reference                           String?
   settlement_type                                String?
   status                                         cash_advance_status @default(OPEN)
+
   users_cash_advances_field_supervisor_idTousers users               @relation("cash_advances_supervisor", fields: [field_supervisor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_cash_advances_issued_byTousers           users               @relation("cash_advances_issued_by", fields: [issued_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cash_expenses                                  cash_expenses[]
@@ -626,6 +575,7 @@ model cash_expenses {
   inventory_receipt_id                   String?                      @db.Uuid
   vendor_id                              String?                      @db.Uuid
   approval_status                        cash_expense_approval_status @default(PENDING)
+
   cash_expense_audits                    cash_expense_audits[]
   users_cash_expenses_appealed_byTousers users?                       @relation("cash_expenses_appealed_byTousers", fields: [appealed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users_cash_expenses_approved_byTousers users?                       @relation("cash_expenses_approved_by", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -661,6 +611,7 @@ model cash_expense_audits {
   before        String?
   after         String?
   created_at    DateTime      @default(now()) @db.Timestamptz(6)
+
   users         users         @relation(fields: [actor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cash_expenses cash_expenses @relation(fields: [expense_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -685,6 +636,7 @@ model maintenance_work_orders {
   vendor_id                     String?                         @db.Uuid
   status                        maintenance_work_order_status   @default(DRAFT)
   type                          maintenance_work_order_type     @default(CORRECTIVE)
+
   cash_expenses                 cash_expenses[]
   inventory_issues              inventory_issues[]
   inventory_requests            inventory_requests[]            @relation("inventory_requests_work_order")
@@ -713,6 +665,7 @@ model maintenance_work_order_events {
   notes                   String?
   payload                 Json?
   created_at              DateTime                @default(now()) @db.Timestamptz(6)
+
   maintenance_work_orders maintenance_work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade)
 
   @@index([event_type], map: "idx_mwoe_event_type")
@@ -733,6 +686,7 @@ model maintenance_requests {
   created_at          DateTime                          @default(now()) @db.Timestamptz(6)
   updated_at          DateTime                          @default(now()) @updatedAt @db.Timestamptz(6)
   status              maintenance_request_status        @default(SUBMITTED)
+
   attachments         maintenance_request_attachments[]
   requested_by_user   users                             @relation("maintenance_requests_requested_by", fields: [requested_by], references: [id], onUpdate: NoAction)
   reviewed_by_user    users?                            @relation("maintenance_requests_reviewed_by", fields: [reviewed_by], references: [id], onUpdate: NoAction)
@@ -755,6 +709,7 @@ model maintenance_request_attachments {
   storage_path  String
   uploaded_by   String?                     @db.Uuid
   created_at    DateTime                    @default(now()) @db.Timestamptz(6)
+
   request       maintenance_requests        @relation(fields: [request_id], references: [id], onDelete: Cascade)
 
   @@index([request_id], map: "idx_maintenance_request_attachments_request_id")
@@ -770,6 +725,7 @@ model post_maintenance_reports {
   checklist_json          Json?
   remarks                 String?
   created_at              DateTime                @default(now()) @db.Timestamptz(6)
+
   maintenance_work_orders maintenance_work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade)
 
   @@index([checked_at], map: "idx_pmr_checked_at")
@@ -783,6 +739,7 @@ model warehouses {
   is_active          Boolean              @default(true)
   created_at         DateTime             @default(now()) @db.Timestamptz(6)
   updated_at         DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+
   inventory_issues   inventory_issues[]
   inventory_receipts inventory_receipts[]
   inventory_requests inventory_requests[]
@@ -803,6 +760,7 @@ model parts {
   updated_at                   DateTime                       @default(now()) @updatedAt @db.Timestamptz(6)
   category                     String?
   is_active                    Boolean                        @default(true)
+
   inventory_issue_lines        inventory_issue_lines[]
   inventory_receipt_bulk_lines inventory_receipt_bulk_lines[]
   inventory_receipt_items      inventory_receipt_items[]
@@ -827,6 +785,7 @@ model part_items {
   received_receipt_id      String?                          @db.Uuid
   installed_vehicle_id     String?                          @db.Uuid
   installed_at             DateTime?                        @db.Timestamptz(6)
+
   inventory_issue_lines    inventory_issue_lines[]
   reservations             inventory_request_reservations[]
   vehicles                 vehicles?                        @relation("part_items_installed_vehicle", fields: [installed_vehicle_id], references: [id])
@@ -848,6 +807,7 @@ model warehouse_parts {
   qty_on_hand  Int        @default(0)
   created_at   DateTime   @default(now()) @db.Timestamptz(6)
   updated_at   DateTime   @default(now()) @updatedAt @db.Timestamptz(6)
+
   parts        parts      @relation(fields: [part_id], references: [id], onDelete: Cascade)
   warehouses   warehouses @relation(fields: [warehouse_id], references: [id], onDelete: Cascade)
 
@@ -871,6 +831,7 @@ model inventory_receipts {
   submitted_at        DateTime?                      @db.Timestamptz(6)
   submitted_by        String?                        @db.Uuid
   vendor_id           String?                        @db.Uuid
+
   cash_expenses       cash_expenses[]
   bulk_lines          inventory_receipt_bulk_lines[]
   items               inventory_receipt_items[]
@@ -897,6 +858,7 @@ model inventory_receipt_items {
   manufacturer_serial String
   unit_cost           Decimal?           @db.Decimal(12, 2)
   notes               String?
+
   parts               parts              @relation(fields: [part_id], references: [id], onDelete: NoAction)
   inventory_receipts  inventory_receipts @relation(fields: [receipt_id], references: [id], onDelete: Cascade)
 
@@ -916,6 +878,7 @@ model inventory_receipt_bulk_lines {
   total_cost         Decimal?           @db.Decimal(12, 2)
   notes              String?
   created_at         DateTime           @default(now()) @db.Timestamptz(6)
+
   parts              parts              @relation(fields: [part_id], references: [id], onDelete: NoAction)
   inventory_receipts inventory_receipts @relation(fields: [receipt_id], references: [id], onDelete: Cascade)
 
@@ -933,6 +896,7 @@ model inventory_requests {
   notes         String?
   created_at    DateTime                         @default(now()) @db.Timestamptz(6)
   updated_at    DateTime                         @default(now()) @updatedAt @db.Timestamptz(6)
+
   issues        inventory_issues[]
   lines         inventory_request_lines[]
   reservations  inventory_request_reservations[]
@@ -952,6 +916,7 @@ model inventory_request_lines {
   part_id    String             @db.Uuid
   needed_qty Int
   notes      String?
+
   parts      parts              @relation(fields: [part_id], references: [id], onDelete: NoAction)
   requests   inventory_requests @relation(fields: [request_id], references: [id], onDelete: Cascade)
 
@@ -965,6 +930,7 @@ model inventory_request_reservations {
   request_id   String             @db.Uuid
   part_item_id String             @db.Uuid
   created_at   DateTime           @default(now()) @db.Timestamptz(6)
+
   part_items   part_items         @relation(fields: [part_item_id], references: [id], onDelete: Cascade)
   requests     inventory_requests @relation(fields: [request_id], references: [id], onDelete: Cascade)
 
@@ -986,6 +952,7 @@ model inventory_issues {
   status                  inventory_issue_status  @default(DRAFT)
   updated_at              DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
   warehouse_id            String?                 @db.Uuid
+
   inventory_issue_lines   inventory_issue_lines[]
   users_issued            users?                  @relation("inventory_issues_issued_by", fields: [issued_by], references: [id])
   requests                inventory_requests?     @relation(fields: [request_id], references: [id])
@@ -1009,6 +976,7 @@ model inventory_issue_lines {
   total_cost       Decimal?         @db.Decimal(12, 2)
   notes            String?
   part_item_id     String?          @db.Uuid
+
   inventory_issues inventory_issues @relation(fields: [issue_id], references: [id], onDelete: Cascade)
   parts            parts            @relation(fields: [part_id], references: [id], onDelete: NoAction)
   part_items       part_items?      @relation(fields: [part_item_id], references: [id])
@@ -1032,6 +1000,7 @@ model work_order_installations {
   warranty_until_km       Int?
   notes                   String?
   part_item_id            String?                 @db.Uuid
+
   parts                   parts                   @relation(fields: [part_id], references: [id])
   part_items              part_items?             @relation(fields: [part_item_id], references: [id])
   vehicles                vehicles                @relation(fields: [vehicle_id], references: [id])
@@ -1060,6 +1029,7 @@ model drivers {
   national_id         String?                @unique
   phone2              String?                @unique
   status              driver_status          @default(ACTIVE)
+
   trip_assignments    trip_assignments[]
 
   @@index([is_active])
@@ -1096,6 +1066,13 @@ enum user_role {
   DISPATCHER
   OPERATIONS
   MAINTENANCE_MANAGER
+}
+
+enum supervisor_scope {
+  DEPARTMENT
+  FLEET
+  SITE
+  FLEET_SITE
 }
 
 enum cash_payment_source {
