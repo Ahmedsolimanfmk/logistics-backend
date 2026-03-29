@@ -8,79 +8,95 @@ const inventoryAnalytics = require("./inventory.analytics");
 const tripsAnalytics = require("./trips.analytics");
 const profitAnalytics = require("./profit.analytics");
 
+function resolveLimit(query = {}, fallback = 10, max = 50) {
+  const raw = Number(query.limit ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(raw)));
+}
+
+function buildContext(companyId, user, query = {}) {
+  return {
+    companyId,
+    query,
+    range: resolveTimeRange(query),
+    scope: buildScopeFilters(companyId, user, query),
+  };
+}
+
 // =======================
 // Finance
 // =======================
 
-async function getFinanceExpenseSummary({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getFinanceExpenseSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getExpenseSummary({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
-async function getFinanceExpenseByType({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getFinanceExpenseByType({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getExpenseByType({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getFinanceExpenseByVehicle({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getFinanceExpenseByVehicle({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getExpenseByVehicle({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getFinanceExpenseByPaymentSource({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getFinanceExpenseByPaymentSource({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getExpenseByPaymentSource({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
-async function getFinanceTopVendors({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getFinanceTopVendors({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getTopVendors({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getFinanceExpenseApprovalBreakdown({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getFinanceExpenseApprovalBreakdown({
+  companyId,
+  user,
+  query = {},
+}) {
+  const ctx = buildContext(companyId, user, query);
 
   return financeAnalytics.getExpenseApprovalBreakdown({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
@@ -88,27 +104,26 @@ async function getFinanceExpenseApprovalBreakdown({ user, query }) {
 // AR
 // =======================
 
-async function getArOutstandingSummary({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getArOutstandingSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return arAnalytics.getOutstandingSummary({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
-async function getArTopDebtors({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getArTopDebtors({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return arAnalytics.getTopDebtors({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
@@ -116,27 +131,26 @@ async function getArTopDebtors({ user, query }) {
 // Maintenance
 // =======================
 
-async function getMaintenanceOpenWorkOrders({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getMaintenanceOpenWorkOrders({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return maintenanceAnalytics.getOpenWorkOrders({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
-async function getMaintenanceCostByVehicle({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getMaintenanceCostByVehicle({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return maintenanceAnalytics.getCostByVehicle({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
@@ -144,25 +158,26 @@ async function getMaintenanceCostByVehicle({ user, query }) {
 // Inventory
 // =======================
 
-async function getInventoryTopIssuedParts({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getInventoryTopIssuedParts({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return inventoryAnalytics.getTopIssuedParts({
-    range,
-    scope,
-    limit,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getInventoryLowStockItems({ user, query }) {
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getInventoryLowStockItems({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return inventoryAnalytics.getLowStockItems({
-    scope,
-    limit,
+    companyId: ctx.companyId,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
@@ -170,79 +185,78 @@ async function getInventoryLowStockItems({ user, query }) {
 // Trips
 // =======================
 
-async function getTripsSummary({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getTripsSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getTripsSummary({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
 
-async function getActiveTrips({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getActiveTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getActiveTrips({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getTripsNeedingFinancialClosure({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getTripsNeedingFinancialClosure({
+  companyId,
+  user,
+  query = {},
+}) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getTripsNeedingFinancialClosure({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getTopClientsByTrips({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getTopClientsByTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getTopClientsByTrips({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getTopSitesByTrips({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getTopSitesByTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getTopSitesByTrips({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
-async function getTopVehiclesByTrips({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
-  const limit = Math.max(1, Math.min(50, Number(query.limit || 10)));
+async function getTopVehiclesByTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return tripsAnalytics.getTopVehiclesByTrips({
-    range,
-    scope,
-    limit,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
   });
 }
 
@@ -250,20 +264,16 @@ async function getTopVehiclesByTrips({ user, query }) {
 // Profit
 // =======================
 
-async function getEntityProfitSummary({ user, query }) {
-  const range = resolveTimeRange(query);
-  const scope = buildScopeFilters(user, query);
+async function getEntityProfitSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
   return profitAnalytics.getClientProfitSummary({
-    range,
-    scope,
-    query,
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
   });
 }
-
-// =======================
-// EXPORTS
-// =======================
 
 module.exports = {
   getFinanceExpenseSummary,

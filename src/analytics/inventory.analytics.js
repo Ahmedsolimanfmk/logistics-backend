@@ -1,14 +1,15 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function toMoney(v) {
   return Math.round(Number(v || 0) * 100) / 100;
 }
 
-async function getTopIssuedParts({ range, scope, limit = 10 }) {
-  const rows = await prisma.inventory_issue_lines.groupBy({
-    by: ["part_id"],
+async function getTopIssuedParts({ companyId, range, scope, limit = 10 }) {
+  const rows = await prisma.inventory_issue_lines.findMany({
     where: {
-      inventory_issues: {
+      company_id: companyId,
+      issue: {
+        company_id: companyId,
         issued_at: {
           gte: range.from,
           lte: range.to,
@@ -16,51 +17,54 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
         status: "POSTED",
       },
     },
-    _sum: {
+    select: {
+      id: true,
+      part_id: true,
       qty: true,
       total_cost: true,
-    },
-    _count: {
-      _all: true,
-    },
-    orderBy: {
-      _sum: {
-        qty: "desc",
-      },
-    },
-    take: limit,
-  });
-
-  const partIds = rows.map((r) => r.part_id);
-
-  const parts = partIds.length
-    ? await prisma.parts.findMany({
-        where: {
-          id: { in: partIds },
-        },
+      part: {
         select: {
           id: true,
           name: true,
           part_number: true,
           category: true,
         },
-      })
-    : [];
-
-  const partMap = new Map(parts.map((p) => [p.id, p]));
-
-  const items = rows.map((row) => {
-    const part = partMap.get(row.part_id);
-    return {
-      part_id: row.part_id,
-      part_name: part?.name || "صنف غير معروف",
-      part_number: part?.part_number || null,
-      category: part?.category || null,
-      total_issued_qty: Number(row._sum.qty || 0),
-      total_cost: toMoney(row._sum.total_cost || 0),
-      issue_lines_count: row._count._all || 0,
-    };
+      },
+    },
+    orderBy: {
+      id: "desc",
+    },
+    take: 5000,
   });
+
+  const map = new Map();
+
+  for (const row of rows) {
+    const key = row.part_id || "__UNKNOWN__";
+    const prev = map.get(key) || {
+      part_id: row.part_id,
+      part_name: row.part?.name || "صنف غير معروف",
+      part_number: row.part?.part_number || null,
+      category: row.part?.category || null,
+      total_issued_qty: 0,
+      total_cost: 0,
+      issue_lines_count: 0,
+    };
+
+    prev.total_issued_qty += Number(row.qty || 0);
+    prev.total_cost += Number(row.total_cost || 0);
+    prev.issue_lines_count += 1;
+
+    map.set(key, prev);
+  }
+
+  const items = Array.from(map.values())
+    .map((item) => ({
+      ...item,
+      total_cost: toMoney(item.total_cost),
+    }))
+    .sort((a, b) => b.total_issued_qty - a.total_issued_qty)
+    .slice(0, limit);
 
   return {
     metric: "inventory_top_issued_parts",
@@ -70,6 +74,7 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
     },
@@ -82,16 +87,23 @@ async function getTopIssuedParts({ range, scope, limit = 10 }) {
         (sum, x) => sum + Number(x.total_issued_qty || 0),
         0
       ),
-      total_cost: toMoney(items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)),
+      total_cost: toMoney(
+        items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)
+      ),
     },
   };
 }
 
-async function getLowStockItems({ scope, limit = 10 }) {
+async function getLowStockItems({ companyId, scope, limit = 10 }) {
   const rows = await prisma.warehouse_parts.findMany({
     where: {
-      parts: {
+      company_id: companyId,
+      part: {
+        company_id: companyId,
         is_active: true,
+      },
+      warehouse: {
+        company_id: companyId,
       },
     },
     select: {
@@ -99,7 +111,7 @@ async function getLowStockItems({ scope, limit = 10 }) {
       qty_on_hand: true,
       warehouse_id: true,
       part_id: true,
-      parts: {
+      part: {
         select: {
           id: true,
           name: true,
@@ -108,7 +120,7 @@ async function getLowStockItems({ scope, limit = 10 }) {
           min_stock: true,
         },
       },
-      warehouses: {
+      warehouse: {
         select: {
           id: true,
           name: true,
@@ -118,33 +130,35 @@ async function getLowStockItems({ scope, limit = 10 }) {
     orderBy: {
       qty_on_hand: "asc",
     },
+    take: 500,
   });
 
   const filtered = rows
     .filter((row) => {
-      const minStock = Number(row.parts?.min_stock || 0);
+      const minStock = Number(row.part?.min_stock || 0);
       return minStock > 0 && Number(row.qty_on_hand || 0) <= minStock;
     })
     .slice(0, limit);
 
   const items = filtered.map((row) => ({
-    warehouse_id: row.warehouses?.id || row.warehouse_id,
-    warehouse_name: row.warehouses?.name || "مخزن غير معروف",
-    part_id: row.parts?.id || row.part_id,
-    part_name: row.parts?.name || "صنف غير معروف",
-    part_number: row.parts?.part_number || null,
-    category: row.parts?.category || null,
+    warehouse_id: row.warehouse?.id || row.warehouse_id,
+    warehouse_name: row.warehouse?.name || "مخزن غير معروف",
+    part_id: row.part?.id || row.part_id,
+    part_name: row.part?.name || "صنف غير معروف",
+    part_number: row.part?.part_number || null,
+    category: row.part?.category || null,
     qty_on_hand: Number(row.qty_on_hand || 0),
-    min_stock: Number(row.parts?.min_stock || 0),
+    min_stock: Number(row.part?.min_stock || 0),
     shortage: Math.max(
       0,
-      Number(row.parts?.min_stock || 0) - Number(row.qty_on_hand || 0)
+      Number(row.part?.min_stock || 0) - Number(row.qty_on_hand || 0)
     ),
   }));
 
   return {
     metric: "inventory_low_stock_items",
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
     },

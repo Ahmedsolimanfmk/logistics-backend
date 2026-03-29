@@ -65,6 +65,10 @@ model users {
   vendor_transactions_created_by       vendor_transactions[]
   warehouses_managed                   warehouses[]                    @relation("warehouses_manager")
   alert_reads                          alert_reads[]
+    ai_conversations ai_conversations[]
+  ai_messages      ai_messages[]
+  ai_query_runs    ai_query_runs[]
+  ai_action_runs   ai_action_runs[]
 
   @@map("users")
 }
@@ -1431,6 +1435,10 @@ model companies {
   ar_payments                    ar_payments[]
   ar_payment_allocations         ar_payment_allocations[]
   ar_invoice_trip_lines          ar_invoice_trip_lines[]
+  ai_conversations ai_conversations[]
+  ai_messages      ai_messages[]
+  ai_query_runs    ai_query_runs[]
+  ai_action_runs   ai_action_runs[]
 }
 
 model company_users {
@@ -1804,4 +1812,131 @@ enum work_order_installation_type {
   NEW
   REPLACEMENT
   REINSTALL
+}
+enum ai_conversation_status {
+  ACTIVE
+  ARCHIVED
+  CLOSED
+}
+
+enum ai_message_role {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum ai_run_status {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+model ai_conversations {
+  id              String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id      String                 @db.Uuid
+  user_id         String                 @db.Uuid
+  title           String?
+  context         String?
+  status          ai_conversation_status @default(ACTIVE)
+  last_message_at DateTime?              @db.Timestamptz(6)
+  created_at      DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
+
+  company         companies              @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  user            users                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  messages        ai_messages[]
+  query_runs      ai_query_runs[]
+  action_runs     ai_action_runs[]
+
+  @@index([company_id], map: "idx_ai_conversations_company_id")
+  @@index([user_id], map: "idx_ai_conversations_user_id")
+  @@index([status], map: "idx_ai_conversations_status")
+  @@index([last_message_at], map: "idx_ai_conversations_last_message_at")
+  @@map("ai_conversations")
+}
+
+model ai_messages {
+  id                String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id        String          @db.Uuid
+  conversation_id   String          @db.Uuid
+  user_id           String?         @db.Uuid
+  role              ai_message_role
+  content           String
+  parsed_mode       String?
+  parsed_intent     String?
+  parsed_json       Json?
+  response_json     Json?
+  created_at        DateTime        @default(now()) @db.Timestamptz(6)
+
+  company           companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation      ai_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  user              users?           @relation(fields: [user_id], references: [id])
+
+  query_runs        ai_query_runs[]
+  action_runs       ai_action_runs[]
+
+  @@index([company_id], map: "idx_ai_messages_company_id")
+  @@index([conversation_id], map: "idx_ai_messages_conversation_id")
+  @@index([user_id], map: "idx_ai_messages_user_id")
+  @@index([role], map: "idx_ai_messages_role")
+  @@index([created_at], map: "idx_ai_messages_created_at")
+  @@map("ai_messages")
+}
+
+model ai_query_runs {
+  id               String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id       String        @db.Uuid
+  conversation_id  String?       @db.Uuid
+  message_id       String?       @db.Uuid
+  user_id          String?       @db.Uuid
+  question         String
+  parsed_json      Json?
+  analytics_query  Json?
+  result_json      Json?
+  session_snapshot Json?
+  status           ai_run_status @default(PENDING)
+  error_message    String?
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+  finished_at      DateTime?     @db.Timestamptz(6)
+
+  company          companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation     ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  message          ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  user             users?            @relation(fields: [user_id], references: [id])
+
+  @@index([company_id], map: "idx_ai_query_runs_company_id")
+  @@index([conversation_id], map: "idx_ai_query_runs_conversation_id")
+  @@index([message_id], map: "idx_ai_query_runs_message_id")
+  @@index([user_id], map: "idx_ai_query_runs_user_id")
+  @@index([status], map: "idx_ai_query_runs_status")
+  @@index([created_at], map: "idx_ai_query_runs_created_at")
+  @@map("ai_query_runs")
+}
+
+model ai_action_runs {
+  id              String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id      String        @db.Uuid
+  conversation_id String?       @db.Uuid
+  message_id      String?       @db.Uuid
+  user_id         String?       @db.Uuid
+  action_name     String
+  payload_json    Json?
+  result_json     Json?
+  status          ai_run_status @default(PENDING)
+  error_message   String?
+  executed_at     DateTime?     @db.Timestamptz(6)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+
+  company         companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation    ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  message         ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  user            users?            @relation(fields: [user_id], references: [id])
+
+  @@index([company_id], map: "idx_ai_action_runs_company_id")
+  @@index([conversation_id], map: "idx_ai_action_runs_conversation_id")
+  @@index([message_id], map: "idx_ai_action_runs_message_id")
+  @@index([user_id], map: "idx_ai_action_runs_user_id")
+  @@index([status], map: "idx_ai_action_runs_status")
+  @@index([created_at], map: "idx_ai_action_runs_created_at")
+  @@map("ai_action_runs")
 }

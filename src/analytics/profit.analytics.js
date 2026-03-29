@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function toMoney(v) {
   return Math.round(Number(v || 0) * 100) / 100;
@@ -14,7 +14,7 @@ function isUuid(value) {
   );
 }
 
-async function resolveClientIdsByHint(clientHint) {
+async function resolveClientIdsByHint(companyId, clientHint) {
   const hint = normalizeHint(clientHint);
   if (!hint) return null;
 
@@ -25,7 +25,10 @@ async function resolveClientIdsByHint(clientHint) {
   }
 
   const clients = await prisma.clients.findMany({
-    where: { OR: or },
+    where: {
+      company_id: companyId,
+      OR: or,
+    },
     select: { id: true, name: true },
     take: 20,
   });
@@ -43,9 +46,10 @@ async function resolveClientIdsByHint(clientHint) {
   };
 }
 
-async function getClientRevenueRows({ range, clientIds }) {
+async function getClientRevenueRows({ range, companyId, clientIds }) {
   return prisma.ar_invoices.findMany({
     where: {
+      company_id: companyId,
       issue_date: {
         gte: range.from,
         lte: range.to,
@@ -63,7 +67,7 @@ async function getClientRevenueRows({ range, clientIds }) {
       total_amount: true,
       status: true,
       issue_date: true,
-      clients: {
+      client: {
         select: {
           id: true,
           name: true,
@@ -76,9 +80,10 @@ async function getClientRevenueRows({ range, clientIds }) {
   });
 }
 
-async function getClientExpenseRows({ range, clientIds }) {
+async function getClientExpenseRows({ range, companyId, clientIds }) {
   const trips = await prisma.trips.findMany({
     where: {
+      company_id: companyId,
       created_at: {
         gte: range.from,
         lte: range.to,
@@ -102,6 +107,7 @@ async function getClientExpenseRows({ range, clientIds }) {
 
   return prisma.cash_expenses.findMany({
     where: {
+      company_id: companyId,
       created_at: {
         gte: range.from,
         lte: range.to,
@@ -184,8 +190,9 @@ function buildReasoning({ revenue, expense, profit, margin_pct }) {
   };
 }
 
-async function getClientProfitSummary({ range, scope, query = {} }) {
+async function getClientProfitSummary({ companyId, range, scope, query = {} }) {
   const clientHint = normalizeHint(query?.client_hint);
+
   if (!clientHint) {
     return {
       metric: "client_profit_summary",
@@ -195,6 +202,7 @@ async function getClientProfitSummary({ range, scope, query = {} }) {
         key: range.key,
       },
       filters: {
+        company_id: companyId,
         role: scope?.role || null,
         client_hint: null,
       },
@@ -218,13 +226,13 @@ async function getClientProfitSummary({ range, scope, query = {} }) {
     };
   }
 
-  const resolved = await resolveClientIdsByHint(clientHint);
+  const resolved = await resolveClientIdsByHint(companyId, clientHint);
   const clientIds = resolved?.ids || ["__NO_MATCH__"];
   const matchedClients = resolved?.names || [];
 
   const [revenueRows, expenseRows] = await Promise.all([
-    getClientRevenueRows({ range, clientIds }),
-    getClientExpenseRows({ range, clientIds }),
+    getClientRevenueRows({ range, companyId, clientIds }),
+    getClientExpenseRows({ range, companyId, clientIds }),
   ]);
 
   const revenue = toMoney(
@@ -236,8 +244,7 @@ async function getClientProfitSummary({ range, scope, query = {} }) {
   );
 
   const profit = toMoney(revenue - expense);
-  const margin_pct =
-    revenue > 0 ? toMoney((profit / revenue) * 100) : 0;
+  const margin_pct = revenue > 0 ? toMoney((profit / revenue) * 100) : 0;
 
   const reasoning = buildReasoning({
     revenue,
@@ -254,6 +261,7 @@ async function getClientProfitSummary({ range, scope, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       client_hint: clientHint,
     },

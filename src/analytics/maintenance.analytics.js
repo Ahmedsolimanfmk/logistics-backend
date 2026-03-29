@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function toMoney(v) {
   return Math.round(Number(v || 0) * 100) / 100;
@@ -33,9 +33,10 @@ function buildRangeFilter(range, preferredField = "opened_at") {
   };
 }
 
-async function getOpenWorkOrders({ range, scope }) {
+async function getOpenWorkOrders({ companyId, range, scope }) {
   const rows = await prisma.maintenance_work_orders.findMany({
     where: {
+      company_id: companyId,
       ...buildRangeFilter(range, "opened_at"),
       status: {
         notIn: ["COMPLETED", "CANCELLED"],
@@ -48,7 +49,7 @@ async function getOpenWorkOrders({ range, scope }) {
       opened_at: true,
       created_at: true,
       vehicle_id: true,
-      vehicles: {
+      vehicle: {
         select: {
           id: true,
           fleet_no: true,
@@ -57,10 +58,7 @@ async function getOpenWorkOrders({ range, scope }) {
         },
       },
     },
-    orderBy: [
-      { opened_at: "desc" },
-      { created_at: "desc" },
-    ],
+    orderBy: [{ opened_at: "desc" }, { created_at: "desc" }],
   });
 
   const byStatusMap = new Map();
@@ -83,6 +81,7 @@ async function getOpenWorkOrders({ range, scope }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
     },
     data: {
@@ -95,9 +94,9 @@ async function getOpenWorkOrders({ range, scope }) {
         opened_at: row.opened_at,
         created_at: row.created_at,
         vehicle_id: row.vehicle_id,
-        fleet_no: row.vehicles?.fleet_no || null,
-        plate_no: row.vehicles?.plate_no || null,
-        display_name: row.vehicles?.display_name || null,
+        fleet_no: row.vehicle?.fleet_no || null,
+        plate_no: row.vehicle?.plate_no || null,
+        display_name: row.vehicle?.display_name || null,
       })),
     },
     summary: {
@@ -106,10 +105,11 @@ async function getOpenWorkOrders({ range, scope }) {
   };
 }
 
-async function getCostByVehicle({ range, scope, limit = 10 }) {
+async function getCostByVehicle({ companyId, range, scope, limit = 10 }) {
   const rows = await prisma.cash_expenses.groupBy({
     by: ["vehicle_id"],
     where: {
+      company_id: companyId,
       created_at: {
         gte: range.from,
         lte: range.to,
@@ -143,6 +143,7 @@ async function getCostByVehicle({ range, scope, limit = 10 }) {
   const vehicles = vehicleIds.length
     ? await prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           id: { in: vehicleIds },
         },
         select: {
@@ -177,6 +178,7 @@ async function getCostByVehicle({ range, scope, limit = 10 }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
     },
@@ -186,7 +188,9 @@ async function getCostByVehicle({ range, scope, limit = 10 }) {
     summary: {
       currency: "EGP",
       vehicles_count: items.length,
-      total_cost: toMoney(items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)),
+      total_cost: toMoney(
+        items.reduce((sum, x) => sum + Number(x.total_cost || 0), 0)
+      ),
     },
   };
 }

@@ -3,44 +3,31 @@ const router = express.Router();
 
 const controller = require("./analytics.controller");
 const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
+const {
+  requireCompanyActive,
+  requireCompanyFeature,
+} = require("../companies/company-access.middleware");
+
+router.use(authRequired);
+router.use(requireCompany);
+router.use(requireCompanyActive);
+router.use(requireCompanyFeature("analytics.access"));
 
 // =======================
 // Finance
 // =======================
 
-router.get(
-  "/finance/expense-summary",
-  authRequired,
-  controller.getFinanceExpenseSummary
-);
-
-router.get(
-  "/finance/expense-by-type",
-  authRequired,
-  controller.getFinanceExpenseByType
-);
-
-router.get(
-  "/finance/expense-by-vehicle",
-  authRequired,
-  controller.getFinanceExpenseByVehicle
-);
-
+router.get("/finance/expense-summary", controller.getFinanceExpenseSummary);
+router.get("/finance/expense-by-type", controller.getFinanceExpenseByType);
+router.get("/finance/expense-by-vehicle", controller.getFinanceExpenseByVehicle);
 router.get(
   "/finance/expense-by-payment-source",
-  authRequired,
   controller.getFinanceExpenseByPaymentSource
 );
-
-router.get(
-  "/finance/top-vendors",
-  authRequired,
-  controller.getFinanceTopVendors
-);
-
+router.get("/finance/top-vendors", controller.getFinanceTopVendors);
 router.get(
   "/finance/expense-approval-breakdown",
-  authRequired,
   controller.getFinanceExpenseApprovalBreakdown
 );
 
@@ -48,17 +35,8 @@ router.get(
 // AR
 // =======================
 
-router.get(
-  "/ar/outstanding-summary",
-  authRequired,
-  controller.getArOutstandingSummary
-);
-
-router.get(
-  "/ar/top-debtors",
-  authRequired,
-  controller.getArTopDebtors
-);
+router.get("/ar/outstanding-summary", controller.getArOutstandingSummary);
+router.get("/ar/top-debtors", controller.getArTopDebtors);
 
 // =======================
 // Maintenance
@@ -66,13 +44,10 @@ router.get(
 
 router.get(
   "/maintenance/open-work-orders",
-  authRequired,
   controller.getMaintenanceOpenWorkOrders
 );
-
 router.get(
   "/maintenance/cost-by-vehicle",
-  authRequired,
   controller.getMaintenanceCostByVehicle
 );
 
@@ -80,56 +55,27 @@ router.get(
 // Inventory
 // =======================
 
-router.get(
-  "/inventory/top-issued-parts",
-  authRequired,
-  controller.getInventoryTopIssuedParts
-);
-
-router.get(
-  "/inventory/low-stock-items",
-  authRequired,
-  controller.getInventoryLowStockItems
-);
+router.get("/inventory/top-issued-parts", controller.getInventoryTopIssuedParts);
+router.get("/inventory/low-stock-items", controller.getInventoryLowStockItems);
 
 // =======================
 // Trips
 // =======================
 
-router.get(
-  "/trips/summary",
-  authRequired,
-  controller.getTripsSummary
-);
-
-router.get(
-  "/trips/active",
-  authRequired,
-  controller.getActiveTrips
-);
-
+router.get("/trips/summary", controller.getTripsSummary);
+router.get("/trips/active", controller.getActiveTrips);
 router.get(
   "/trips/need-financial-closure",
-  authRequired,
   controller.getTripsNeedingFinancialClosure
 );
+router.get("/trips/top-clients", controller.getTopClientsByTrips);
+router.get("/trips/top-sites", controller.getTopSitesByTrips);
+router.get("/trips/top-vehicles", controller.getTopVehiclesByTrips);
 
-router.get(
-  "/trips/top-clients",
-  authRequired,
-  controller.getTopClientsByTrips
-);
+// =======================
+// Profit
+// =======================
 
-router.get(
-  "/trips/top-sites",
-  authRequired,
-  controller.getTopSitesByTrips
-);
-
-router.get(
-  "/trips/top-vehicles",
-  authRequired,
-  controller.getTopVehiclesByTrips
-);
+router.get("/profit/client-summary", controller.getEntityProfitSummary);
 
 module.exports = router;

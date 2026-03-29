@@ -3,6 +3,7 @@ const aiAnalyticsService = require("./ai-analytics.service");
 async function queryAiAnalytics(req, res, next) {
   try {
     const result = await aiAnalyticsService.queryAiAnalytics({
+      companyId: req.companyId,
       user: req.user,
       body: req.body,
     });
@@ -16,6 +17,7 @@ async function queryAiAnalytics(req, res, next) {
 async function getAiSuggestedQuestions(req, res, next) {
   try {
     const result = await aiAnalyticsService.getAiSuggestedQuestions({
+      companyId: req.companyId,
       user: req.user,
       query: req.query,
     });
@@ -29,6 +31,7 @@ async function getAiSuggestedQuestions(req, res, next) {
 async function getAiInsights(req, res, next) {
   try {
     const result = await aiAnalyticsService.getAiInsights({
+      companyId: req.companyId,
       user: req.user,
       query: req.query,
     });

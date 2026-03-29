@@ -1,4 +1,5 @@
 const analyticsService = require("../analytics/analytics.service");
+const aiPersistenceService = require("./ai-persistence.service");
 const { parseAiQuestion } = require("./ai-analytics.parser");
 const { buildArabicAnswer } = require("./ai-analytics.answer");
 const { getSuggestedQuestions } = require("./ai-analytics.suggestions");
@@ -130,16 +131,46 @@ function parsedToAnalyticsQuery(parsed) {
   };
 }
 
+function extractConversationMeta({ body }) {
+  return {
+    conversationId:
+      body?.conversation_id || body?.conversationId || null,
+    context: String(body?.context || "").trim() || null,
+    title: String(body?.title || "").trim() || null,
+  };
+}
+
+function getUserId(user) {
+  return user?.id || null;
+}
+
+function getEffectiveSessionSnapshot({ body, persistedSnapshot }) {
+  return body?.session_snapshot || persistedSnapshot || null;
+}
+
+function buildPersistableAssistantText(response) {
+  if (!response) return "";
+  if (typeof response?.answer === "string" && response.answer.trim()) {
+    return response.answer.trim();
+  }
+  if (typeof response?.ui?.summary === "string" && response.ui.summary.trim()) {
+    return response.ui.summary.trim();
+  }
+  return "تم تنفيذ الطلب بنجاح";
+}
+
 // =======================
 // Compare helper
 // =======================
-async function buildExpenseCompareResult({ user }) {
+async function buildExpenseCompareResult({ companyId, user }) {
   const [thisMonth, lastMonth] = await Promise.all([
     analyticsService.getFinanceExpenseSummary({
+      companyId,
       user,
       query: { range: "this_month" },
     }),
     analyticsService.getFinanceExpenseSummary({
+      companyId,
       user,
       query: { range: "last_month" },
     }),
@@ -395,12 +426,12 @@ function buildActionPreviewResponse({ parsed }) {
 // =======================
 // Query execution
 // =======================
-async function executeParsedQuery({ user, parsed }) {
+async function executeParsedQuery({ companyId, user, parsed }) {
   const intent = parsed?.intent;
   const query = parsedToAnalyticsQuery(parsed);
 
   if (intent === "expense_summary_compare") {
-    return buildExpenseCompareResult({ user });
+    return buildExpenseCompareResult({ companyId, user });
   }
 
   const handlers = {
@@ -433,17 +464,18 @@ async function executeParsedQuery({ user, parsed }) {
   const handler = handlers[intent];
   if (!handler) return null;
 
-  return handler.call(analyticsService, { user, query });
+  return handler.call(analyticsService, { companyId, user, query });
 }
 
 // =======================
 // Inline insights
 // =======================
-async function buildFinanceInlineInsights({ user, parsed, result }) {
+async function buildFinanceInlineInsights({ companyId, user, parsed, result }) {
   const expenseSummary =
     parsed?.intent === "expense_summary"
       ? result
       : await analyticsService.getFinanceExpenseSummary({
+          companyId,
           user,
           query: { range: "this_month" },
         });
@@ -452,6 +484,7 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "expense_by_type"
       ? result
       : await analyticsService.getFinanceExpenseByType({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -460,6 +493,7 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "expense_by_vehicle"
       ? result
       : await analyticsService.getFinanceExpenseByVehicle({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -468,6 +502,7 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "expense_by_payment_source"
       ? result
       : await analyticsService.getFinanceExpenseByPaymentSource({
+          companyId,
           user,
           query: { range: "this_month" },
         });
@@ -476,6 +511,7 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "top_vendors"
       ? result
       : await analyticsService.getFinanceTopVendors({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -484,11 +520,13 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "expense_approval_breakdown"
       ? result
       : await analyticsService.getFinanceExpenseApprovalBreakdown({
+          companyId,
           user,
           query: { range: "this_month" },
         });
 
   const expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
+    companyId,
     user,
     query: { range: "last_month" },
   });
@@ -507,11 +545,12 @@ async function buildFinanceInlineInsights({ user, parsed, result }) {
   }).slice(0, 5);
 }
 
-async function buildArInlineInsights({ user, parsed, result }) {
+async function buildArInlineInsights({ companyId, user, parsed, result }) {
   const outstandingSummary =
     parsed?.intent === "outstanding_summary"
       ? result
       : await analyticsService.getArOutstandingSummary({
+          companyId,
           user,
           query: { range: "this_month" },
         });
@@ -520,6 +559,7 @@ async function buildArInlineInsights({ user, parsed, result }) {
     parsed?.intent === "top_debtors"
       ? result
       : await analyticsService.getArTopDebtors({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -533,11 +573,12 @@ async function buildArInlineInsights({ user, parsed, result }) {
   }).slice(0, 3);
 }
 
-async function buildMaintenanceInlineInsights({ user, parsed, result }) {
+async function buildMaintenanceInlineInsights({ companyId, user, parsed, result }) {
   const openWorkOrders =
     parsed?.intent === "open_work_orders"
       ? result
       : await analyticsService.getMaintenanceOpenWorkOrders({
+          companyId,
           user,
           query: { range: "this_month" },
         });
@@ -546,6 +587,7 @@ async function buildMaintenanceInlineInsights({ user, parsed, result }) {
     parsed?.intent === "maintenance_cost_by_vehicle"
       ? result
       : await analyticsService.getMaintenanceCostByVehicle({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -559,11 +601,12 @@ async function buildMaintenanceInlineInsights({ user, parsed, result }) {
   }).slice(0, 3);
 }
 
-async function buildInventoryInlineInsights({ user, parsed, result }) {
+async function buildInventoryInlineInsights({ companyId, user, parsed, result }) {
   const topIssuedParts =
     parsed?.intent === "top_issued_parts"
       ? result
       : await analyticsService.getInventoryTopIssuedParts({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -572,6 +615,7 @@ async function buildInventoryInlineInsights({ user, parsed, result }) {
     parsed?.intent === "low_stock_items"
       ? result
       : await analyticsService.getInventoryLowStockItems({
+          companyId,
           user,
           query: { limit: 10 },
         });
@@ -585,11 +629,12 @@ async function buildInventoryInlineInsights({ user, parsed, result }) {
   }).slice(0, 3);
 }
 
-async function buildTripsInlineInsights({ user, parsed, result }) {
+async function buildTripsInlineInsights({ companyId, user, parsed, result }) {
   const tripsSummary =
     parsed?.intent === "trips_summary"
       ? result
       : await analyticsService.getTripsSummary({
+          companyId,
           user,
           query: { range: "this_month" },
         });
@@ -598,6 +643,7 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
     parsed?.intent === "active_trips"
       ? result
       : await analyticsService.getActiveTrips({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -606,6 +652,7 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
     parsed?.intent === "trips_need_financial_closure"
       ? result
       : await analyticsService.getTripsNeedingFinancialClosure({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -614,6 +661,7 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
     parsed?.intent === "top_clients_by_trips"
       ? result
       : await analyticsService.getTopClientsByTrips({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -622,6 +670,7 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
     parsed?.intent === "top_sites_by_trips"
       ? result
       : await analyticsService.getTopSitesByTrips({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -630,6 +679,7 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
     parsed?.intent === "top_vehicles_by_trips"
       ? result
       : await analyticsService.getTopVehiclesByTrips({
+          companyId,
           user,
           query: { range: "this_month", limit: 5 },
         });
@@ -647,27 +697,27 @@ async function buildTripsInlineInsights({ user, parsed, result }) {
   }).slice(0, 5);
 }
 
-async function buildInlineInsights({ user, parsed, result }) {
+async function buildInlineInsights({ companyId, user, parsed, result }) {
   const moduleName = parsed?.module || parsed?.domain;
 
   if (moduleName === "finance") {
-    return buildFinanceInlineInsights({ user, parsed, result });
+    return buildFinanceInlineInsights({ companyId, user, parsed, result });
   }
 
   if (moduleName === "ar") {
-    return buildArInlineInsights({ user, parsed, result });
+    return buildArInlineInsights({ companyId, user, parsed, result });
   }
 
   if (moduleName === "maintenance") {
-    return buildMaintenanceInlineInsights({ user, parsed, result });
+    return buildMaintenanceInlineInsights({ companyId, user, parsed, result });
   }
 
   if (moduleName === "inventory") {
-    return buildInventoryInlineInsights({ user, parsed, result });
+    return buildInventoryInlineInsights({ companyId, user, parsed, result });
   }
 
   if (moduleName === "trips") {
-    return buildTripsInlineInsights({ user, parsed, result });
+    return buildTripsInlineInsights({ companyId, user, parsed, result });
   }
 
   return [];
@@ -684,115 +734,230 @@ function tryEntityFollowUp({ parsed, question, snapshot }) {
   });
 }
 
-async function handleActionExecution({ parsed, user }) {
-  const execution = await executeAiAction({
-    interpreted: {
-      mode: "action",
-      domain: parsed.domain,
-      action: parsed.intent,
-      confidence: parsed.confidence,
-      auto_execute: parsed.auto_execute,
-      payload: parsed.action_payload || {},
-    },
-    user,
+async function handleActionExecution({
+  companyId,
+  parsed,
+  user,
+  conversation,
+  userMessage,
+}) {
+  const actionRun = await aiPersistenceService.createActionRun({
+    companyId,
+    conversationId: conversation?.id || null,
+    messageId: userMessage?.id || null,
+    userId: getUserId(user),
+    actionName: parsed?.intent || "unknown_action",
+    payloadJson: parsed?.action_payload || null,
   });
 
-  const built = buildArabicAnswer({
-    parsed,
-    execution,
-    result: execution,
-  });
-
-  const followUps = getFollowUpQuestions({
-    parsed,
-    execution,
-    result: execution,
-  });
-
-  return {
-    ok: true,
-    parsed,
-    intent: parsed,
-    mode: "action",
-    action: parsed.intent,
-    ui: built.ui,
-    execution: {
-      status: execution?.executed ? "executed" : "execution_failed",
-      ready_to_execute: false,
-      executed: Boolean(execution?.executed),
-      payload: parsed.action_payload || null,
-      missing_fields: [],
-    },
-    result: execution,
-    answer: built.answer,
-    followUps,
-    insights: [],
-    session_snapshot: null,
-  };
-}
-
-async function handleQueryExecution({ parsed, user, question, body }) {
-  const result = await executeParsedQuery({ user, parsed });
-
-  if (!result) {
-    const entityFollowUpResponse = tryEntityFollowUp({
-      parsed,
-      question,
-      snapshot: body?.session_snapshot || null,
+  try {
+    const execution = await executeAiAction({
+      interpreted: {
+        mode: "action",
+        domain: parsed.domain,
+        action: parsed.intent,
+        confidence: parsed.confidence,
+        auto_execute: parsed.auto_execute,
+        payload: parsed.action_payload || {},
+      },
+      companyId,
+      user,
     });
 
-    if (entityFollowUpResponse) {
-      return entityFollowUpResponse;
+    const built = buildArabicAnswer({
+      parsed,
+      execution,
+      result: execution,
+    });
+
+    const followUps = getFollowUpQuestions({
+      parsed,
+      execution,
+      result: execution,
+    });
+
+    const response = {
+      ok: true,
+      parsed,
+      intent: parsed,
+      mode: "action",
+      action: parsed.intent,
+      ui: built.ui,
+      execution: {
+        status: execution?.executed ? "executed" : "execution_failed",
+        ready_to_execute: false,
+        executed: Boolean(execution?.executed),
+        payload: parsed.action_payload || null,
+        missing_fields: [],
+      },
+      result: execution,
+      answer: built.answer,
+      followUps,
+      insights: [],
+      session_snapshot: null,
+      conversation_id: conversation?.id || null,
+    };
+
+    await aiPersistenceService.markActionRunSuccess({
+      companyId,
+      runId: actionRun.id,
+      resultJson: execution,
+    });
+
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation?.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: response,
+    });
+
+    return response;
+  } catch (error) {
+    await aiPersistenceService.markActionRunFailed({
+      companyId,
+      runId: actionRun.id,
+      errorMessage: error?.message || "Action execution failed",
+      resultJson: null,
+    });
+    throw error;
+  }
+}
+
+async function handleQueryExecution({
+  companyId,
+  parsed,
+  user,
+  question,
+  body,
+  conversation,
+  userMessage,
+}) {
+  const analyticsQuery = parsedToAnalyticsQuery(parsed);
+
+  const queryRun = await aiPersistenceService.createQueryRun({
+    companyId,
+    conversationId: conversation?.id || null,
+    messageId: userMessage?.id || null,
+    userId: getUserId(user),
+    question,
+    parsedJson: parsed,
+    analyticsQuery,
+    sessionSnapshot: body?.session_snapshot || null,
+  });
+
+  try {
+    const result = await executeParsedQuery({ companyId, user, parsed });
+
+    if (!result) {
+      const entityFollowUpResponse = tryEntityFollowUp({
+        parsed,
+        question,
+        snapshot: body?.session_snapshot || null,
+      });
+
+      const finalResponse = entityFollowUpResponse || buildUnknownResponse(parsed);
+
+      await aiPersistenceService.markQueryRunSuccess({
+        companyId,
+        runId: queryRun.id,
+        resultJson: finalResponse?.result || finalResponse || null,
+        sessionSnapshot: finalResponse?.session_snapshot || null,
+      });
+
+      await aiPersistenceService.createAssistantMessage({
+        companyId,
+        conversationId: conversation?.id,
+        content: buildPersistableAssistantText(finalResponse),
+        parsed,
+        responseJson: finalResponse,
+      });
+
+      return {
+        ...finalResponse,
+        conversation_id: conversation?.id || null,
+      };
     }
 
-    return buildUnknownResponse(parsed);
+    const built = buildArabicAnswer({
+      parsed,
+      result,
+    });
+
+    const followUps = getFollowUpQuestions({
+      parsed,
+      result,
+    });
+
+    const insights = await buildInlineInsights({
+      companyId,
+      user,
+      parsed,
+      result,
+    });
+
+    const baseSessionSnapshot = buildSessionSnapshot({
+      parsed,
+      result,
+    });
+
+    const sessionSnapshot = enrichSessionSnapshotWithEntities({
+      parsed,
+      result,
+      snapshot: baseSessionSnapshot,
+    });
+
+    const response = {
+      ok: true,
+      parsed,
+      intent: parsed,
+      mode: "query",
+      ui: built.ui,
+      result,
+      answer: built.answer,
+      followUps,
+      insights,
+      session_snapshot: sessionSnapshot,
+      conversation_id: conversation?.id || null,
+    };
+
+    await aiPersistenceService.markQueryRunSuccess({
+      companyId,
+      runId: queryRun.id,
+      resultJson: result,
+      sessionSnapshot,
+    });
+
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation?.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: response,
+    });
+
+    return response;
+  } catch (error) {
+    await aiPersistenceService.markQueryRunFailed({
+      companyId,
+      runId: queryRun.id,
+      errorMessage: error?.message || "Query execution failed",
+      resultJson: null,
+    });
+    throw error;
   }
-
-  const built = buildArabicAnswer({
-    parsed,
-    result,
-  });
-
-  const followUps = getFollowUpQuestions({
-    parsed,
-    result,
-  });
-
-  const insights = await buildInlineInsights({
-    user,
-    parsed,
-    result,
-  });
-
-  const baseSessionSnapshot = buildSessionSnapshot({
-    parsed,
-    result,
-  });
-
-  const sessionSnapshot = enrichSessionSnapshotWithEntities({
-    parsed,
-    result,
-    snapshot: baseSessionSnapshot,
-  });
-
-  return {
-    ok: true,
-    parsed,
-    intent: parsed,
-    mode: "query",
-    ui: built.ui,
-    result,
-    answer: built.answer,
-    followUps,
-    insights,
-    session_snapshot: sessionSnapshot,
-  };
 }
 
 // =======================
 // Public API
 // =======================
-async function queryAiAnalytics({ user, body }) {
+async function queryAiAnalytics({ companyId, user, body }) {
+  if (!companyId) {
+    const err = new Error("companyId is required");
+    err.status = 400;
+    throw err;
+  }
+
   const question = String(body?.question || "").trim();
 
   if (!question) {
@@ -801,73 +966,207 @@ async function queryAiAnalytics({ user, body }) {
     throw err;
   }
 
+  const userId = getUserId(user);
+  if (!userId) {
+    const err = new Error("user.id is required");
+    err.status = 400;
+    throw err;
+  }
+
+  const { conversationId, context, title } = extractConversationMeta({ body });
+
+  const conversation = await aiPersistenceService.getOrCreateConversation({
+    companyId,
+    userId,
+    conversationId,
+    title: title || question.slice(0, 120),
+    context,
+  });
+
+  const persistedSnapshot = await aiPersistenceService.getLatestConversationSnapshot({
+    companyId,
+    conversationId: conversation.id,
+  });
+
+  const effectiveSnapshot = getEffectiveSessionSnapshot({
+    body,
+    persistedSnapshot,
+  });
+
   const parsed = parseAiQuestion({
     question,
     context: body?.context || null,
     user,
-    body,
+    body: {
+      ...body,
+      conversation_id: conversation.id,
+      session_snapshot: effectiveSnapshot,
+    },
+  });
+
+  const userMessage = await aiPersistenceService.createUserMessage({
+    companyId,
+    conversationId: conversation.id,
+    userId,
+    content: question,
+    parsed,
   });
 
   if (parsed?.mode === "unsupported_followup") {
-    return buildUnsupportedFollowupResponse({
+    const response = buildUnsupportedFollowupResponse({
       parsed,
-      body,
+      body: {
+        ...body,
+        session_snapshot: effectiveSnapshot,
+      },
     });
+
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: {
+        ...response,
+        conversation_id: conversation.id,
+      },
+    });
+
+    return {
+      ...response,
+      conversation_id: conversation.id,
+    };
   }
 
   if (!parsed || parsed.mode === "unknown" || parsed.intent === "unknown") {
     const entityFollowUpResponse = tryEntityFollowUp({
       parsed,
       question,
-      snapshot: body?.session_snapshot || null,
+      snapshot: effectiveSnapshot,
     });
 
-    if (entityFollowUpResponse) {
-      return entityFollowUpResponse;
-    }
+    const response = entityFollowUpResponse || buildUnknownResponse(parsed);
 
-    return buildUnknownResponse(parsed);
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: {
+        ...response,
+        conversation_id: conversation.id,
+      },
+    });
+
+    return {
+      ...response,
+      conversation_id: conversation.id,
+    };
   }
 
   if (parsed.mode === "reference_followup") {
     if (parsed.intent === "reference_previous_expand_limit") {
-      return buildReferenceExpandLimitResponse({
+      const response = buildReferenceExpandLimitResponse({
         parsed,
-        snapshot: body?.session_snapshot || null,
+        snapshot: effectiveSnapshot,
       });
+
+      await aiPersistenceService.createAssistantMessage({
+        companyId,
+        conversationId: conversation.id,
+        content: buildPersistableAssistantText(response),
+        parsed,
+        responseJson: {
+          ...response,
+          conversation_id: conversation.id,
+        },
+      });
+
+      return {
+        ...response,
+        conversation_id: conversation.id,
+      };
     }
 
     const referenceResult = resolveReferenceFollowUp({
       parsed,
-      body,
+      body: {
+        ...body,
+        session_snapshot: effectiveSnapshot,
+      },
     });
 
-    return buildReferenceFollowUpResponse({
+    const response = buildReferenceFollowUpResponse({
       parsed,
       referenceResult,
     });
+
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: {
+        ...response,
+        conversation_id: conversation.id,
+      },
+    });
+
+    return {
+      ...response,
+      conversation_id: conversation.id,
+    };
   }
 
   if (parsed.mode === "action" && !body?.auto_execute) {
-    return buildActionPreviewResponse({ parsed });
+    const response = buildActionPreviewResponse({ parsed });
+
+    await aiPersistenceService.createAssistantMessage({
+      companyId,
+      conversationId: conversation.id,
+      content: buildPersistableAssistantText(response),
+      parsed,
+      responseJson: {
+        ...response,
+        conversation_id: conversation.id,
+      },
+    });
+
+    return {
+      ...response,
+      conversation_id: conversation.id,
+    };
   }
 
   if (parsed.mode === "action") {
-    return handleActionExecution({ parsed, user });
+    return handleActionExecution({
+      companyId,
+      parsed,
+      user,
+      conversation,
+      userMessage,
+    });
   }
 
   return handleQueryExecution({
+    companyId,
     parsed,
     user,
     question,
-    body,
+    body: {
+      ...body,
+      session_snapshot: effectiveSnapshot,
+    },
+    conversation,
+    userMessage,
   });
 }
 
-async function getAiSuggestedQuestions({ user, query }) {
+async function getAiSuggestedQuestions({ companyId, user, query }) {
   const context = String(query?.context || "").trim().toLowerCase() || null;
 
   const questions = getSuggestedQuestions({
+    companyId,
     user,
     context,
   });
@@ -879,44 +1178,57 @@ async function getAiSuggestedQuestions({ user, query }) {
   };
 }
 
-async function getAiInsights({ user, query }) {
+async function getAiInsights({ companyId, user, query }) {
+  if (!companyId) {
+    const err = new Error("companyId is required");
+    err.status = 400;
+    throw err;
+  }
+
   const context = String(query?.context || "").trim().toLowerCase() || null;
   const data = {};
 
   if (!context || context === "finance") {
     data.expenseSummary = await analyticsService.getFinanceExpenseSummary({
+      companyId,
       user,
       query: { range: "this_month" },
     });
 
     data.expenseByType = await analyticsService.getFinanceExpenseByType({
+      companyId,
       user,
       query: { range: "this_month", limit: 5 },
     });
 
     data.expenseByVehicle = await analyticsService.getFinanceExpenseByVehicle({
+      companyId,
       user,
       query: { range: "this_month", limit: 5 },
     });
 
     data.expenseByPaymentSource =
       await analyticsService.getFinanceExpenseByPaymentSource({
+        companyId,
         user,
         query: { range: "this_month" },
       });
 
     data.topVendors = await analyticsService.getFinanceTopVendors({
+      companyId,
       user,
       query: { range: "this_month", limit: 5 },
     });
 
     data.expenseApprovalBreakdown =
       await analyticsService.getFinanceExpenseApprovalBreakdown({
+        companyId,
         user,
         query: { range: "this_month" },
       });
 
     data.expenseSummaryLastMonth = await analyticsService.getFinanceExpenseSummary({
+      companyId,
       user,
       query: { range: "last_month" },
     });
@@ -924,11 +1236,13 @@ async function getAiInsights({ user, query }) {
 
   if (!context || context === "ar") {
     data.outstandingSummary = await analyticsService.getArOutstandingSummary({
+      companyId,
       user,
       query: { range: "this_month" },
     });
 
     data.topDebtors = await analyticsService.getArTopDebtors({
+      companyId,
       user,
       query: {
         range: "this_month",
@@ -939,11 +1253,13 @@ async function getAiInsights({ user, query }) {
 
   if (!context || context === "maintenance") {
     data.openWorkOrders = await analyticsService.getMaintenanceOpenWorkOrders({
+      companyId,
       user,
       query: { range: "this_month" },
     });
 
     data.costByVehicle = await analyticsService.getMaintenanceCostByVehicle({
+      companyId,
       user,
       query: {
         range: "this_month",
@@ -954,6 +1270,7 @@ async function getAiInsights({ user, query }) {
 
   if (!context || context === "inventory") {
     data.topIssuedParts = await analyticsService.getInventoryTopIssuedParts({
+      companyId,
       user,
       query: {
         range: "this_month",
@@ -962,6 +1279,7 @@ async function getAiInsights({ user, query }) {
     });
 
     data.lowStockItems = await analyticsService.getInventoryLowStockItems({
+      companyId,
       user,
       query: {
         limit: 10,
@@ -971,22 +1289,26 @@ async function getAiInsights({ user, query }) {
 
   if (!context || context === "trips") {
     data.tripsSummary = await analyticsService.getTripsSummary({
+      companyId,
       user,
       query: { range: "this_month" },
     });
 
     data.activeTrips = await analyticsService.getActiveTrips({
+      companyId,
       user,
       query: { range: "this_month", limit: 5 },
     });
 
     data.tripsNeedFinancialClosure =
       await analyticsService.getTripsNeedingFinancialClosure({
+        companyId,
         user,
         query: { range: "this_month", limit: 5 },
       });
 
     data.topClientsByTrips = await analyticsService.getTopClientsByTrips({
+      companyId,
       user,
       query: {
         range: "this_month",
@@ -995,6 +1317,7 @@ async function getAiInsights({ user, query }) {
     });
 
     data.topSitesByTrips = await analyticsService.getTopSitesByTrips({
+      companyId,
       user,
       query: {
         range: "this_month",
@@ -1003,6 +1326,7 @@ async function getAiInsights({ user, query }) {
     });
 
     data.topVehiclesByTrips = await analyticsService.getTopVehiclesByTrips({
+      companyId,
       user,
       query: {
         range: "this_month",

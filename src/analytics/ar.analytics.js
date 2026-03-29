@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function toMoney(v) {
   return Math.round(Number(v || 0) * 100) / 100;
@@ -11,9 +11,10 @@ function isOverdue(dueDate, now = new Date()) {
   return d < now;
 }
 
-async function getOutstandingInvoicesBase({ range }) {
+async function getOutstandingInvoicesBase({ companyId, range }) {
   return prisma.ar_invoices.findMany({
     where: {
+      company_id: companyId,
       issue_date: {
         gte: range.from,
         lte: range.to,
@@ -29,7 +30,7 @@ async function getOutstandingInvoicesBase({ range }) {
       due_date: true,
       status: true,
       issue_date: true,
-      clients: {
+      client: {
         select: {
           id: true,
           name: true,
@@ -38,7 +39,7 @@ async function getOutstandingInvoicesBase({ range }) {
       payments: {
         select: {
           amount_allocated: true,
-          ar_payments: {
+          payment: {
             select: {
               status: true,
             },
@@ -57,7 +58,7 @@ function buildInvoiceOutstandingRow(row, now = new Date()) {
 
   const paidAmount = toMoney(
     (row?.payments || [])
-      .filter((p) => String(p?.ar_payments?.status || "").toUpperCase() === "POSTED")
+      .filter((p) => String(p?.payment?.status || "").toUpperCase() === "POSTED")
       .reduce((sum, p) => sum + Number(p?.amount_allocated || 0), 0)
   );
 
@@ -67,7 +68,7 @@ function buildInvoiceOutstandingRow(row, now = new Date()) {
   return {
     invoice_id: row.id,
     client_id: row.client_id,
-    client_name: row?.clients?.name || "عميل غير معروف",
+    client_name: row?.client?.name || "عميل غير معروف",
     issue_date: row.issue_date || null,
     due_date: row.due_date || null,
     status: row.status || null,
@@ -78,9 +79,9 @@ function buildInvoiceOutstandingRow(row, now = new Date()) {
   };
 }
 
-async function getOutstandingSummary({ range, scope }) {
+async function getOutstandingSummary({ companyId, range, scope }) {
   const now = new Date();
-  const rows = await getOutstandingInvoicesBase({ range });
+  const rows = await getOutstandingInvoicesBase({ companyId, range });
 
   let total_outstanding = 0;
   let overdue_amount = 0;
@@ -120,6 +121,7 @@ async function getOutstandingSummary({ range, scope }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
     },
     data: {
@@ -137,9 +139,9 @@ async function getOutstandingSummary({ range, scope }) {
   };
 }
 
-async function getTopDebtors({ range, scope, limit = 10 }) {
+async function getTopDebtors({ companyId, range, scope, limit = 10 }) {
   const now = new Date();
-  const rows = await getOutstandingInvoicesBase({ range });
+  const rows = await getOutstandingInvoicesBase({ companyId, range });
 
   const map = new Map();
 
@@ -190,6 +192,7 @@ async function getTopDebtors({ range, scope, limit = 10 }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
     },

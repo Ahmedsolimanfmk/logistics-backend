@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function toMoney(v) {
   return Math.round(Number(v || 0) * 100) / 100;
@@ -8,8 +8,9 @@ function normalizeHint(v) {
   return String(v || "").trim();
 }
 
-function buildBaseWhere(range) {
+function buildBaseWhere(companyId, range) {
   return {
+    company_id: companyId,
     created_at: {
       gte: range.from,
       lte: range.to,
@@ -17,22 +18,11 @@ function buildBaseWhere(range) {
   };
 }
 
-function buildNonRejectedWhere(range) {
+function buildNonRejectedWhere(companyId, range) {
   return {
-    ...buildBaseWhere(range),
+    ...buildBaseWhere(companyId, range),
     approval_status: {
       not: "REJECTED",
-    },
-  };
-}
-
-function buildVendorFilter(vendorName) {
-  const hint = normalizeHint(vendorName);
-  if (!hint) return {};
-
-  return {
-    vendor_name: {
-      contains: hint,
     },
   };
 }
@@ -40,7 +30,6 @@ function buildVendorFilter(vendorName) {
 function buildExpenseTypeFilter(expenseType) {
   const hint = normalizeHint(expenseType);
   if (!hint) return {};
-
   return {
     expense_type: hint,
   };
@@ -51,7 +40,6 @@ function buildPaymentSourceFilter(paidMethod) {
   if (!hint) return {};
 
   const normalized = hint.toLowerCase();
-
   const map = {
     cash: "CASH",
     كاش: "CASH",
@@ -73,17 +61,18 @@ function buildPaymentSourceFilter(paidMethod) {
   };
 }
 
-async function resolveVehicleIdsByHint(vehicleHint) {
+async function resolveVehicleIdsByHint(companyId, vehicleHint) {
   const hint = normalizeHint(vehicleHint);
   if (!hint) return null;
 
   const vehicles = await prisma.vehicles.findMany({
     where: {
+      company_id: companyId,
       OR: [
         { id: hint },
-        { fleet_no: { contains: hint } },
-        { plate_no: { contains: hint } },
-        { display_name: { contains: hint } },
+        { fleet_no: { contains: hint, mode: "insensitive" } },
+        { plate_no: { contains: hint, mode: "insensitive" } },
+        { display_name: { contains: hint, mode: "insensitive" } },
       ],
     },
     select: {
@@ -96,12 +85,33 @@ async function resolveVehicleIdsByHint(vehicleHint) {
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
-async function buildExpenseWhere(range, query = {}, { nonRejected = false } = {}) {
-  const where = nonRejected ? buildNonRejectedWhere(range) : buildBaseWhere(range);
+async function resolveVendorIdsByHint(companyId, vendorHint) {
+  const hint = normalizeHint(vendorHint);
+  if (!hint) return null;
 
-  if (query?.vendor_name) {
-    Object.assign(where, buildVendorFilter(query.vendor_name));
-  }
+  const vendors = await prisma.vendors.findMany({
+    where: {
+      company_id: companyId,
+      OR: [
+        { id: hint },
+        { name: { contains: hint, mode: "insensitive" } },
+        { code: { contains: hint, mode: "insensitive" } },
+      ],
+    },
+    select: {
+      id: true,
+    },
+    take: 20,
+  });
+
+  const ids = vendors.map((v) => v.id).filter(Boolean);
+  return ids.length ? ids : ["__NO_MATCH__"];
+}
+
+async function buildExpenseWhere(companyId, range, query = {}, { nonRejected = false } = {}) {
+  const where = nonRejected
+    ? buildNonRejectedWhere(companyId, range)
+    : buildBaseWhere(companyId, range);
 
   if (query?.expense_type) {
     Object.assign(where, buildExpenseTypeFilter(query.expense_type));
@@ -112,17 +122,23 @@ async function buildExpenseWhere(range, query = {}, { nonRejected = false } = {}
   }
 
   if (query?.vehicle_hint) {
-    const vehicleIds = await resolveVehicleIdsByHint(query.vehicle_hint);
-    where.vehicle_id = {
-      in: vehicleIds,
-    };
+    const vehicleIds = await resolveVehicleIdsByHint(companyId, query.vehicle_hint);
+    where.vehicle_id = { in: vehicleIds };
+  }
+
+  if (query?.vendor_hint || query?.vendor_name) {
+    const vendorIds = await resolveVendorIdsByHint(
+      companyId,
+      query.vendor_hint || query.vendor_name
+    );
+    where.vendor_id = { in: vendorIds };
   }
 
   return where;
 }
 
-async function getExpenseSummary({ range, scope, query = {} }) {
-  const where = await buildExpenseWhere(range, query);
+async function getExpenseSummary({ companyId, range, scope, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query);
 
   const rows = await prisma.cash_expenses.findMany({
     where,
@@ -135,13 +151,13 @@ async function getExpenseSummary({ range, scope, query = {} }) {
       vehicle_id: true,
       created_at: true,
       vendor_id: true,
-  vendors: {
-    select: {
-      id: true,
-      name: true,
-      code: true,
-    },
-    },
+      vendor: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+        },
+      },
     },
   });
 
@@ -149,7 +165,6 @@ async function getExpenseSummary({ range, scope, query = {} }) {
   let approved_expense = 0;
   let pending_expense = 0;
   let rejected_expense = 0;
-
   let advance_expense = 0;
   let company_expense = 0;
 
@@ -176,9 +191,10 @@ async function getExpenseSummary({ range, scope, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       vehicle_hint: query?.vehicle_hint || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
       expense_type: query?.expense_type || null,
       paid_method: query?.paid_method || null,
     },
@@ -197,8 +213,8 @@ async function getExpenseSummary({ range, scope, query = {} }) {
   };
 }
 
-async function getExpenseByType({ range, scope, limit = 50, query = {} }) {
-  const where = await buildExpenseWhere(range, query, { nonRejected: true });
+async function getExpenseByType({ companyId, range, scope, limit = 50, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query, { nonRejected: true });
 
   const rows = await prisma.cash_expenses.groupBy({
     by: ["expense_type"],
@@ -233,10 +249,11 @@ async function getExpenseByType({ range, scope, limit = 50, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
       paid_method: query?.paid_method || null,
     },
     data: {
@@ -250,19 +267,11 @@ async function getExpenseByType({ range, scope, limit = 50, query = {} }) {
   };
 }
 
-async function getExpenseByVehicle({ range, scope, limit = 10, query = {} }) {
-  const where = await buildExpenseWhere(range, query, { nonRejected: true });
-
-  where.vehicle_id = query?.vehicle_hint
-    ? where.vehicle_id
-    : {
-        not: null,
-      };
+async function getExpenseByVehicle({ companyId, range, scope, limit = 10, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query, { nonRejected: true });
 
   if (!query?.vehicle_hint) {
-    where.vehicle_id = {
-      not: null,
-    };
+    where.vehicle_id = { not: null };
   }
 
   const rows = await prisma.cash_expenses.groupBy({
@@ -287,6 +296,7 @@ async function getExpenseByVehicle({ range, scope, limit = 10, query = {} }) {
   const vehicles = vehicleIds.length
     ? await prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           id: { in: vehicleIds },
         },
         select: {
@@ -321,10 +331,11 @@ async function getExpenseByVehicle({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
       expense_type: query?.expense_type || null,
       paid_method: query?.paid_method || null,
     },
@@ -341,8 +352,8 @@ async function getExpenseByVehicle({ range, scope, limit = 10, query = {} }) {
   };
 }
 
-async function getExpenseByPaymentSource({ range, scope, query = {} }) {
-  const where = await buildExpenseWhere(range, query, { nonRejected: true });
+async function getExpenseByPaymentSource({ companyId, range, scope, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query, { nonRejected: true });
 
   const rows = await prisma.cash_expenses.groupBy({
     by: ["payment_source"],
@@ -376,9 +387,10 @@ async function getExpenseByPaymentSource({ range, scope, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       vehicle_hint: query?.vehicle_hint || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
       expense_type: query?.expense_type || null,
     },
     data: {
@@ -392,20 +404,15 @@ async function getExpenseByPaymentSource({ range, scope, query = {} }) {
   };
 }
 
-async function getTopVendors({ range, scope, limit = 10, query = {} }) {
-  const where = await buildExpenseWhere(range, query, { nonRejected: true });
+async function getTopVendors({ companyId, range, scope, limit = 10, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query, { nonRejected: true });
 
-  where.vendor_name = query?.vendor_name
-    ? {
-        not: null,
-        contains: String(query.vendor_name).trim(),
-      }
-    : {
-        not: null,
-      };
+  where.vendor_id = query?.vendor_hint || query?.vendor_name
+    ? where.vendor_id
+    : { not: null };
 
   const rows = await prisma.cash_expenses.groupBy({
-    by: ["vendor_name"],
+    by: ["vendor_id"],
     where,
     _sum: {
       amount: true,
@@ -423,13 +430,37 @@ async function getTopVendors({ range, scope, limit = 10, query = {} }) {
     take: limit,
   });
 
-  const items = rows.map((row) => ({
-    vendor_name: row.vendor_name || "مورد غير معروف",
-    total_amount: toMoney(row._sum.amount || 0),
-    total_vat: toMoney(row._sum.vat_amount || 0),
-    total_invoice_amount: toMoney(row._sum.invoice_total || 0),
-    count: row._count._all || 0,
-  }));
+  const vendorIds = rows.map((r) => r.vendor_id).filter(Boolean);
+
+  const vendors = vendorIds.length
+    ? await prisma.vendors.findMany({
+        where: {
+          company_id: companyId,
+          id: { in: vendorIds },
+        },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+        },
+      })
+    : [];
+
+  const vendorMap = new Map(vendors.map((v) => [v.id, v]));
+
+  const items = rows.map((row) => {
+    const vendor = vendorMap.get(row.vendor_id);
+
+    return {
+      vendor_id: row.vendor_id,
+      vendor_name: vendor?.name || "مورد غير معروف",
+      vendor_code: vendor?.code || null,
+      total_amount: toMoney(row._sum.amount || 0),
+      total_vat: toMoney(row._sum.vat_amount || 0),
+      total_invoice_amount: toMoney(row._sum.invoice_total || 0),
+      count: row._count._all || 0,
+    };
+  });
 
   return {
     metric: "expense_top_vendors",
@@ -439,12 +470,13 @@ async function getTopVendors({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
       expense_type: query?.expense_type || null,
       paid_method: query?.paid_method || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
     },
     data: {
       items,
@@ -459,8 +491,8 @@ async function getTopVendors({ range, scope, limit = 10, query = {} }) {
   };
 }
 
-async function getExpenseApprovalBreakdown({ range, scope, query = {} }) {
-  const where = await buildExpenseWhere(range, query);
+async function getExpenseApprovalBreakdown({ companyId, range, scope, query = {} }) {
+  const where = await buildExpenseWhere(companyId, range, query);
 
   const rows = await prisma.cash_expenses.groupBy({
     by: ["approval_status"],
@@ -494,9 +526,10 @@ async function getExpenseApprovalBreakdown({ range, scope, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       vehicle_hint: query?.vehicle_hint || null,
-      vendor_name: query?.vendor_name || null,
+      vendor_hint: query?.vendor_hint || query?.vendor_name || null,
       expense_type: query?.expense_type || null,
       paid_method: query?.paid_method || null,
     },

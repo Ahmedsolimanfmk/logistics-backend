@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 function normalizeHint(v) {
   return String(v || "").trim();
@@ -10,7 +10,7 @@ function isUuid(value) {
   );
 }
 
-async function resolveVehicleIdsByHint(vehicleHint) {
+async function resolveVehicleIdsByHint(companyId, vehicleHint) {
   const hint = normalizeHint(vehicleHint);
   if (!hint) return null;
 
@@ -25,7 +25,10 @@ async function resolveVehicleIdsByHint(vehicleHint) {
   }
 
   const vehicles = await prisma.vehicles.findMany({
-    where: { OR: or },
+    where: {
+      company_id: companyId,
+      OR: or,
+    },
     select: { id: true },
     take: 20,
   });
@@ -34,7 +37,7 @@ async function resolveVehicleIdsByHint(vehicleHint) {
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
-async function resolveClientIdsByHint(clientHint) {
+async function resolveClientIdsByHint(companyId, clientHint) {
   const hint = normalizeHint(clientHint);
   if (!hint) return null;
 
@@ -45,7 +48,10 @@ async function resolveClientIdsByHint(clientHint) {
   }
 
   const clients = await prisma.clients.findMany({
-    where: { OR: or },
+    where: {
+      company_id: companyId,
+      OR: or,
+    },
     select: { id: true },
     take: 20,
   });
@@ -54,7 +60,7 @@ async function resolveClientIdsByHint(clientHint) {
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
-async function resolveSiteIdsByHint(siteHint) {
+async function resolveSiteIdsByHint(companyId, siteHint) {
   const hint = normalizeHint(siteHint);
   if (!hint) return null;
 
@@ -65,7 +71,10 @@ async function resolveSiteIdsByHint(siteHint) {
   }
 
   const sites = await prisma.sites.findMany({
-    where: { OR: or },
+    where: {
+      company_id: companyId,
+      OR: or,
+    },
     select: { id: true },
     take: 20,
   });
@@ -74,8 +83,9 @@ async function resolveSiteIdsByHint(siteHint) {
   return ids.length ? ids : ["__NO_MATCH__"];
 }
 
-async function buildTripsWhere({ range, query = {} }) {
+async function buildTripsWhere({ companyId, range, query = {} }) {
   const where = {
+    company_id: companyId,
     created_at: {
       gte: range.from,
       lte: range.to,
@@ -83,12 +93,12 @@ async function buildTripsWhere({ range, query = {} }) {
   };
 
   if (query?.client_hint) {
-    const clientIds = await resolveClientIdsByHint(query.client_hint);
+    const clientIds = await resolveClientIdsByHint(companyId, query.client_hint);
     where.client_id = { in: clientIds };
   }
 
   if (query?.site_hint) {
-    const siteIds = await resolveSiteIdsByHint(query.site_hint);
+    const siteIds = await resolveSiteIdsByHint(companyId, query.site_hint);
     where.site_id = { in: siteIds };
   }
 
@@ -99,13 +109,14 @@ async function buildTripsWhere({ range, query = {} }) {
   return where;
 }
 
-async function resolveTripIdsByVehicleHint({ range, vehicleHint }) {
+async function resolveTripIdsByVehicleHint({ companyId, range, vehicleHint }) {
   if (!vehicleHint) return null;
 
-  const vehicleIds = await resolveVehicleIdsByHint(vehicleHint);
+  const vehicleIds = await resolveVehicleIdsByHint(companyId, vehicleHint);
 
   const assignments = await prisma.trip_assignments.findMany({
     where: {
+      company_id: companyId,
       assigned_at: {
         gte: range.from,
         lte: range.to,
@@ -123,11 +134,16 @@ async function resolveTripIdsByVehicleHint({ range, vehicleHint }) {
   return tripIds.length ? tripIds : ["__NO_MATCH__"];
 }
 
-async function getTripsSummary({ range, scope, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
+function getSiteDisplayName(row) {
+  return row.site?.name || "موقع غير معروف";
+}
+
+async function getTripsSummary({ companyId, range, scope, query = {} }) {
+  const where = await buildTripsWhere({ companyId, range, query });
 
   if (query?.vehicle_hint) {
     const tripIds = await resolveTripIdsByVehicleHint({
+      companyId,
       range,
       vehicleHint: query.vehicle_hint,
     });
@@ -159,20 +175,17 @@ async function getTripsSummary({ range, scope, query = {} }) {
     const status = String(row.status || "").toUpperCase();
     const financialStatus = String(row.financial_status || "").toUpperCase();
 
-    if (["ACTIVE", "IN_PROGRESS", "ONGOING", "STARTED"].includes(status)) {
+    if (["APPROVED", "ASSIGNED", "IN_PROGRESS"].includes(status)) {
       active_count += 1;
     } else if (status === "DRAFT") {
       draft_count += 1;
-    } else if (["COMPLETED", "DONE", "CLOSED"].includes(status)) {
+    } else if (status === "COMPLETED") {
       completed_count += 1;
-    } else if (["CANCELLED", "CANCELED"].includes(status)) {
+    } else if (status === "CANCELLED") {
       cancelled_count += 1;
     }
 
-    if (
-      ["COMPLETED", "DONE"].includes(status) &&
-      ["OPEN", "REOPENED", ""].includes(financialStatus)
-    ) {
+    if (status === "COMPLETED" && ["OPEN", "UNDER_REVIEW"].includes(financialStatus)) {
       need_financial_closure_count += 1;
     }
   }
@@ -185,6 +198,7 @@ async function getTripsSummary({ range, scope, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       vehicle_hint: query?.vehicle_hint || null,
       client_hint: query?.client_hint || null,
@@ -202,15 +216,16 @@ async function getTripsSummary({ range, scope, query = {} }) {
   };
 }
 
-async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
+async function getActiveTrips({ companyId, range, scope, limit = 10, query = {} }) {
+  const where = await buildTripsWhere({ companyId, range, query });
 
   where.status = {
-    in: ["ACTIVE", "IN_PROGRESS", "ONGOING", "STARTED"],
+    in: ["APPROVED", "ASSIGNED", "IN_PROGRESS"],
   };
 
   if (query?.vehicle_hint) {
     const tripIds = await resolveTripIdsByVehicleHint({
+      companyId,
       range,
       vehicleHint: query.vehicle_hint,
     });
@@ -231,7 +246,7 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
           name: true,
         },
       },
-      sites: {
+      site: {
         select: {
           id: true,
           name: true,
@@ -250,6 +265,7 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
@@ -264,7 +280,7 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
         client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.site?.name || "موقع غير معروف",
+        site_name: getSiteDisplayName(row),
       })),
     },
     summary: {
@@ -273,19 +289,23 @@ async function getActiveTrips({ range, scope, limit = 10, query = {} }) {
   };
 }
 
-async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
+async function getTripsNeedingFinancialClosure({
+  companyId,
+  range,
+  scope,
+  limit = 10,
+  query = {},
+}) {
+  const where = await buildTripsWhere({ companyId, range, query });
 
-  where.status = {
-    in: ["COMPLETED", "DONE"],
-  };
-
+  where.status = "COMPLETED";
   where.financial_status = {
-    in: ["OPEN", "REOPENED"],
+    in: ["OPEN", "UNDER_REVIEW"],
   };
 
   if (query?.vehicle_hint) {
     const tripIds = await resolveTripIdsByVehicleHint({
+      companyId,
       range,
       vehicleHint: query.vehicle_hint,
     });
@@ -306,7 +326,7 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
           name: true,
         },
       },
-      sites: {
+      site: {
         select: {
           id: true,
           name: true,
@@ -327,6 +347,7 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
@@ -341,7 +362,7 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
         client_name: row.clients?.name || "عميل غير معروف",
-        site_name: row.site?.name || "موقع غير معروف",
+        site_name: getSiteDisplayName(row),
       })),
       total_need_financial_closure: rows.length,
     },
@@ -349,11 +370,12 @@ async function getTripsNeedingFinancialClosure({ range, scope, limit = 10, query
   };
 }
 
-async function getTopClientsByTrips({ range, scope, limit = 10, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
+async function getTopClientsByTrips({ companyId, range, scope, limit = 10, query = {} }) {
+  const where = await buildTripsWhere({ companyId, range, query });
 
   if (query?.vehicle_hint) {
     const tripIds = await resolveTripIdsByVehicleHint({
+      companyId,
       range,
       vehicleHint: query.vehicle_hint,
     });
@@ -375,12 +397,12 @@ async function getTopClientsByTrips({ range, scope, limit = 10, query = {} }) {
   });
 
   const filteredRows = rows.filter((r) => r.client_id);
-
   const clientIds = filteredRows.map((r) => r.client_id);
 
   const clients = clientIds.length
     ? await prisma.clients.findMany({
         where: {
+          company_id: companyId,
           id: { in: clientIds },
         },
         select: {
@@ -406,6 +428,7 @@ async function getTopClientsByTrips({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
@@ -422,11 +445,12 @@ async function getTopClientsByTrips({ range, scope, limit = 10, query = {} }) {
   };
 }
 
-async function getTopSitesByTrips({ range, scope, limit = 10, query = {} }) {
-  const where = await buildTripsWhere({ range, query });
+async function getTopSitesByTrips({ companyId, range, scope, limit = 10, query = {} }) {
+  const where = await buildTripsWhere({ companyId, range, query });
 
   if (query?.vehicle_hint) {
     const tripIds = await resolveTripIdsByVehicleHint({
+      companyId,
       range,
       vehicleHint: query.vehicle_hint,
     });
@@ -448,12 +472,12 @@ async function getTopSitesByTrips({ range, scope, limit = 10, query = {} }) {
   });
 
   const filteredRows = rows.filter((r) => r.site_id);
-
   const siteIds = filteredRows.map((r) => r.site_id);
 
   const sites = siteIds.length
     ? await prisma.sites.findMany({
         where: {
+          company_id: companyId,
           id: { in: siteIds },
         },
         select: {
@@ -479,6 +503,7 @@ async function getTopSitesByTrips({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,
@@ -495,8 +520,9 @@ async function getTopSitesByTrips({ range, scope, limit = 10, query = {} }) {
   };
 }
 
-async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
+async function getTopVehiclesByTrips({ companyId, range, scope, limit = 10, query = {} }) {
   const where = {
+    company_id: companyId,
     assigned_at: {
       gte: range.from,
       lte: range.to,
@@ -504,18 +530,19 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
   };
 
   if (query?.vehicle_hint) {
-    const vehicleIds = await resolveVehicleIdsByHint(query.vehicle_hint);
+    const vehicleIds = await resolveVehicleIdsByHint(companyId, query.vehicle_hint);
     where.vehicle_id = { in: vehicleIds };
   }
 
   if (query?.client_hint || query?.site_hint) {
-    const tripWhere = await buildTripsWhere({ range, query });
+    const tripWhere = await buildTripsWhere({ companyId, range, query });
 
     const trips = await prisma.trips.findMany({
       where: tripWhere,
       select: {
         id: true,
       },
+      take: 5000,
     });
 
     const tripIds = trips.map((t) => t.id).filter(Boolean);
@@ -537,12 +564,12 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
   });
 
   const filteredRows = rows.filter((r) => r.vehicle_id);
-
   const vehicleIds = filteredRows.map((r) => r.vehicle_id);
 
   const vehicles = vehicleIds.length
     ? await prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           id: { in: vehicleIds },
         },
         select: {
@@ -578,6 +605,7 @@ async function getTopVehiclesByTrips({ range, scope, limit = 10, query = {} }) {
       key: range.key,
     },
     filters: {
+      company_id: companyId,
       role: scope?.role || null,
       limit,
       vehicle_hint: query?.vehicle_hint || null,

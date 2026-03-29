@@ -1,13 +1,19 @@
 const analyticsService = require("./analytics.service");
 const { ok } = require("./analytics.response");
 
+function getRequestContext(req) {
+  return {
+    companyId: req.companyId,
+    user: req.user,
+    query: req.query || {},
+  };
+}
+
 async function getFinanceExpenseSummary(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceExpenseSummary({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceExpenseSummary(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -16,11 +22,9 @@ async function getFinanceExpenseSummary(req, res, next) {
 
 async function getFinanceExpenseByType(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceExpenseByType({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceExpenseByType(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -29,11 +33,9 @@ async function getFinanceExpenseByType(req, res, next) {
 
 async function getFinanceExpenseByVehicle(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceExpenseByVehicle({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceExpenseByVehicle(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -42,11 +44,9 @@ async function getFinanceExpenseByVehicle(req, res, next) {
 
 async function getFinanceExpenseByPaymentSource(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceExpenseByPaymentSource({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceExpenseByPaymentSource(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -55,11 +55,9 @@ async function getFinanceExpenseByPaymentSource(req, res, next) {
 
 async function getFinanceTopVendors(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceTopVendors({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceTopVendors(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -68,11 +66,9 @@ async function getFinanceTopVendors(req, res, next) {
 
 async function getFinanceExpenseApprovalBreakdown(req, res, next) {
   try {
-    const result = await analyticsService.getFinanceExpenseApprovalBreakdown({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getFinanceExpenseApprovalBreakdown(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -81,11 +77,9 @@ async function getFinanceExpenseApprovalBreakdown(req, res, next) {
 
 async function getArOutstandingSummary(req, res, next) {
   try {
-    const result = await analyticsService.getArOutstandingSummary({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getArOutstandingSummary(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -94,11 +88,9 @@ async function getArOutstandingSummary(req, res, next) {
 
 async function getArTopDebtors(req, res, next) {
   try {
-    const result = await analyticsService.getArTopDebtors({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getArTopDebtors(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -107,11 +99,9 @@ async function getArTopDebtors(req, res, next) {
 
 async function getMaintenanceOpenWorkOrders(req, res, next) {
   try {
-    const result = await analyticsService.getMaintenanceOpenWorkOrders({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getMaintenanceOpenWorkOrders(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -120,11 +110,9 @@ async function getMaintenanceOpenWorkOrders(req, res, next) {
 
 async function getMaintenanceCostByVehicle(req, res, next) {
   try {
-    const result = await analyticsService.getMaintenanceCostByVehicle({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getMaintenanceCostByVehicle(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -133,11 +121,9 @@ async function getMaintenanceCostByVehicle(req, res, next) {
 
 async function getInventoryTopIssuedParts(req, res, next) {
   try {
-    const result = await analyticsService.getInventoryTopIssuedParts({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getInventoryTopIssuedParts(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -146,28 +132,20 @@ async function getInventoryTopIssuedParts(req, res, next) {
 
 async function getInventoryLowStockItems(req, res, next) {
   try {
-    const result = await analyticsService.getInventoryLowStockItems({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getInventoryLowStockItems(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
   }
 }
 
-// =======================
-// Trips
-// =======================
-
 async function getTripsSummary(req, res, next) {
   try {
-    const result = await analyticsService.getTripsSummary({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getTripsSummary(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -176,11 +154,9 @@ async function getTripsSummary(req, res, next) {
 
 async function getActiveTrips(req, res, next) {
   try {
-    const result = await analyticsService.getActiveTrips({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getActiveTrips(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -189,11 +165,9 @@ async function getActiveTrips(req, res, next) {
 
 async function getTripsNeedingFinancialClosure(req, res, next) {
   try {
-    const result = await analyticsService.getTripsNeedingFinancialClosure({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getTripsNeedingFinancialClosure(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -202,11 +176,9 @@ async function getTripsNeedingFinancialClosure(req, res, next) {
 
 async function getTopClientsByTrips(req, res, next) {
   try {
-    const result = await analyticsService.getTopClientsByTrips({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getTopClientsByTrips(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -215,11 +187,9 @@ async function getTopClientsByTrips(req, res, next) {
 
 async function getTopSitesByTrips(req, res, next) {
   try {
-    const result = await analyticsService.getTopSitesByTrips({
-      user: req.user,
-      query: req.query,
-    });
-
+    const result = await analyticsService.getTopSitesByTrips(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -228,11 +198,20 @@ async function getTopSitesByTrips(req, res, next) {
 
 async function getTopVehiclesByTrips(req, res, next) {
   try {
-    const result = await analyticsService.getTopVehiclesByTrips({
-      user: req.user,
-      query: req.query,
-    });
+    const result = await analyticsService.getTopVehiclesByTrips(
+      getRequestContext(req)
+    );
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 
+async function getEntityProfitSummary(req, res, next) {
+  try {
+    const result = await analyticsService.getEntityProfitSummary(
+      getRequestContext(req)
+    );
     return res.json(ok(result));
   } catch (err) {
     next(err);
@@ -262,4 +241,6 @@ module.exports = {
   getTopClientsByTrips,
   getTopSitesByTrips,
   getTopVehiclesByTrips,
+
+  getEntityProfitSummary,
 };
