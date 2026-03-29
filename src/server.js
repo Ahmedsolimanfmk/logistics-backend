@@ -32,6 +32,7 @@ const vendorsRoutes = require("./vendors/vendors.routes");
 const contractsRoutes = require("./contracts/contracts.routes");
 const pricingRoutes = require("./pricing/pricing.routes");
 const contractPricingRoutes = require("./contract-pricing/contract-pricing.routes");
+const companiesRoutes = require("./companies/companies.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -108,6 +109,7 @@ app.use("/vendors", authRequired, vendorsRoutes);
 app.use("/contracts", authRequired, contractsRoutes);
 app.use("/pricing-rules", authRequired, pricingRoutes);
 app.use("/contract-pricing", authRequired, contractPricingRoutes);
+app.use("/companies", authRequired, companiesRoutes);
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);

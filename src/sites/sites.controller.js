@@ -26,48 +26,83 @@ function toBool(v, fallback = null) {
   return fallback;
 }
 
-function toDecimalOrNull(v) {
-  if (v === undefined || v === null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
 function buildError(message, statusCode = 400) {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
 }
 
-async function ensureClientExists(clientId) {
+function normalizeCode(value) {
+  const code = s(value);
+  return code ? code.toUpperCase() : null;
+}
+
+async function ensureClientExists(companyId, clientId) {
   if (!clientId) throw buildError("client_id is required");
   if (!isUuid(clientId)) throw buildError("Invalid client_id");
 
-  const client = await prisma.clients.findUnique({
-    where: { id: clientId },
-    select: { id: true, name: true, is_active: true },
+  const client = await prisma.clients.findFirst({
+    where: {
+      id: clientId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      name: true,
+      is_active: true,
+    },
   });
 
   if (!client) throw buildError("Client not found", 404);
+
   return client;
 }
 
-function buildListWhere(query = {}) {
-  const where = {};
+async function getSiteOrThrow(companyId, siteId) {
+  if (!isUuid(siteId)) {
+    throw buildError("Invalid site id");
+  }
 
-  const search = s(query.search);
+  const site = await prisma.sites.findFirst({
+    where: {
+      id: siteId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      client_id: true,
+      code: true,
+      name: true,
+      address: true,
+      is_active: true,
+      created_at: true,
+      updated_at: true,
+    },
+  });
+
+  if (!site) {
+    throw buildError("Site not found", 404);
+  }
+
+  return site;
+}
+
+function buildListWhere(companyId, query = {}) {
+  const where = {
+    company_id: companyId,
+  };
+
+  const search = s(query.search || query.q);
   const client_id = s(query.client_id);
-  const city = s(query.city);
-  const site_type = s(query.site_type);
-  const zone = s(query.zone);
+  const code = s(query.code);
   const is_active = toBool(query.is_active, null);
 
   if (search) {
     where.OR = [
       { name: { contains: search, mode: "insensitive" } },
       { address: { contains: search, mode: "insensitive" } },
-      { city: { contains: search, mode: "insensitive" } },
-      { site_type: { contains: search, mode: "insensitive" } },
-      { zone: { contains: search, mode: "insensitive" } },
+      { code: { contains: search, mode: "insensitive" } },
       {
         clients: {
           name: { contains: search, mode: "insensitive" },
@@ -81,16 +116,8 @@ function buildListWhere(query = {}) {
     where.client_id = client_id;
   }
 
-  if (city) {
-    where.city = { contains: city, mode: "insensitive" };
-  }
-
-  if (site_type) {
-    where.site_type = { contains: site_type, mode: "insensitive" };
-  }
-
-  if (zone) {
-    where.zone = { contains: zone, mode: "insensitive" };
+  if (code) {
+    where.code = { contains: code, mode: "insensitive" };
   }
 
   if (typeof is_active === "boolean") {
@@ -105,6 +132,8 @@ function buildListWhere(query = {}) {
 // =======================
 exports.listSites = async (req, res) => {
   try {
+    const companyId = req.companyId;
+
     const page = Math.max(parseInt(String(req.query.page || "1"), 10) || 1, 1);
     const limit = Math.min(
       Math.max(parseInt(String(req.query.limit || "50"), 10) || 50, 1),
@@ -112,23 +141,37 @@ exports.listSites = async (req, res) => {
     );
     const skip = (page - 1) * limit;
 
-    const where = buildListWhere(req.query);
+    const where = buildListWhere(companyId, req.query);
 
     const [items, total] = await Promise.all([
       prisma.sites.findMany({
         where,
-        orderBy: [{ created_at: "desc" }],
+        orderBy: [{ created_at: "desc" }, { name: "asc" }],
         skip,
         take: limit,
         include: {
-          clients: { select: { id: true, name: true } },
+          clients: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              is_active: true,
+            },
+          },
           site_trips: {
+            where: {
+              company_id: companyId,
+            },
+            orderBy: {
+              created_at: "desc",
+            },
             select: {
               id: true,
               trip_code: true,
               status: true,
               financial_status: true,
               created_at: true,
+              scheduled_at: true,
             },
           },
         },
@@ -160,6 +203,7 @@ exports.listSites = async (req, res) => {
 // =======================
 exports.getSiteById = async (req, res) => {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
     if (!isUuid(id)) {
@@ -169,11 +213,24 @@ exports.getSiteById = async (req, res) => {
       });
     }
 
-    const site = await prisma.sites.findUnique({
-      where: { id },
+    const site = await prisma.sites.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
-        clients: { select: { id: true, name: true } },
+        clients: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            is_active: true,
+          },
+        },
         site_trips: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { created_at: "desc" },
           select: {
             id: true,
@@ -213,17 +270,16 @@ exports.getSiteById = async (req, res) => {
 
 // =======================
 // POST /sites
+// body: { client_id, code?, name, address?, is_active? }
 // =======================
 exports.createSite = async (req, res) => {
   try {
+    const companyId = req.companyId;
+
     const name = s(req.body?.name);
     const address = s(req.body?.address);
+    const code = normalizeCode(req.body?.code);
     const client_id = s(req.body?.client_id);
-    const site_type = s(req.body?.site_type);
-    const city = s(req.body?.city);
-    const zone = s(req.body?.zone);
-    const latitude = toDecimalOrNull(req.body?.latitude);
-    const longitude = toDecimalOrNull(req.body?.longitude);
     const is_active =
       typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
 
@@ -234,36 +290,26 @@ exports.createSite = async (req, res) => {
       });
     }
 
-    await ensureClientExists(client_id);
-
-    if (req.body?.latitude !== undefined && latitude === null) {
-      return res.status(400).json({
-        success: false,
-        message: "latitude must be a valid number",
-      });
-    }
-
-    if (req.body?.longitude !== undefined && longitude === null) {
-      return res.status(400).json({
-        success: false,
-        message: "longitude must be a valid number",
-      });
-    }
+    await ensureClientExists(companyId, client_id);
 
     const site = await prisma.sites.create({
       data: {
+        company_id: companyId,
+        client_id,
+        code,
         name,
         address,
-        client_id,
-        site_type,
-        city,
-        zone,
-        latitude,
-        longitude,
         is_active,
       },
       include: {
-        clients: { select: { id: true, name: true } },
+        clients: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            is_active: true,
+          },
+        },
       },
     });
 
@@ -274,6 +320,14 @@ exports.createSite = async (req, res) => {
     });
   } catch (e) {
     console.error("createSite error:", e);
+
+    if (e?.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "A site with the same code or name already exists for this company/client",
+      });
+    }
+
     return res.status(e.statusCode || 500).json({
       success: false,
       message: e?.message || "Failed to create site",
@@ -286,29 +340,10 @@ exports.createSite = async (req, res) => {
 // =======================
 exports.updateSite = async (req, res) => {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    if (!isUuid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid site id",
-      });
-    }
-
-    const existing = await prisma.sites.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        client_id: true,
-      },
-    });
-
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        message: "Site not found",
-      });
-    }
+    const existing = await getSiteOrThrow(companyId, id);
 
     const data = {};
 
@@ -323,45 +358,36 @@ exports.updateSite = async (req, res) => {
       data.name = name;
     }
 
-    if (req.body.address !== undefined) data.address = s(req.body.address);
-    if (req.body.site_type !== undefined) data.site_type = s(req.body.site_type);
-    if (req.body.city !== undefined) data.city = s(req.body.city);
-    if (req.body.zone !== undefined) data.zone = s(req.body.zone);
-    if (typeof req.body.is_active === "boolean") data.is_active = req.body.is_active;
+    if (req.body.code !== undefined) {
+      data.code = normalizeCode(req.body.code);
+    }
+
+    if (req.body.address !== undefined) {
+      data.address = s(req.body.address);
+    }
+
+    if (typeof req.body.is_active === "boolean") {
+      data.is_active = req.body.is_active;
+    }
 
     if (req.body.client_id !== undefined) {
       const nextClientId = s(req.body.client_id);
-      await ensureClientExists(nextClientId);
+      await ensureClientExists(companyId, nextClientId);
       data.client_id = nextClientId;
     }
 
-    if (req.body.latitude !== undefined) {
-      const latitude = toDecimalOrNull(req.body.latitude);
-      if (latitude === null && req.body.latitude !== null && req.body.latitude !== "") {
-        return res.status(400).json({
-          success: false,
-          message: "latitude must be a valid number",
-        });
-      }
-      data.latitude = latitude;
-    }
-
-    if (req.body.longitude !== undefined) {
-      const longitude = toDecimalOrNull(req.body.longitude);
-      if (longitude === null && req.body.longitude !== null && req.body.longitude !== "") {
-        return res.status(400).json({
-          success: false,
-          message: "longitude must be a valid number",
-        });
-      }
-      data.longitude = longitude;
-    }
-
     const site = await prisma.sites.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: {
-        clients: { select: { id: true, name: true } },
+        clients: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            is_active: true,
+          },
+        },
       },
     });
 
@@ -372,6 +398,14 @@ exports.updateSite = async (req, res) => {
     });
   } catch (err) {
     console.error("updateSite error:", err);
+
+    if (err?.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "A site with the same code or name already exists for this company/client",
+      });
+    }
+
     return res.status(err.statusCode || 500).json({
       success: false,
       message: err?.message || "Failed to update site",
@@ -384,18 +418,18 @@ exports.updateSite = async (req, res) => {
 // =======================
 exports.toggleSite = async (req, res) => {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    if (!isUuid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid site id",
-      });
-    }
-
-    const existing = await prisma.sites.findUnique({
-      where: { id },
-      select: { id: true, is_active: true },
+    const existing = await prisma.sites.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+      select: {
+        id: true,
+        is_active: true,
+      },
     });
 
     if (!existing) {
@@ -406,10 +440,17 @@ exports.toggleSite = async (req, res) => {
     }
 
     const updated = await prisma.sites.update({
-      where: { id },
+      where: { id: existing.id },
       data: { is_active: !existing.is_active },
       include: {
-        clients: { select: { id: true, name: true } },
+        clients: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            is_active: true,
+          },
+        },
       },
     });
 

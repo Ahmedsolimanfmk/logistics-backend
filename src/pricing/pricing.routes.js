@@ -5,9 +5,13 @@
 const router = require("express").Router();
 
 const controller = require("./pricing.controller");
-const {
-  requireAdminOrAccountant,
-} = require("../auth/role.middleware");
+const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
+const { requireAdminOrAccountant } = require("../auth/role.middleware");
+
+// enforce auth + tenant
+router.use(authRequired);
+router.use(requireCompany);
 
 // resolve price
 router.post("/resolve", controller.resolve);

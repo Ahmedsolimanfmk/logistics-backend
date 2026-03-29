@@ -26,7 +26,10 @@ function toNum(v) {
 async function addInstallations(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const workOrderId = String(req.params.id || "").trim();
     if (!isUuid(workOrderId)) return res.status(400).json({ message: "Invalid work order id" });
@@ -36,9 +39,17 @@ async function addInstallations(req, res) {
       return res.status(400).json({ message: "items[] is required" });
     }
 
-    const wo = await prisma.maintenance_work_orders.findUnique({
-      where: { id: workOrderId },
-      select: { id: true, status: true, vehicle_id: true },
+    const wo = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
+      select: {
+        id: true,
+        company_id: true,
+        status: true,
+        vehicle_id: true,
+      },
     });
 
     if (!wo) return res.status(404).json({ message: "Work order not found" });
@@ -88,6 +99,7 @@ async function addInstallations(req, res) {
       }
 
       payload.push({
+        company_id: companyId,
         part_id,
         part_item_id,
         qty_installed: qty,
@@ -98,9 +110,13 @@ async function addInstallations(req, res) {
 
     const partIds = [...new Set(payload.map((p) => p.part_id))];
     const parts = await prisma.parts.findMany({
-      where: { id: { in: partIds } },
+      where: {
+        company_id: companyId,
+        id: { in: partIds },
+      },
       select: { id: true },
     });
+
     if (parts.length !== partIds.length) {
       return res.status(400).json({ message: "One or more part_id not found" });
     }
@@ -109,13 +125,20 @@ async function addInstallations(req, res) {
 
     const created = await prisma.$transaction(async (tx) => {
       const serialItems = payload.filter((p) => Boolean(p.part_item_id));
+
       if (serialItems.length) {
         const serialIds = serialItems.map((p) => p.part_item_id);
 
         const issuedSerialLines = await tx.inventory_issue_lines.findMany({
           where: {
+            company_id: companyId,
             part_item_id: { in: serialIds },
-            inventory_issues: { work_order_id: workOrderId },
+            inventory_issues: {
+              is: {
+                company_id: companyId,
+                work_order_id: workOrderId,
+              },
+            },
           },
           select: { part_item_id: true },
         });
@@ -130,8 +153,16 @@ async function addInstallations(req, res) {
         }
 
         const partItems = await tx.part_items.findMany({
-          where: { id: { in: serialIds } },
-          select: { id: true, part_id: true, status: true },
+          where: {
+            company_id: companyId,
+            id: { in: serialIds },
+          },
+          select: {
+            id: true,
+            company_id: true,
+            part_id: true,
+            status: true,
+          },
         });
 
         const map = new Map(partItems.map((x) => [x.id, x]));
@@ -158,7 +189,11 @@ async function addInstallations(req, res) {
         }
 
         const upd = await tx.part_items.updateMany({
-          where: { id: { in: serialIds }, status: "ISSUED" },
+          where: {
+            company_id: companyId,
+            id: { in: serialIds },
+            status: "ISSUED",
+          },
           data: {
             status: "INSTALLED",
             installed_vehicle_id: vehicleId,
@@ -181,8 +216,14 @@ async function addInstallations(req, res) {
         const issuedAgg = await tx.inventory_issue_lines.groupBy({
           by: ["part_id"],
           where: {
+            company_id: companyId,
             part_id: { in: bulkPartIds },
-            inventory_issues: { work_order_id: workOrderId },
+            inventory_issues: {
+              is: {
+                company_id: companyId,
+                work_order_id: workOrderId,
+              },
+            },
           },
           _sum: { qty: true },
         });
@@ -190,6 +231,7 @@ async function addInstallations(req, res) {
         const installedAgg = await tx.work_order_installations.groupBy({
           by: ["part_id"],
           where: {
+            company_id: companyId,
             work_order_id: workOrderId,
             part_id: { in: bulkPartIds },
           },
@@ -226,6 +268,7 @@ async function addInstallations(req, res) {
         payload.map((p) =>
           tx.work_order_installations.create({
             data: {
+              company_id: companyId,
               maintenance_work_orders: { connect: { id: workOrderId } },
               vehicles: { connect: { id: vehicleId } },
               parts: { connect: { id: p.part_id } },
@@ -263,13 +306,29 @@ async function addInstallations(req, res) {
 async function listInstallations(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const workOrderId = String(req.params.id || "").trim();
     if (!isUuid(workOrderId)) return res.status(400).json({ message: "Invalid work order id" });
 
+    const wo = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
+      select: { id: true },
+    });
+
+    if (!wo) return res.status(404).json({ message: "Work order not found" });
+
     const rows = await prisma.work_order_installations.findMany({
-      where: { work_order_id: workOrderId },
+      where: {
+        company_id: companyId,
+        work_order_id: workOrderId,
+      },
       orderBy: { installed_at: "desc" },
       include: {
         parts: true,

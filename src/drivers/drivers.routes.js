@@ -1,11 +1,8 @@
-// =======================
-// src/drivers/drivers.routes.js
-// FINAL: protect all routes + keep /active and /:id/status before /:id
-// =======================
-
 const { Router } = require("express");
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
+const { requireCompany } = require("../auth/company.middleware");
+const { requireCompanyActive } = require("../companies/company-access.middleware");
 
 const {
   getDrivers,
@@ -14,15 +11,17 @@ const {
   getDriverById,
   updateDriver,
   setDriverStatus,
-  getDriverFinancialSummary, // ✅ FIX: added import
+  getDriverFinancialSummary,
 } = require("./drivers.controller");
 
 const router = Router();
 
-// ✅ Apply auth + role once for all drivers routes
-router.use(authRequired, requireAdminOrHR);
+router.use(authRequired);
+router.use(requireCompany);
+router.use(requireCompanyActive);
+router.use(requireAdminOrHR);
 
-// ✅ Special routes must come before ":id"
+// special routes
 router.get("/active", getActiveDrivers);
 router.patch("/:id/status", setDriverStatus);
 

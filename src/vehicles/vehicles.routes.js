@@ -1,40 +1,56 @@
-// =======================
-// src/vehicles/vehicles.routes.js
-// =======================
-
 const { Router } = require("express");
+
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 
 const {
-  getActiveVehicles,
+  requireCompanyActive,
+  requireCompanyFeature,
+  requireCompanyLimit,
+} = require("../companies/company-access.middleware");
+
+const {
   getVehicles,
+  getActiveVehicles,
   createVehicle,
   getVehicleById,
-  getVehicleSummary, // ✅ NEW
   updateVehicle,
   toggleVehicle,
   deleteVehicle,
+  getVehicleSummary,
 } = require("./vehicles.controller");
 
 const router = Router();
 
-// special routes
-router.get("/active", authRequired, getActiveVehicles);
+router.use(authRequired);
+router.use(requireCompany);
+router.use(requireCompanyActive);
 
 // list
-router.get("/", authRequired, getVehicles);
+router.get("/", requireCompanyFeature("vehicles.access"), getVehicles);
+router.get("/active", requireCompanyFeature("vehicles.access"), getActiveVehicles);
 
-// summary (قبل :id)
-router.get("/:id/summary", authRequired, getVehicleSummary);
+// create (limit!)
+router.post(
+  "/",
+  requireAdminOrHR,
+  requireCompanyFeature("vehicles.access"),
+  requireCompanyLimit("max_vehicles", async (req) => {
+    return require("../prisma").vehicles.count({
+      where: { company_id: req.companyId },
+    });
+  }),
+  createVehicle
+);
 
 // single
-router.get("/:id", authRequired, requireAdminOrHR, getVehicleById);
+router.get("/:id", requireCompanyFeature("vehicles.access"), getVehicleById);
+router.get("/:id/summary", requireCompanyFeature("vehicles.access"), getVehicleSummary);
 
-// CRUD
-router.post("/", authRequired, requireAdminOrHR, createVehicle);
-router.patch("/:id", authRequired, requireAdminOrHR, updateVehicle);
-router.patch("/:id/toggle", authRequired, requireAdminOrHR, toggleVehicle);
-router.delete("/:id", authRequired, requireAdminOrHR, deleteVehicle);
+// update
+router.patch("/:id", requireAdminOrHR, updateVehicle);
+router.patch("/:id/toggle", requireAdminOrHR, toggleVehicle);
+router.delete("/:id", requireAdminOrHR, deleteVehicle);
 
 module.exports = router;

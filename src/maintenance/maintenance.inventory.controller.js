@@ -23,7 +23,10 @@ function isUuid(v) {
 async function createIssueForWorkOrder(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = req.user?.role || null;
     if (!isAdminOrAccountant(role)) {
@@ -36,9 +39,12 @@ async function createIssueForWorkOrder(req, res) {
     const { notes } = req.body || {};
     const now = new Date();
 
-    const wo = await prisma.maintenance_work_orders.findUnique({
-      where: { id: workOrderId },
-      select: { id: true, vehicle_id: true, status: true },
+    const wo = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
+      select: { id: true, company_id: true, vehicle_id: true, status: true },
     });
 
     if (!wo) return res.status(404).json({ message: "Work order not found" });
@@ -50,6 +56,7 @@ async function createIssueForWorkOrder(req, res) {
 
     const issue = await prisma.inventory_issues.create({
       data: {
+        company_id: companyId,
         maintenance_work_orders: {
           connect: { id: wo.id },
         },
@@ -71,7 +78,10 @@ async function createIssueForWorkOrder(req, res) {
 async function addIssueLines(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = req.user?.role || null;
     if (!isAdminOrAccountant(role)) {
@@ -86,9 +96,12 @@ async function addIssueLines(req, res) {
       return res.status(400).json({ message: "lines[] is required" });
     }
 
-    const issue = await prisma.inventory_issues.findUnique({
-      where: { id: issueId },
-      select: { id: true },
+    const issue = await prisma.inventory_issues.findFirst({
+      where: {
+        id: issueId,
+        company_id: companyId,
+      },
+      select: { id: true, company_id: true, work_order_id: true },
     });
     if (!issue) return res.status(404).json({ message: "Issue not found" });
 
@@ -111,6 +124,7 @@ async function addIssueLines(req, res) {
       const total_cost = qty * unit_cost;
 
       payload.push({
+        company_id: companyId,
         issue_id: issueId,
         part_id,
         qty,
@@ -122,7 +136,10 @@ async function addIssueLines(req, res) {
 
     const partIds = [...new Set(payload.map((p) => p.part_id))];
     const parts = await prisma.parts.findMany({
-      where: { id: { in: partIds } },
+      where: {
+        company_id: companyId,
+        id: { in: partIds },
+      },
       select: { id: true },
     });
     if (parts.length !== partIds.length) {
@@ -134,6 +151,7 @@ async function addIssueLines(req, res) {
         payload.map((p) =>
           tx.inventory_issue_lines.create({
             data: {
+              company_id: companyId,
               issue_id: p.issue_id,
               part_id: p.part_id,
               qty: p.qty,

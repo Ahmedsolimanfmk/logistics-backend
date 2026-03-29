@@ -17,7 +17,7 @@ function handleError(res, err) {
 // GET /vendors
 async function list(req, res) {
   try {
-    const data = await service.list(req.query);
+    const data = await service.list(req.companyId, req.query);
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
@@ -27,7 +27,7 @@ async function list(req, res) {
 // GET /vendors/options/list
 async function options(req, res) {
   try {
-    const data = await service.options();
+    const data = await service.options(req.companyId);
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
@@ -38,7 +38,7 @@ async function options(req, res) {
 async function getById(req, res) {
   try {
     const { id } = req.params;
-    const data = await service.getById(id);
+    const data = await service.getById(req.companyId, id);
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
@@ -48,7 +48,7 @@ async function getById(req, res) {
 // POST /vendors
 async function create(req, res) {
   try {
-    const data = await service.create(req.body);
+    const data = await service.create(req.companyId, req.body);
     return res.status(201).json(data);
   } catch (err) {
     return handleError(res, err);
@@ -59,7 +59,7 @@ async function create(req, res) {
 async function update(req, res) {
   try {
     const { id } = req.params;
-    const data = await service.update(id, req.body);
+    const data = await service.update(req.companyId, id, req.body);
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
@@ -70,7 +70,7 @@ async function update(req, res) {
 async function toggle(req, res) {
   try {
     const { id } = req.params;
-    const data = await service.toggle(id);
+    const data = await service.toggle(req.companyId, id);
     return res.json(data);
   } catch (err) {
     return handleError(res, err);

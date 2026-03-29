@@ -14,11 +14,15 @@ function toAmount(v) {
 // =======================
 // Service
 // =======================
-async function getTripFinanceSummary(tripId) {
-  const trip = await prisma.trips.findUnique({
-    where: { id: tripId },
+async function getTripFinanceSummary(tripId, companyId) {
+  const trip = await prisma.trips.findFirst({
+    where: {
+      id: tripId,
+      company_id: companyId,
+    },
     select: {
       id: true,
+      company_id: true,
       agreed_revenue: true,
       revenue_currency: true,
       financial_status: true,
@@ -33,60 +37,59 @@ async function getTripFinanceSummary(tripId) {
   }
 
   const [
-    currentRevenueRow,
-    currentApprovedRevenueRow,
+    latestRevenueRow,
+    latestApprovedRevenueRow,
     approvedExpenses,
     pendingExpenses,
   ] = await Promise.all([
     prisma.trip_revenues.findFirst({
       where: {
+        company_id: companyId,
         trip_id: tripId,
-        is_current: true,
       },
-      orderBy: { version_no: "desc" },
+      orderBy: [{ entered_at: "desc" }],
       select: {
         id: true,
         amount: true,
         currency: true,
         source: true,
+        status: true,
         entered_at: true,
         approved_at: true,
         notes: true,
-        is_current: true,
-        version_no: true,
-        is_approved: true,
-        approval_notes: true,
-        pricing_rule_id: true,
-        pricing_rule_snapshot: true,
+        contract_id: true,
+        invoice_id: true,
+        entered_by: true,
+        approved_by: true,
       },
     }),
 
     prisma.trip_revenues.findFirst({
       where: {
+        company_id: companyId,
         trip_id: tripId,
-        is_current: true,
-        is_approved: true,
+        status: "APPROVED",
       },
-      orderBy: { version_no: "desc" },
+      orderBy: [{ entered_at: "desc" }],
       select: {
         id: true,
         amount: true,
         currency: true,
         source: true,
+        status: true,
         entered_at: true,
         approved_at: true,
         notes: true,
-        is_current: true,
-        version_no: true,
-        is_approved: true,
-        approval_notes: true,
-        pricing_rule_id: true,
-        pricing_rule_snapshot: true,
+        contract_id: true,
+        invoice_id: true,
+        entered_by: true,
+        approved_by: true,
       },
     }),
 
     prisma.cash_expenses.findMany({
       where: {
+        company_id: companyId,
         trip_id: tripId,
         approval_status: "APPROVED",
       },
@@ -102,6 +105,7 @@ async function getTripFinanceSummary(tripId) {
 
     prisma.cash_expenses.findMany({
       where: {
+        company_id: companyId,
         trip_id: tripId,
         approval_status: { in: ["PENDING", "APPEALED"] },
       },
@@ -141,7 +145,7 @@ async function getTripFinanceSummary(tripId) {
     0
   );
 
-  const revenueSourceRow = currentApprovedRevenueRow || currentRevenueRow || null;
+  const revenueSourceRow = latestApprovedRevenueRow || latestRevenueRow || null;
 
   const revenue = revenueSourceRow
     ? toAmount(revenueSourceRow.amount)
@@ -155,6 +159,7 @@ async function getTripFinanceSummary(tripId) {
 
   return {
     trip_id: trip.id,
+    company_id: trip.company_id,
     financial_status: trip.financial_status || "OPEN",
 
     revenue,
@@ -170,8 +175,8 @@ async function getTripFinanceSummary(tripId) {
     currency: revenueSourceRow?.currency || trip.revenue_currency || "EGP",
 
     revenue_record: revenueSourceRow,
-    current_revenue_record: currentRevenueRow || null,
-    current_approved_revenue_record: currentApprovedRevenueRow || null,
+    latest_revenue_record: latestRevenueRow || null,
+    latest_approved_revenue_record: latestApprovedRevenueRow || null,
 
     breakdown_by_type: breakdownByType,
 

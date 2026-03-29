@@ -1,10 +1,8 @@
-// =======================
-// src/supervisors/supervisors.routes.js
-// =======================
-
 const { Router } = require("express");
+
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireAdminOrHR } = require("../auth/role.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 
 const {
   listSupervisors,
@@ -15,10 +13,18 @@ const {
 
 const router = Router();
 
-// Admin/HR only
-router.get("/", authRequired, requireAdminOrHR, listSupervisors);
-router.get("/:id/vehicles", authRequired, requireAdminOrHR, getSupervisorVehicles);
-router.post("/:id/assign-vehicle", authRequired, requireAdminOrHR, assignVehicle);
-router.post("/:id/unassign-vehicle", authRequired, requireAdminOrHR, unassignVehicle);
+router.use(authRequired);
+router.use(requireCompany);
+router.use(requireAdminOrHR);
+
+// list
+router.get("/", listSupervisors);
+
+// vehicles
+router.get("/:id/vehicles", getSupervisorVehicles);
+
+// assign/unassign
+router.post("/:id/assign-vehicle", assignVehicle);
+router.post("/:id/unassign-vehicle", unassignVehicle);
 
 module.exports = router;

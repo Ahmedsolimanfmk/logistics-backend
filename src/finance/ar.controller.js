@@ -47,14 +47,31 @@ function normalizeTripLines(raw) {
     .filter((x) => x.trip_id);
 }
 
+function buildError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  err.statusCode = status;
+  return err;
+}
+
+function requireCompanyId(companyId) {
+  if (!companyId || !isUuid(companyId)) {
+    throw buildError("Invalid or missing company context", 400);
+  }
+  return companyId;
+}
+
 // Invoice number generator: INV-YYYYMM-0001
-async function generateInvoiceNo(tx, issueDate = new Date()) {
+async function generateInvoiceNo(tx, companyId, issueDate = new Date()) {
   const yyyy = issueDate.getFullYear();
   const mm = String(issueDate.getMonth() + 1).padStart(2, "0");
   const prefix = `INV-${yyyy}${mm}-`;
 
   const last = await tx.ar_invoices.findFirst({
-    where: { invoice_no: { startsWith: prefix } },
+    where: {
+      company_id: companyId,
+      invoice_no: { startsWith: prefix },
+    },
     orderBy: { invoice_no: "desc" },
     select: { invoice_no: true },
   });
@@ -72,15 +89,27 @@ async function generateInvoiceNo(tx, issueDate = new Date()) {
 // =======================
 // Recompute invoice status based on POSTED allocations
 // =======================
-async function recomputeInvoicePaymentStatus(tx, invoiceId) {
-  const inv = await tx.ar_invoices.findUnique({
-    where: { id: invoiceId },
+async function recomputeInvoicePaymentStatus(tx, companyId, invoiceId) {
+  const inv = await tx.ar_invoices.findFirst({
+    where: {
+      id: invoiceId,
+      company_id: companyId,
+    },
     select: { id: true, status: true, total_amount: true },
   });
   if (!inv) return;
 
   const agg = await tx.ar_payment_allocations.aggregate({
-    where: { invoice_id: invoiceId, ar_payments: { status: "POSTED" } },
+    where: {
+      company_id: companyId,
+      invoice_id: invoiceId,
+      ar_payments: {
+        is: {
+          status: "POSTED",
+          company_id: companyId,
+        },
+      },
+    },
     _sum: { amount_allocated: true },
   });
 
@@ -107,13 +136,21 @@ async function recomputeInvoicePaymentStatus(tx, invoiceId) {
 // =======================
 async function listArInvoices(req, res) {
   try {
+    const companyId = requireCompanyId(req.companyId);
+
     const items = await prisma.ar_invoices.findMany({
+      where: {
+        company_id: companyId,
+      },
       orderBy: { created_at: "desc" },
       take: 50,
       include: {
         clients: { select: { id: true, name: true } },
         client_contracts: { select: { id: true, contract_no: true } },
         invoice_trip_lines: {
+          where: {
+            company_id: companyId,
+          },
           select: {
             id: true,
             trip_id: true,
@@ -141,7 +178,9 @@ async function listArInvoices(req, res) {
     });
   } catch (e) {
     console.error("listArInvoices error:", e);
-    return res.status(500).json({ message: "Failed to load AR invoices" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to load AR invoices",
+    });
   }
 }
 
@@ -151,19 +190,27 @@ async function listArInvoices(req, res) {
 async function getArInvoiceById(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const invoice = await prisma.ar_invoices.findUnique({
-      where: { id },
+    const invoice = await prisma.ar_invoices.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         clients: { select: { id: true, name: true } },
         client_contracts: { select: { id: true, contract_no: true, status: true } },
         users_created: { select: { id: true, full_name: true, email: true, role: true } },
         users_approved: { select: { id: true, full_name: true, email: true, role: true } },
         invoice_trip_lines: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { trip_id: "asc" },
           include: {
             trips: {
@@ -191,6 +238,9 @@ async function getArInvoiceById(req, res) {
           },
         },
         payments: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { created_at: "desc" },
           include: {
             ar_payments: {
@@ -224,7 +274,9 @@ async function getArInvoiceById(req, res) {
     });
   } catch (e) {
     console.error("getArInvoiceById error:", e);
-    return res.status(500).json({ message: "Failed to load invoice details" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to load invoice details",
+    });
   }
 }
 
@@ -245,6 +297,7 @@ async function getArInvoiceById(req, res) {
 async function createArInvoice(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
 
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -264,8 +317,12 @@ async function createArInvoice(req, res) {
     const rawAmount = toMoney(req.body?.amount);
     const tripLines = normalizeTripLines(req.body?.trip_lines);
 
-    if (!client_id) {
-      return res.status(400).json({ message: "client_id is required" });
+    if (!isUuid(client_id)) {
+      return res.status(400).json({ message: "client_id is required and must be uuid" });
+    }
+
+    if (contract_id && !isUuid(contract_id)) {
+      return res.status(400).json({ message: "contract_id must be a uuid" });
     }
 
     if (tripLines.some((x) => !isUuid(x.trip_id))) {
@@ -282,9 +339,7 @@ async function createArInvoice(req, res) {
 
     const linesAmount = tripLines.reduce((s, x) => s + Number(x.amount || 0), 0);
     const amount =
-      tripLines.length > 0
-        ? Math.round(linesAmount * 100) / 100
-        : rawAmount;
+      tripLines.length > 0 ? Math.round(linesAmount * 100) / 100 : rawAmount;
 
     if (amount == null) {
       return res.status(400).json({
@@ -303,68 +358,68 @@ async function createArInvoice(req, res) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         created = await prisma.$transaction(async (tx) => {
-          const client = await tx.clients.findUnique({
-            where: { id: client_id },
-            select: { id: true },
+          const client = await tx.clients.findFirst({
+            where: {
+              id: client_id,
+              company_id: companyId,
+            },
+            select: { id: true, company_id: true },
           });
 
           if (!client) {
-            const err = new Error("Client not found");
-            err.status = 404;
-            throw err;
+            throw buildError("Client not found", 404);
           }
 
           if (contract_id) {
-            const contract = await tx.client_contracts.findUnique({
-              where: { id: contract_id },
-              select: { id: true, client_id: true },
+            const contract = await tx.client_contracts.findFirst({
+              where: {
+                id: contract_id,
+                company_id: companyId,
+              },
+              select: { id: true, client_id: true, company_id: true },
             });
 
             if (!contract) {
-              const err = new Error("Contract not found");
-              err.status = 404;
-              throw err;
+              throw buildError("Contract not found", 404);
             }
 
             if (contract.client_id !== client_id) {
-              const err = new Error("Contract does not belong to this client");
-              err.status = 400;
-              throw err;
+              throw buildError("Contract does not belong to this client", 400);
             }
           }
 
           if (tripLines.length > 0) {
             const trips = await tx.trips.findMany({
               where: {
+                company_id: companyId,
                 id: { in: tripLines.map((x) => x.trip_id) },
               },
               select: {
                 id: true,
                 client_id: true,
                 trip_code: true,
+                financial_status: true,
               },
             });
 
             if (trips.length !== tripLines.length) {
-              const err = new Error("One or more trips not found");
-              err.status = 404;
-              throw err;
+              throw buildError("One or more trips not found", 404);
             }
 
             const wrongClientTrip = trips.find((t) => t.client_id !== client_id);
             if (wrongClientTrip) {
-              const err = new Error(
-                `Trip does not belong to this client: ${wrongClientTrip.trip_code || wrongClientTrip.id}`
+              throw buildError(
+                `Trip does not belong to this client: ${wrongClientTrip.trip_code || wrongClientTrip.id}`,
+                400
               );
-              err.status = 400;
-              throw err;
             }
           }
 
-          const invoice_no = await generateInvoiceNo(tx, issue_date);
+          const invoice_no = await generateInvoiceNo(tx, companyId, issue_date);
 
           const invoice = await tx.ar_invoices.create({
             data: {
+              company_id: companyId,
               client_id,
               contract_id,
               invoice_no,
@@ -383,6 +438,7 @@ async function createArInvoice(req, res) {
             for (const line of tripLines) {
               await tx.ar_invoice_trip_lines.create({
                 data: {
+                  company_id: companyId,
                   invoice_id: invoice.id,
                   trip_id: line.trip_id,
                   amount: line.amount,
@@ -392,12 +448,18 @@ async function createArInvoice(req, res) {
             }
           }
 
-          return tx.ar_invoices.findUnique({
-            where: { id: invoice.id },
+          return tx.ar_invoices.findFirst({
+            where: {
+              id: invoice.id,
+              company_id: companyId,
+            },
             include: {
               clients: { select: { id: true, name: true } },
               client_contracts: { select: { id: true, contract_no: true } },
               invoice_trip_lines: {
+                where: {
+                  company_id: companyId,
+                },
                 include: {
                   trips: {
                     select: {
@@ -448,12 +510,19 @@ async function createArInvoice(req, res) {
 async function submitArInvoice(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const inv = await prisma.ar_invoices.findUnique({ where: { id } });
+    const inv = await prisma.ar_invoices.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
     if (inv.status !== "DRAFT") {
@@ -470,7 +539,9 @@ async function submitArInvoice(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("submitArInvoice error:", e);
-    return res.status(500).json({ message: "Failed to submit invoice" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to submit invoice",
+    });
   }
 }
 
@@ -481,6 +552,8 @@ async function submitArInvoice(req, res) {
 async function approveArInvoice(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -489,9 +562,14 @@ async function approveArInvoice(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const inv = await prisma.ar_invoices.findUnique({ where: { id } });
+    const inv = await prisma.ar_invoices.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
     if (inv.status !== "SUBMITTED") {
@@ -513,7 +591,9 @@ async function approveArInvoice(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("approveArInvoice error:", e);
-    return res.status(500).json({ message: "Failed to approve invoice" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to approve invoice",
+    });
   }
 }
 
@@ -524,6 +604,8 @@ async function approveArInvoice(req, res) {
 async function rejectArInvoice(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -532,7 +614,7 @@ async function rejectArInvoice(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
     const reason =
       req.body?.rejection_reason != null
@@ -543,7 +625,12 @@ async function rejectArInvoice(req, res) {
       return res.status(400).json({ message: "rejection_reason is required" });
     }
 
-    const inv = await prisma.ar_invoices.findUnique({ where: { id } });
+    const inv = await prisma.ar_invoices.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
     if (inv.status !== "SUBMITTED") {
@@ -565,7 +652,9 @@ async function rejectArInvoice(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("rejectArInvoice error:", e);
-    return res.status(500).json({ message: "Failed to reject invoice" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to reject invoice",
+    });
   }
 }
 
@@ -574,7 +663,12 @@ async function rejectArInvoice(req, res) {
 // =======================
 async function listArPayments(req, res) {
   try {
+    const companyId = requireCompanyId(req.companyId);
+
     const items = await prisma.ar_payments.findMany({
+      where: {
+        company_id: companyId,
+      },
       orderBy: { created_at: "desc" },
       take: 50,
       include: {
@@ -585,7 +679,9 @@ async function listArPayments(req, res) {
     return res.json({ items, total: items.length });
   } catch (e) {
     console.error("listArPayments error:", e);
-    return res.status(500).json({ message: "Failed to load AR payments" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to load AR payments",
+    });
   }
 }
 
@@ -595,16 +691,24 @@ async function listArPayments(req, res) {
 async function getArPaymentById(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const payment = await prisma.ar_payments.findUnique({
-      where: { id },
+    const payment = await prisma.ar_payments.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         clients: { select: { id: true, name: true } },
         allocations: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { created_at: "desc" },
           include: {
             ar_invoices: {
@@ -666,7 +770,9 @@ async function getArPaymentById(req, res) {
     });
   } catch (e) {
     console.error("getArPaymentById error:", e);
-    return res.status(500).json({ message: "Failed to load payment details" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to load payment details",
+    });
   }
 }
 
@@ -676,6 +782,8 @@ async function getArPaymentById(req, res) {
 async function createArPayment(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -692,8 +800,8 @@ async function createArPayment(req, res) {
       req.body?.reference != null ? String(req.body.reference) : null;
     const notes = req.body?.notes != null ? String(req.body.notes) : null;
 
-    if (!client_id) {
-      return res.status(400).json({ message: "client_id is required" });
+    if (!isUuid(client_id)) {
+      return res.status(400).json({ message: "client_id is required and must be uuid" });
     }
     if (amount == null || amount <= 0) {
       return res.status(400).json({ message: "amount must be > 0" });
@@ -705,19 +813,21 @@ async function createArPayment(req, res) {
     }
 
     const created = await prisma.$transaction(async (tx) => {
-      const client = await tx.clients.findUnique({
-        where: { id: client_id },
-        select: { id: true },
+      const client = await tx.clients.findFirst({
+        where: {
+          id: client_id,
+          company_id: companyId,
+        },
+        select: { id: true, company_id: true },
       });
 
       if (!client) {
-        const err = new Error("Client not found");
-        err.status = 404;
-        throw err;
+        throw buildError("Client not found", 404);
       }
 
       return tx.ar_payments.create({
         data: {
+          company_id: companyId,
           client_id,
           payment_date,
           amount,
@@ -745,12 +855,19 @@ async function createArPayment(req, res) {
 async function submitArPayment(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const p = await prisma.ar_payments.findUnique({ where: { id } });
+    const p = await prisma.ar_payments.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!p) return res.status(404).json({ message: "Payment not found" });
 
     if (p.status !== "DRAFT") {
@@ -767,7 +884,9 @@ async function submitArPayment(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("submitArPayment error:", e);
-    return res.status(500).json({ message: "Failed to submit payment" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to submit payment",
+    });
   }
 }
 
@@ -777,6 +896,8 @@ async function submitArPayment(req, res) {
 async function rejectArPayment(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -785,7 +906,7 @@ async function rejectArPayment(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
     const reason =
       req.body?.rejection_reason != null
@@ -796,7 +917,12 @@ async function rejectArPayment(req, res) {
       return res.status(400).json({ message: "rejection_reason is required" });
     }
 
-    const p = await prisma.ar_payments.findUnique({ where: { id } });
+    const p = await prisma.ar_payments.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!p) return res.status(404).json({ message: "Payment not found" });
 
     if (p.status !== "SUBMITTED") {
@@ -818,7 +944,9 @@ async function rejectArPayment(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("rejectArPayment error:", e);
-    return res.status(500).json({ message: "Failed to reject payment" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to reject payment",
+    });
   }
 }
 
@@ -828,6 +956,8 @@ async function rejectArPayment(req, res) {
 async function approveArPayment(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -836,26 +966,33 @@ async function approveArPayment(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
     const updated = await prisma.$transaction(async (tx) => {
-      const p = await tx.ar_payments.findUnique({
-        where: { id },
-        include: { allocations: { select: { invoice_id: true } } },
+      const p = await tx.ar_payments.findFirst({
+        where: {
+          id,
+          company_id: companyId,
+        },
+        include: {
+          allocations: {
+            where: {
+              company_id: companyId,
+            },
+            select: { invoice_id: true },
+          },
+        },
       });
 
       if (!p) {
-        const e = new Error("Payment not found");
-        e.status = 404;
-        throw e;
+        throw buildError("Payment not found", 404);
       }
 
       if (p.status !== "SUBMITTED") {
-        const e = new Error(
-          `Only SUBMITTED payments can be approved. Current: ${p.status}`
+        throw buildError(
+          `Only SUBMITTED payments can be approved. Current: ${p.status}`,
+          400
         );
-        e.status = 400;
-        throw e;
       }
 
       const up = await tx.ar_payments.update({
@@ -873,7 +1010,7 @@ async function approveArPayment(req, res) {
       );
 
       for (const invId of invoiceIds) {
-        await recomputeInvoicePaymentStatus(tx, invId);
+        await recomputeInvoicePaymentStatus(tx, companyId, invId);
       }
 
       return up;
@@ -894,6 +1031,8 @@ async function approveArPayment(req, res) {
 async function allocateArPayment(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -905,38 +1044,47 @@ async function allocateArPayment(req, res) {
     const invoice_id = String(req.body?.invoice_id || "").trim();
     const amount = toMoney(req.body?.amount);
 
-    if (!paymentId) {
-      return res.status(400).json({ message: "payment id is required" });
+    if (!isUuid(paymentId)) {
+      return res.status(400).json({ message: "payment id is required and must be uuid" });
     }
-    if (!invoice_id) {
-      return res.status(400).json({ message: "invoice_id is required" });
+    if (!isUuid(invoice_id)) {
+      return res.status(400).json({ message: "invoice_id is required and must be uuid" });
     }
     if (amount == null || amount <= 0) {
       return res.status(400).json({ message: "amount must be > 0" });
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const pay = await tx.ar_payments.findUnique({
-        where: { id: paymentId },
-        include: { allocations: true },
+      const pay = await tx.ar_payments.findFirst({
+        where: {
+          id: paymentId,
+          company_id: companyId,
+        },
+        include: {
+          allocations: {
+            where: {
+              company_id: companyId,
+            },
+          },
+        },
       });
 
       if (!pay) {
-        const e = new Error("Payment not found");
-        e.status = 404;
-        throw e;
+        throw buildError("Payment not found", 404);
       }
 
       if (pay.status === "POSTED") {
-        const e = new Error("Cannot allocate a POSTED payment");
-        e.status = 400;
-        throw e;
+        throw buildError("Cannot allocate a POSTED payment", 400);
       }
 
-      const inv = await tx.ar_invoices.findUnique({
-        where: { id: invoice_id },
+      const inv = await tx.ar_invoices.findFirst({
+        where: {
+          id: invoice_id,
+          company_id: companyId,
+        },
         select: {
           id: true,
+          company_id: true,
           client_id: true,
           status: true,
           total_amount: true,
@@ -944,23 +1092,18 @@ async function allocateArPayment(req, res) {
       });
 
       if (!inv) {
-        const e = new Error("Invoice not found");
-        e.status = 404;
-        throw e;
+        throw buildError("Invoice not found", 404);
       }
 
       if (inv.client_id !== pay.client_id) {
-        const e = new Error("Invoice does not belong to the payment client");
-        e.status = 400;
-        throw e;
+        throw buildError("Invoice does not belong to the payment client", 400);
       }
 
       if (!["APPROVED", "PARTIALLY_PAID"].includes(inv.status)) {
-        const e = new Error(
-          `Invoice must be APPROVED/PARTIALLY_PAID to allocate. Current: ${inv.status}`
+        throw buildError(
+          `Invoice must be APPROVED/PARTIALLY_PAID to allocate. Current: ${inv.status}`,
+          400
         );
-        e.status = 400;
-        throw e;
       }
 
       const allocatedSoFar = (pay.allocations || []).reduce(
@@ -970,17 +1113,22 @@ async function allocateArPayment(req, res) {
       const remainingPayment = Number(pay.amount || 0) - allocatedSoFar;
 
       if (amount > remainingPayment) {
-        const e = new Error(
-          `Allocation exceeds remaining payment amount. Remaining: ${remainingPayment}`
+        throw buildError(
+          `Allocation exceeds remaining payment amount. Remaining: ${remainingPayment}`,
+          400
         );
-        e.status = 400;
-        throw e;
       }
 
       const invAgg = await tx.ar_payment_allocations.aggregate({
         where: {
+          company_id: companyId,
           invoice_id,
-          ar_payments: { status: "POSTED" },
+          ar_payments: {
+            is: {
+              status: "POSTED",
+              company_id: companyId,
+            },
+          },
         },
         _sum: { amount_allocated: true },
       });
@@ -993,21 +1141,25 @@ async function allocateArPayment(req, res) {
       );
 
       if (amount > invRemaining) {
-        const e = new Error(
-          `Allocation exceeds invoice remaining. Remaining: ${invRemaining}`
+        throw buildError(
+          `Allocation exceeds invoice remaining. Remaining: ${invRemaining}`,
+          400
         );
-        e.status = 400;
-        throw e;
       }
 
       const existing = await tx.ar_payment_allocations.findFirst({
-        where: { payment_id: paymentId, invoice_id },
+        where: {
+          company_id: companyId,
+          payment_id: paymentId,
+          invoice_id,
+        },
       });
 
       let alloc;
       if (!existing) {
         alloc = await tx.ar_payment_allocations.create({
           data: {
+            company_id: companyId,
             payment_id: paymentId,
             invoice_id,
             amount_allocated: amount,
@@ -1051,13 +1203,20 @@ async function allocateArPayment(req, res) {
 async function getClientLedger(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const clientId = String(req.params?.clientId || "").trim();
-    if (!clientId) return res.status(400).json({ message: "clientId is required" });
+    if (!isUuid(clientId)) {
+      return res.status(400).json({ message: "clientId is required and must be uuid" });
+    }
 
-    const client = await prisma.clients.findUnique({
-      where: { id: clientId },
+    const client = await prisma.clients.findFirst({
+      where: {
+        id: clientId,
+        company_id: companyId,
+      },
       select: { id: true, name: true },
     });
 
@@ -1065,6 +1224,7 @@ async function getClientLedger(req, res) {
 
     const invoices = await prisma.ar_invoices.findMany({
       where: {
+        company_id: companyId,
         client_id: clientId,
         status: { in: ["APPROVED", "PARTIALLY_PAID", "PAID"] },
       },
@@ -1077,6 +1237,9 @@ async function getClientLedger(req, res) {
         status: true,
         total_amount: true,
         payments: {
+          where: {
+            company_id: companyId,
+          },
           select: {
             amount_allocated: true,
             ar_payments: { select: { status: true } },
@@ -1126,7 +1289,9 @@ async function getClientLedger(req, res) {
     });
   } catch (e) {
     console.error("getClientLedger error:", e);
-    return res.status(500).json({ message: "Failed to load ledger" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to load ledger",
+    });
   }
 }
 
@@ -1136,6 +1301,8 @@ async function getClientLedger(req, res) {
 async function updateArPaymentDraft(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -1144,9 +1311,14 @@ async function updateArPaymentDraft(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const p = await prisma.ar_payments.findUnique({ where: { id } });
+    const p = await prisma.ar_payments.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!p) return res.status(404).json({ message: "Payment not found" });
     if (p.status !== "DRAFT") {
       return res
@@ -1182,7 +1354,10 @@ async function updateArPaymentDraft(req, res) {
     }
 
     const agg = await prisma.ar_payment_allocations.aggregate({
-      where: { payment_id: id },
+      where: {
+        company_id: companyId,
+        payment_id: id,
+      },
       _sum: { amount_allocated: true },
     });
 
@@ -1201,7 +1376,9 @@ async function updateArPaymentDraft(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("updateArPaymentDraft error:", e);
-    return res.status(500).json({ message: "Failed to update payment" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to update payment",
+    });
   }
 }
 
@@ -1211,6 +1388,8 @@ async function updateArPaymentDraft(req, res) {
 async function deleteArPaymentAllocation(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -1221,14 +1400,17 @@ async function deleteArPaymentAllocation(req, res) {
     const paymentId = String(req.params?.paymentId || "").trim();
     const allocationId = String(req.params?.allocationId || "").trim();
 
-    if (!paymentId || !allocationId) {
+    if (!isUuid(paymentId) || !isUuid(allocationId)) {
       return res
         .status(400)
-        .json({ message: "paymentId and allocationId are required" });
+        .json({ message: "paymentId and allocationId must be valid uuids" });
     }
 
-    const pay = await prisma.ar_payments.findUnique({
-      where: { id: paymentId },
+    const pay = await prisma.ar_payments.findFirst({
+      where: {
+        id: paymentId,
+        company_id: companyId,
+      },
       select: { id: true, status: true },
     });
 
@@ -1239,8 +1421,11 @@ async function deleteArPaymentAllocation(req, res) {
         .json({ message: "Cannot modify allocations for POSTED payment" });
     }
 
-    const alloc = await prisma.ar_payment_allocations.findUnique({
-      where: { id: allocationId },
+    const alloc = await prisma.ar_payment_allocations.findFirst({
+      where: {
+        id: allocationId,
+        company_id: companyId,
+      },
       select: { id: true, payment_id: true },
     });
 
@@ -1254,7 +1439,9 @@ async function deleteArPaymentAllocation(req, res) {
     return res.json({ ok: true });
   } catch (e) {
     console.error("deleteArPaymentAllocation error:", e);
-    return res.status(500).json({ message: "Failed to delete allocation" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to delete allocation",
+    });
   }
 }
 
@@ -1264,6 +1451,8 @@ async function deleteArPaymentAllocation(req, res) {
 async function deleteArPaymentDraft(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = requireCompanyId(req.companyId);
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res
@@ -1272,10 +1461,13 @@ async function deleteArPaymentDraft(req, res) {
     }
 
     const id = String(req.params?.id || "").trim();
-    if (!id) return res.status(400).json({ message: "id is required" });
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const p = await prisma.ar_payments.findUnique({
-      where: { id },
+    const p = await prisma.ar_payments.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       select: { id: true, status: true },
     });
 
@@ -1290,7 +1482,9 @@ async function deleteArPaymentDraft(req, res) {
     return res.json({ ok: true });
   } catch (e) {
     console.error("deleteArPaymentDraft error:", e);
-    return res.status(500).json({ message: "Failed to delete payment" });
+    return res.status(e?.status || 500).json({
+      message: e?.message || "Failed to delete payment",
+    });
   }
 }
 

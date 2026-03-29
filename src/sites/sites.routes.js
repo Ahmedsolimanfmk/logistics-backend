@@ -1,5 +1,7 @@
 const router = require("express").Router();
+
 const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 
 const {
   listSites,
@@ -10,6 +12,7 @@ const {
 } = require("./sites.controller");
 
 router.use(authRequired);
+router.use(requireCompany);
 
 router.get("/", listSites);
 router.get("/:id", getSiteById);

@@ -30,8 +30,14 @@ function canManageAllTrips(role) {
 async function requireTripStartFinishPermission(req, res, next) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!companyId) {
+      return res.status(403).json({ message: "Company context missing" });
     }
 
     const role = getAuthRole(req);
@@ -41,15 +47,26 @@ async function requireTripStartFinishPermission(req, res, next) {
       return res.status(400).json({ message: "Invalid trip id" });
     }
 
-    // أدوار الإدارة والتشغيل المسموح لها على كل الرحلات
     if (canManageAllTrips(role)) {
+      const trip = await prisma.trips.findFirst({
+        where: {
+          id: tripId,
+          company_id: companyId,
+        },
+        select: { id: true },
+      });
+
+      if (!trip) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
       return next();
     }
 
-    // المشرف الميداني: لازم يكون متعيّن على الرحلة
     if (role === ROLES.FIELD_SUPERVISOR) {
       const assignment = await prisma.trip_assignments.findFirst({
         where: {
+          company_id: companyId,
           trip_id: tripId,
           field_supervisor_id: userId,
           is_active: true,

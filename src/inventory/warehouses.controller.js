@@ -13,7 +13,14 @@ function isUuid(v) {
 
 async function listWarehouses(req, res) {
   try {
+    const companyId = req.companyId;
+
+    const where = {
+      company_id: companyId,
+    };
+
     const onlyActive = String(req.query.active || "").trim() === "1";
+    
 
     const rows = await prisma.warehouses.findMany({
       where: onlyActive ? { is_active: true } : undefined,

@@ -1,10 +1,12 @@
 const express = require("express");
 const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 const controller = require("./contract-pricing.controller");
 
 const router = express.Router();
 
 router.use(authRequired);
+router.use(requireCompany); // 🔥 مهم جدا
 
 // =======================
 // Vehicle Classes

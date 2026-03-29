@@ -15,66 +15,88 @@ function handleError(res, err) {
 // Controllers
 // =======================
 
-// POST/GET /pricing/resolve
+// resolve
 async function resolve(req, res) {
   try {
     const input =
       req.method === "GET" ? req.query : req.body;
 
-    const data = await service.resolveTripPrice(input);
+    const data = await service.resolveTripPrice({
+      ...input,
+      company_id: req.companyId,
+    });
+
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
   }
 }
 
-// POST /pricing
+// create
 async function create(req, res) {
   try {
-    const data = await service.createPricingRule(req.body);
+    const data = await service.createPricingRule({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json(data);
   } catch (err) {
     return handleError(res, err);
   }
 }
 
-// GET /pricing
+// list
 async function list(req, res) {
   try {
-    const data = await service.listPricingRules(req.query);
+    const data = await service.listPricingRules({
+      ...req.query,
+      company_id: req.companyId,
+    });
+
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
   }
 }
 
-// GET /pricing/:id
+// get by id
 async function getById(req, res) {
   try {
-    const data = await service.getPricingRuleById(req.params.id);
+    const data = await service.getPricingRuleById(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
   }
 }
 
-// PATCH /pricing/:id
+// update
 async function update(req, res) {
   try {
     const data = await service.updatePricingRule(
       req.params.id,
-      req.body
+      req.body,
+      req.companyId
     );
+
     return res.json(data);
   } catch (err) {
     return handleError(res, err);
   }
 }
 
-// PATCH /pricing/:id/toggle
+// toggle
 async function toggle(req, res) {
   try {
-    const data = await service.togglePricingRule(req.params.id);
+    const data = await service.togglePricingRule(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json(data);
   } catch (err) {
     return handleError(res, err);

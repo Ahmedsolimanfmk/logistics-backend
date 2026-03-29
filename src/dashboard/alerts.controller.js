@@ -20,6 +20,7 @@ exports.getDashboardAlerts = async (req, res, next) => {
     const user = req.user;
 
     const filters = {
+      companyId: req.companyId,
       limit: Math.min(200, Math.max(1, parseIntSafe(req.query.limit, 50))),
       area: req.query.area,
       clientId: req.query.clientId,
@@ -39,6 +40,7 @@ exports.getDashboardAlertsSummary = async (req, res, next) => {
     const user = req.user;
 
     const filters = {
+      companyId: req.companyId,
       area: req.query.area,
       clientId: req.query.clientId,
       siteId: req.query.siteId,
@@ -77,6 +79,7 @@ exports.markAllDashboardAlertsRead = async (req, res, next) => {
     const user = req.user;
 
     const filters = {
+      companyId: req.companyId,
       area: req.body?.area ?? req.query.area,
       clientId: req.body?.clientId ?? req.query.clientId,
       siteId: req.body?.siteId ?? req.query.siteId,

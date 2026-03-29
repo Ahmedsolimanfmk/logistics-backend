@@ -16,7 +16,12 @@ async function listParts(req, res) {
     const q = String(req.query.q || "").trim();
     const onlyActive = String(req.query.active || "").trim() === "1";
 
-    const where = {};
+    const companyId = req.companyId;
+
+    const where = {
+      company_id: companyId,
+    };
+
     if (onlyActive) where.is_active = true;
 
     if (q) {

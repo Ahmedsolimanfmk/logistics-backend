@@ -15,18 +15,38 @@ function toNullableDecimal(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function toNullableBoolean(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "boolean") return value;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+
+  return null;
+}
+
+function toNullableDate(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function normalizeEnum(value) {
   if (value === undefined || value === null || value === "") return null;
   return String(value).trim().toUpperCase();
 }
 
-function buildWhere(query) {
+function buildWhere(companyId, query) {
   const q = toNullableString(query && query.q);
   const vendor_type = normalizeEnum(query && query.vendor_type);
   const classification = normalizeEnum(query && query.classification);
   const status = normalizeEnum(query && query.status);
+  const is_blacklisted = toNullableBoolean(query && query.is_blacklisted);
 
-  const where = {};
+  const where = {
+    company_id: companyId,
+  };
 
   if (q) {
     where.OR = [
@@ -37,12 +57,16 @@ function buildWhere(query) {
       { email: { contains: q, mode: "insensitive" } },
       { contact_person: { contains: q, mode: "insensitive" } },
       { city: { contains: q, mode: "insensitive" } },
+      { specialization: { contains: q, mode: "insensitive" } },
+      { tax_no: { contains: q, mode: "insensitive" } },
+      { commercial_register: { contains: q, mode: "insensitive" } },
     ];
   }
 
   if (vendor_type) where.vendor_type = vendor_type;
   if (classification) where.classification = classification;
   if (status) where.status = status;
+  if (is_blacklisted !== null) where.is_blacklisted = is_blacklisted;
 
   return where;
 }
@@ -67,8 +91,11 @@ function mapVendorPayload(payload) {
     tax_no: toNullableString(payload.tax_no),
     commercial_register: toNullableString(payload.commercial_register),
     payment_terms: toNullableString(payload.payment_terms),
+    currency: toNullableString(payload.currency) || "EGP",
     opening_balance: toNullableDecimal(payload.opening_balance),
+    opening_balance_date: toNullableDate(payload.opening_balance_date),
     credit_limit: toNullableDecimal(payload.credit_limit),
+    is_blacklisted: toNullableBoolean(payload.is_blacklisted) ?? false,
     notes: toNullableString(payload.notes),
   };
 }
@@ -81,17 +108,17 @@ async function ensureName(name) {
   }
 }
 
-async function ensureCodeUnique(code, excludeId) {
+async function ensureCodeUnique(companyId, code, excludeId) {
   if (!code) return;
 
-  const where = excludeId
-    ? {
-        code: code,
-        id: { not: excludeId },
-      }
-    : {
-        code: code,
-      };
+  const where = {
+    company_id: companyId,
+    code,
+  };
+
+  if (excludeId) {
+    where.id = { not: excludeId };
+  }
 
   const existing = await prisma.vendors.findFirst({
     where,
@@ -105,9 +132,12 @@ async function ensureCodeUnique(code, excludeId) {
   }
 }
 
-async function getVendorOrThrow(id) {
-  const vendor = await prisma.vendors.findUnique({
-    where: { id: id },
+async function getVendorOrThrow(companyId, id) {
+  const vendor = await prisma.vendors.findFirst({
+    where: {
+      id,
+      company_id: companyId,
+    },
   });
 
   if (!vendor) {
@@ -122,41 +152,43 @@ async function getVendorOrThrow(id) {
 // =======================
 // Service
 // =======================
-async function list(query) {
+async function list(companyId, query) {
   query = query || {};
 
   const page = Math.max(parseInt(query.page || "1", 10), 1);
-  const pageSize = Math.min(Math.max(parseInt(query.pageSize || "25", 10), 1), 100);
+  const pageSize = Math.min(
+    Math.max(parseInt(query.pageSize || "25", 10), 1),
+    100
+  );
   const skip = (page - 1) * pageSize;
 
-  const where = buildWhere(query);
+  const where = buildWhere(companyId, query);
 
-  const result = await Promise.all([
+  const [items, total] = await Promise.all([
     prisma.vendors.findMany({
-      where: where,
+      where,
       orderBy: [{ created_at: "desc" }, { name: "asc" }],
-      skip: skip,
+      skip,
       take: pageSize,
     }),
-    prisma.vendors.count({ where: where }),
+    prisma.vendors.count({ where }),
   ]);
 
-  const items = result[0];
-  const total = result[1];
   const pages = Math.max(Math.ceil(total / pageSize), 1);
 
   return {
-    items: items,
-    total: total,
-    page: page,
-    pageSize: pageSize,
-    pages: pages,
+    items,
+    total,
+    page,
+    pageSize,
+    pages,
   };
 }
 
-async function options() {
+async function options(companyId) {
   const items = await prisma.vendors.findMany({
     where: {
+      company_id: companyId,
       status: "ACTIVE",
     },
     select: {
@@ -167,6 +199,7 @@ async function options() {
       classification: true,
       city: true,
       phone: true,
+      is_blacklisted: true,
     },
     orderBy: [{ name: "asc" }],
   });
@@ -174,24 +207,29 @@ async function options() {
   return items;
 }
 
-async function getById(id) {
-  const vendor = await getVendorOrThrow(id);
+async function getById(companyId, id) {
+  const vendor = await getVendorOrThrow(companyId, id);
 
-  const result = await Promise.all([
+  const [workOrdersCount, expensesCount, transactionsCount] = await Promise.all([
     prisma.maintenance_work_orders.count({
-      where: { vendor_id: id },
+      where: {
+        company_id: companyId,
+        vendor_id: id,
+      },
     }),
     prisma.cash_expenses.count({
-      where: { vendor_id: id },
+      where: {
+        company_id: companyId,
+        vendor_id: id,
+      },
     }),
     prisma.vendor_transactions.count({
-      where: { vendor_id: id },
+      where: {
+        company_id: companyId,
+        vendor_id: id,
+      },
     }),
   ]);
-
-  const workOrdersCount = result[0];
-  const expensesCount = result[1];
-  const transactionsCount = result[2];
 
   return {
     ...vendor,
@@ -203,42 +241,45 @@ async function getById(id) {
   };
 }
 
-async function create(payload) {
+async function create(companyId, payload) {
   const data = mapVendorPayload(payload);
 
   await ensureName(data.name);
-  await ensureCodeUnique(data.code, null);
+  await ensureCodeUnique(companyId, data.code, null);
 
   const created = await prisma.vendors.create({
-    data: data,
+    data: {
+      ...data,
+      company_id: companyId,
+    },
   });
 
   return created;
 }
 
-async function update(id, payload) {
-  await getVendorOrThrow(id);
+async function update(companyId, id, payload) {
+  await getVendorOrThrow(companyId, id);
 
   const data = mapVendorPayload(payload);
 
   await ensureName(data.name);
-  await ensureCodeUnique(data.code, id);
+  await ensureCodeUnique(companyId, data.code, id);
 
   const updated = await prisma.vendors.update({
-    where: { id: id },
-    data: data,
+    where: { id },
+    data,
   });
 
   return updated;
 }
 
-async function toggle(id) {
-  const existing = await getVendorOrThrow(id);
+async function toggle(companyId, id) {
+  const existing = await getVendorOrThrow(companyId, id);
 
   const nextStatus = existing.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
 
   const updated = await prisma.vendors.update({
-    where: { id: id },
+    where: { id },
     data: {
       status: nextStatus,
     },

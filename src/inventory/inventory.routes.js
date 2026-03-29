@@ -1,19 +1,27 @@
-// =======================
-// src/inventory/inventory.routes.js
-// =======================
-
 const express = require("express");
+
+const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
+
+const {
+  requireCompanyActive,
+  requireCompanyFeature,
+} = require("../companies/company-access.middleware");
 
 const warehousesCtrl = require("./warehouses.controller");
 const partsCtrl = require("./parts.controller");
 const receiptsCtrl = require("./receipts.controller");
-
-// NEW
 const partItemsCtrl = require("./partItems.controller");
 const requestsCtrl = require("./requests.controller");
 const issuesCtrl = require("./issues.controller");
 
 const router = express.Router();
+
+// 🔥 IMPORTANT
+router.use(authRequired);
+router.use(requireCompany);
+router.use(requireCompanyActive);
+router.use(requireCompanyFeature("inventory.access"));
 
 // ---------- Warehouses ----------
 router.get("/warehouses", warehousesCtrl.listWarehouses);
@@ -25,17 +33,17 @@ router.get("/parts", partsCtrl.listParts);
 router.post("/parts", partsCtrl.createPart);
 router.patch("/parts/:id", partsCtrl.updatePart);
 
-// ---------- Part Items (serial units lookup) ----------
+// ---------- Part Items ----------
 router.get("/part-items", partItemsCtrl.listPartItems);
 
-// ---------- Receipts (Purchases) ----------
+// ---------- Receipts ----------
 router.get("/receipts", receiptsCtrl.listReceipts);
 router.get("/receipts/:id", receiptsCtrl.getReceipt);
 router.post("/receipts", receiptsCtrl.createReceipt);
-router.post("/receipts/:id/submit", receiptsCtrl.submitReceipt); // SUBMITTED فقط            // DRAFT
-router.post("/receipts/:id/post", receiptsCtrl.postReceipt);     // POSTED + part_items + cash_expense
+router.post("/receipts/:id/submit", receiptsCtrl.submitReceipt);
+router.post("/receipts/:id/post", receiptsCtrl.postReceipt);
 
-// ---------- Requests (maintenance -> store) ----------
+// ---------- Requests ----------
 router.get("/requests", requestsCtrl.listRequests);
 router.get("/requests/:id", requestsCtrl.getRequest);
 router.post("/requests", requestsCtrl.createRequest);
@@ -43,11 +51,10 @@ router.post("/requests/:id/approve", requestsCtrl.approveRequest);
 router.post("/requests/:id/reject", requestsCtrl.rejectRequest);
 router.post("/requests/:id/unreserve", requestsCtrl.unreserveRequest);
 
-
-// ---------- Issues (storekeeper) ----------
+// ---------- Issues ----------
 router.get("/issues", issuesCtrl.listIssues);
 router.get("/issues/:id", issuesCtrl.getIssue);
-router.post("/issues", issuesCtrl.createIssueDraft);       // DRAFT
-router.post("/issues/:id/post", issuesCtrl.postIssue);     // POST + mark part_items ISSUED
+router.post("/issues", issuesCtrl.createIssueDraft);
+router.post("/issues/:id/post", issuesCtrl.postIssue);
 
 module.exports = router;

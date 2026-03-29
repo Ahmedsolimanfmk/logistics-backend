@@ -1,5 +1,6 @@
 // =======================
 // src/dashboard/alerts.service.js
+// tenant-safe version
 // =======================
 
 const prisma = require("../prisma");
@@ -83,57 +84,43 @@ function buildAlert({
   };
 }
 
-async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
+async function getOperationsAlerts({
+  companyId,
+  user,
+  clientId = null,
+  siteId = null,
+}) {
   const isSupervisor = isSupervisorRole(user?.role);
 
-  let rows = [];
-  if (!isSupervisor) {
-    rows = await prisma.trips.findMany({
-      where: {
-        status: "COMPLETED",
-        financial_closed_at: null,
-        ...(clientId ? { client_id: clientId } : {}),
-        ...(siteId ? { site_id: siteId } : {}),
-      },
-      select: {
-        id: true,
-        created_at: true,
-        status: true,
-        financial_status: true,
-        financial_review_opened_at: true,
-        clients: { select: { name: true } },
-        site: { select: { name: true } },
-      },
-      orderBy: { created_at: "asc" },
-      take: 50,
-    });
-  } else {
-    rows = await prisma.$queryRaw`
-      SELECT
-        t.id,
-        t.created_at,
-        t.status,
-        t.financial_status,
-        t.financial_review_opened_at,
-        c.name AS client_name,
-        s.name AS site_name
-      FROM trips t
-      JOIN trip_assignments ta
-        ON ta.trip_id = t.id
-       AND ta.is_active = true
-      LEFT JOIN clients c
-        ON c.id = t.client_id
-      LEFT JOIN sites s
-        ON s.id = t.site_id
-      WHERE t.status = 'COMPLETED'
-        AND t.financial_closed_at IS NULL
-        AND ta.field_supervisor_id = ${user.id}::uuid
-        AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
-        AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
-      ORDER BY t.created_at ASC
-      LIMIT 50;
-    `;
-  }
+  const rows = await prisma.$queryRaw`
+    SELECT
+      t.id,
+      t.created_at,
+      t.status,
+      t.financial_status,
+      t.financial_review_opened_at,
+      c.name AS client_name,
+      s.name AS site_name
+    FROM trips t
+    LEFT JOIN trip_assignments ta
+      ON ta.trip_id = t.id
+     AND ta.company_id = ${companyId}::uuid
+     AND ta.is_active = true
+    LEFT JOIN clients c
+      ON c.id = t.client_id
+     AND c.company_id = ${companyId}::uuid
+    LEFT JOIN sites s
+      ON s.id = t.site_id
+     AND s.company_id = ${companyId}::uuid
+    WHERE t.company_id = ${companyId}::uuid
+      AND t.status = 'COMPLETED'
+      AND t.financial_closed_at IS NULL
+      AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
+      AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
+      AND (${isSupervisor}::boolean = false OR ta.field_supervisor_id = ${user.id}::uuid)
+    ORDER BY t.created_at ASC
+    LIMIT 50;
+  `;
 
   return (rows || []).map((r) => {
     const createdAt = toJsDate(r.created_at);
@@ -146,9 +133,7 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
       area: "operations",
       title: "رحلة تحتاج إغلاق مالي",
       message: `الرحلة ${String(r.id).slice(0, 8)} تحتاج إغلاق مالي${
-        r.client_name || r.clients?.name
-          ? ` — العميل ${r.client_name || r.clients?.name}`
-          : ""
+        r.client_name ? ` — العميل ${r.client_name}` : ""
       }`,
       entity_type: "trip",
       entity_id: r.id,
@@ -156,8 +141,8 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
       created_at: createdAt || new Date(),
       meta: {
         trip_id: r.id,
-        client: r.client_name || r.clients?.name || null,
-        site: r.site_name || r.site?.name || null,
+        client: r.client_name || null,
+        site: r.site_name || null,
         financial_status: r.financial_status || null,
         age_days: ageDays,
       },
@@ -166,7 +151,7 @@ async function getOperationsAlerts({ user, clientId = null, siteId = null }) {
   });
 }
 
-async function getFinanceAlerts({ clientId = null }) {
+async function getFinanceAlerts({ companyId, clientId = null }) {
   const alerts = [];
 
   const nowCairo = DateTime.now().setZone(CAIRO_TZ);
@@ -183,13 +168,26 @@ async function getFinanceAlerts({ clientId = null }) {
       i.total_amount::numeric AS total_amount,
       i.status,
       c.name AS client_name,
-      COALESCE(SUM(a.amount_allocated), 0)::numeric AS allocated_amount
+      COALESCE(
+        SUM(
+          CASE
+            WHEN p.status = 'POSTED' THEN a.amount_allocated
+            ELSE 0
+          END
+        ),
+        0
+      )::numeric AS allocated_amount
     FROM ar_invoices i
     LEFT JOIN ar_payment_allocations a
       ON a.invoice_id = i.id
+    LEFT JOIN ar_payments p
+      ON p.id = a.payment_id
+     AND p.company_id = ${companyId}::uuid
     LEFT JOIN clients c
       ON c.id = i.client_id
-    WHERE i.status IN ('APPROVED', 'PARTIALLY_PAID')
+     AND c.company_id = ${companyId}::uuid
+    WHERE i.company_id = ${companyId}::uuid
+      AND i.status IN ('APPROVED', 'PARTIALLY_PAID')
       AND i.due_date IS NOT NULL
       AND (${clientId}::uuid IS NULL OR i.client_id = ${clientId}::uuid)
     GROUP BY
@@ -285,6 +283,7 @@ async function getFinanceAlerts({ clientId = null }) {
   const pending48h = nowCairo.minus({ hours: 48 }).toJSDate();
   const pendingExpenses = await prisma.cash_expenses.findMany({
     where: {
+      company_id: companyId,
       approval_status: "PENDING",
       created_at: { lt: pending48h },
     },
@@ -331,7 +330,8 @@ async function getFinanceAlerts({ clientId = null }) {
   const advance7d = nowCairo.minus({ days: 7 }).toJSDate();
   const openAdvances = await prisma.cash_advances.findMany({
     where: {
-      status: { in: ["OPEN"] },
+      company_id: companyId,
+      status: { in: ["OPEN", "IN_REVIEW"] },
       created_at: { lt: advance7d },
     },
     select: {
@@ -373,11 +373,14 @@ async function getFinanceAlerts({ clientId = null }) {
   return alerts;
 }
 
-async function getMaintenanceAlerts() {
+async function getMaintenanceAlerts(companyId) {
   const alerts = [];
 
   const openWorkOrders = await prisma.maintenance_work_orders.findMany({
-    where: { status: { in: ["OPEN", "IN_PROGRESS"] } },
+    where: {
+      company_id: companyId,
+      status: { in: ["OPEN", "IN_PROGRESS"] },
+    },
     select: {
       id: true,
       status: true,
@@ -425,7 +428,8 @@ async function getMaintenanceAlerts() {
     FROM maintenance_work_orders wo
     LEFT JOIN post_maintenance_reports pr
       ON pr.work_order_id = wo.id
-    WHERE wo.status = 'COMPLETED'
+    WHERE wo.company_id = ${companyId}::uuid
+      AND wo.status = 'COMPLETED'
       AND pr.id IS NULL
     ORDER BY COALESCE(wo.completed_at, wo.updated_at) ASC
     LIMIT 50;
@@ -465,7 +469,8 @@ async function getMaintenanceAlerts() {
     FROM post_maintenance_reports pr
     JOIN maintenance_work_orders wo
       ON wo.id = pr.work_order_id
-    WHERE pr.road_test_result = 'FAIL'
+    WHERE wo.company_id = ${companyId}::uuid
+      AND pr.road_test_result = 'FAIL'
     ORDER BY COALESCE(pr.checked_at, wo.updated_at) ASC
     LIMIT 50;
   `;
@@ -501,11 +506,13 @@ async function getMaintenanceAlerts() {
       SELECT i.work_order_id, l.part_id, COALESCE(SUM(l.qty), 0)::numeric AS issued_qty
       FROM inventory_issues i
       JOIN inventory_issue_lines l ON l.issue_id = i.id
+      WHERE i.company_id = ${companyId}::uuid
       GROUP BY i.work_order_id, l.part_id
     ),
     installed AS (
       SELECT ins.work_order_id, ins.part_id, COALESCE(SUM(ins.qty_installed), 0)::numeric AS installed_qty
       FROM work_order_installations ins
+      WHERE ins.company_id = ${companyId}::uuid
       GROUP BY ins.work_order_id, ins.part_id
     ),
     diff AS (
@@ -526,7 +533,8 @@ async function getMaintenanceAlerts() {
       COUNT(*)::int AS mismatch_lines
     FROM diff d
     JOIN maintenance_work_orders wo ON wo.id = d.work_order_id
-    WHERE wo.status = 'COMPLETED'
+    WHERE wo.company_id = ${companyId}::uuid
+      AND wo.status = 'COMPLETED'
       AND (d.issued_qty <> d.installed_qty)
     GROUP BY d.work_order_id, wo.updated_at, wo.vehicle_id
     ORDER BY wo.updated_at ASC
@@ -562,7 +570,7 @@ async function getMaintenanceAlerts() {
   return alerts;
 }
 
-async function getComplianceAlerts() {
+async function getComplianceAlerts(companyId) {
   const alerts = [];
   const now = new Date();
 
@@ -574,6 +582,7 @@ async function getComplianceAlerts() {
     await Promise.all([
       prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -594,6 +603,7 @@ async function getComplianceAlerts() {
       }),
       prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
@@ -613,6 +623,7 @@ async function getComplianceAlerts() {
       }),
       prisma.drivers.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -633,6 +644,7 @@ async function getComplianceAlerts() {
       }),
       prisma.drivers.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
@@ -819,9 +831,12 @@ function applyReadStatusFilter(items, readStatus) {
 }
 
 async function getBaseAlerts(user, filters = {}) {
+  const companyId = normalizeUuidOrNull(filters.companyId);
   const area = filters.area ? String(filters.area).toLowerCase() : null;
   const clientId = normalizeUuidOrNull(filters.clientId);
   const siteId = normalizeUuidOrNull(filters.siteId);
+
+  if (!companyId) return [];
 
   const areas = area
     ? [area]
@@ -834,16 +849,16 @@ async function getBaseAlerts(user, filters = {}) {
 
   const parts = await Promise.all([
     areas.includes("operations")
-      ? getOperationsAlerts({ user, clientId, siteId })
+      ? getOperationsAlerts({ companyId, user, clientId, siteId })
       : Promise.resolve([]),
     areas.includes("finance")
-      ? getFinanceAlerts({ clientId })
+      ? getFinanceAlerts({ companyId, clientId })
       : Promise.resolve([]),
     areas.includes("maintenance")
-      ? getMaintenanceAlerts()
+      ? getMaintenanceAlerts(companyId)
       : Promise.resolve([]),
     areas.includes("compliance")
-      ? getComplianceAlerts()
+      ? getComplianceAlerts(companyId)
       : Promise.resolve([]),
   ]);
 

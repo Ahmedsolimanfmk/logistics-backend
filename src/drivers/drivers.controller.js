@@ -1,62 +1,66 @@
 const prisma = require("../prisma");
 
-const DRIVER_STATUS = ["ACTIVE", "INACTIVE", "DISABLED"];
+const DRIVER_STATUS = ["ACTIVE", "INACTIVE", "DISABLED", "TERMINATED"];
 const DRIVER_DISABLE_REASON = ["LICENSE_EXPIRED", "ADMIN", "OTHER"];
 
-function parseBool(v) {
-  if (v === true || v === false) return v;
-  const s = String(v ?? "").trim().toLowerCase();
-  if (["1", "true", "yes", "y"].includes(s)) return true;
-  if (["0", "false", "no", "n"].includes(s)) return false;
-  return undefined;
+// =======================
+// Helpers
+// =======================
+function parseIntSafe(value, fallback) {
+  const n = Number.parseInt(String(value), 10);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function pickPagination(req) {
-  const page = Math.max(1, parseInt(req.query.page || "1", 10));
-  const pageSizeRaw = parseInt(req.query.pageSize || "10", 10);
-  const pageSize = Math.min(
-    100,
-    Math.max(5, Number.isFinite(pageSizeRaw) ? pageSizeRaw : 10)
-  );
+  const page = Math.max(1, parseIntSafe(req.query.page || "1", 1));
+  const pageSizeRaw = parseIntSafe(req.query.pageSize || req.query.limit || "10", 10);
+  const pageSize = Math.min(100, Math.max(5, pageSizeRaw));
   const skip = (page - 1) * pageSize;
   return { page, pageSize, skip };
 }
 
-function prismaErrorToHttp(e) {
-  const code = e?.code;
-  if (code === "P2002") {
+function prismaErrorToHttp(error) {
+  if (error?.code === "P2002") {
     return {
-      status: 400,
-      message: "Duplicate value (unique field conflict)",
-      details: e?.meta,
+      status: 409,
+      message: "Duplicate value (unique field conflict within this company)",
+      details: error?.meta,
     };
   }
   return null;
 }
 
-function parseDateOrNull(v) {
-  if (v === undefined) return undefined;
-  if (v === null || v === "") return null;
-  const d = new Date(v);
+function parseDateOrNull(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) return undefined;
   return d;
 }
 
-function upper(v) {
-  return String(v || "").trim().toUpperCase();
+function upper(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
-function validateEnumOr400(res, fieldName, valueUpper, allowedList) {
-  if (valueUpper == null) return true;
+function trimOrNull(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const s = String(value).trim();
+  return s ? s : null;
+}
+
+function validateEnumOrThrow(fieldName, valueUpper, allowedList) {
+  if (valueUpper == null) return;
   if (!allowedList.includes(valueUpper)) {
-    res.status(400).json({
-      message: `Invalid ${fieldName}`,
+    const err = new Error(`Invalid ${fieldName}`);
+    err.statusCode = 400;
+    err.details = {
+      field: fieldName,
       allowed: allowedList,
       received: valueUpper,
-    });
-    return false;
+    };
+    throw err;
   }
-  return true;
 }
 
 function isExpired(expiryDate) {
@@ -66,7 +70,7 @@ function isExpired(expiryDate) {
   return exp.getTime() < Date.now();
 }
 
-function applyDriverStateRules(res, data, incoming) {
+function applyDriverStateRules(data, incoming) {
   const nextStatus = incoming.status !== undefined ? incoming.status : data.status;
   const nextExpiry =
     incoming.license_expiry_date !== undefined
@@ -76,24 +80,18 @@ function applyDriverStateRules(res, data, incoming) {
   if (nextExpiry && isExpired(nextExpiry)) {
     data.status = "DISABLED";
     data.disable_reason = "LICENSE_EXPIRED";
-    data.is_active = false;
-    return true;
+    return;
   }
 
   if (nextStatus === "ACTIVE" && nextExpiry && isExpired(nextExpiry)) {
-    res.status(400).json({ message: "Cannot set driver ACTIVE: license is expired" });
-    return false;
+    const err = new Error("Cannot set driver ACTIVE: license is expired");
+    err.statusCode = 400;
+    throw err;
   }
-
-  if (nextStatus === "ACTIVE") data.is_active = true;
-  if (nextStatus === "INACTIVE") data.is_active = false;
-  if (nextStatus === "DISABLED") data.is_active = false;
 
   if (nextStatus && nextStatus !== "DISABLED" && incoming.disable_reason === undefined) {
     data.disable_reason = null;
   }
-
-  return true;
 }
 
 function buildTripLocationLabel(trip) {
@@ -101,13 +99,51 @@ function buildTripLocationLabel(trip) {
   return trip?.site?.name || null;
 }
 
+function handleError(res, error, fallbackMessage) {
+  const mapped = prismaErrorToHttp(error);
+  if (mapped) {
+    return res.status(mapped.status).json({
+      message: mapped.message,
+      details: mapped.details,
+    });
+  }
+
+  const status = error?.statusCode || 500;
+  return res.status(status).json({
+    message: error?.message || fallbackMessage,
+    ...(error?.details ? { details: error.details } : {}),
+    ...(status >= 500 ? { error: error?.message } : {}),
+  });
+}
+
+async function getDriverOrThrow(companyId, id, select) {
+  const driver = await prisma.drivers.findFirst({
+    where: {
+      id,
+      company_id: companyId,
+    },
+    ...(select ? { select } : {}),
+  });
+
+  if (!driver) {
+    const err = new Error("Driver not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return driver;
+}
+
+// =======================
 // GET /drivers/active
+// =======================
 async function getActiveDrivers(req, res) {
   try {
+    const companyId = req.companyId;
     const q = String(req.query.q || "").trim();
 
     const where = {
-      is_active: true,
+      company_id: companyId,
       status: "ACTIVE",
       ...(q
         ? {
@@ -117,6 +153,7 @@ async function getActiveDrivers(req, res) {
               { phone2: { contains: q, mode: "insensitive" } },
               { license_no: { contains: q, mode: "insensitive" } },
               { national_id: { contains: q, mode: "insensitive" } },
+              { employee_code: { contains: q, mode: "insensitive" } },
             ],
           }
         : {}),
@@ -127,36 +164,43 @@ async function getActiveDrivers(req, res) {
       orderBy: [{ full_name: "asc" }],
       select: {
         id: true,
+        company_id: true,
+        employee_code: true,
         full_name: true,
         phone: true,
         phone2: true,
         license_no: true,
+        license_expiry_date: true,
         status: true,
+        disable_reason: true,
       },
     });
 
-    return res.json(drivers);
-  } catch (e) {
-    return res.status(500).json({
-      message: "Failed to fetch active drivers",
-      error: e.message,
-    });
+    const items = drivers.filter((driver) => !isExpired(driver.license_expiry_date));
+
+    return res.json(items);
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch active drivers");
   }
 }
 
+// =======================
 // GET /drivers
+// =======================
 async function getDrivers(req, res) {
   try {
+    const companyId = req.companyId;
     const q = String(req.query.q || "").trim();
-    const isActive = parseBool(req.query.is_active);
     const status = req.query.status ? upper(req.query.status) : null;
 
-    if (status && !validateEnumOr400(res, "status", status, DRIVER_STATUS)) return;
+    if (status) {
+      validateEnumOrThrow("status", status, DRIVER_STATUS);
+    }
 
     const { page, pageSize, skip } = pickPagination(req);
 
     const where = {
-      ...(typeof isActive === "boolean" ? { is_active: isActive } : {}),
+      company_id: companyId,
       ...(status ? { status } : {}),
       ...(q
         ? {
@@ -166,6 +210,7 @@ async function getDrivers(req, res) {
               { phone2: { contains: q, mode: "insensitive" } },
               { license_no: { contains: q, mode: "insensitive" } },
               { national_id: { contains: q, mode: "insensitive" } },
+              { employee_code: { contains: q, mode: "insensitive" } },
             ],
           }
         : {}),
@@ -174,7 +219,7 @@ async function getDrivers(req, res) {
     const [items, total] = await Promise.all([
       prisma.drivers.findMany({
         where,
-        orderBy: [{ is_active: "desc" }, { full_name: "asc" }, { created_at: "desc" }],
+        orderBy: [{ full_name: "asc" }, { created_at: "desc" }],
         skip,
         take: pageSize,
       }),
@@ -182,56 +227,58 @@ async function getDrivers(req, res) {
     ]);
 
     return res.json({ page, pageSize, total, items });
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch drivers", error: e.message });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch drivers");
   }
 }
 
+// =======================
 // GET /drivers/:id
+// =======================
 async function getDriverById(req, res) {
   try {
     const { id } = req.params;
-
-    const driver = await prisma.drivers.findUnique({ where: { id } });
-    if (!driver) return res.status(404).json({ message: "Driver not found" });
-
+    const driver = await getDriverOrThrow(req.companyId, id);
     return res.json(driver);
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch driver", error: e.message });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch driver");
   }
 }
 
+// =======================
 // GET /drivers/:id/financial-summary
+// =======================
 async function getDriverFinancialSummary(req, res) {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    const driver = await prisma.drivers.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        full_name: true,
-        phone: true,
-        phone2: true,
-        national_id: true,
-        hire_date: true,
-        license_no: true,
-        license_issue_date: true,
-        license_expiry_date: true,
-        status: true,
-        disable_reason: true,
-        is_active: true,
-        created_at: true,
-        updated_at: true,
-      },
+    const driver = await getDriverOrThrow(companyId, id, {
+      id: true,
+      company_id: true,
+      employee_code: true,
+      full_name: true,
+      phone: true,
+      phone2: true,
+      national_id: true,
+      address: true,
+      emergency_contact_name: true,
+      emergency_contact_phone: true,
+      hire_date: true,
+      license_no: true,
+      license_issue_date: true,
+      license_expiry_date: true,
+      status: true,
+      disable_reason: true,
+      created_at: true,
+      updated_at: true,
     });
 
-    if (!driver) {
-      return res.status(404).json({ message: "Driver not found" });
-    }
-
     const assignments = await prisma.trip_assignments.findMany({
-      where: { driver_id: id },
+      where: {
+        company_id: companyId,
+        driver_id: id,
+      },
       orderBy: { assigned_at: "desc" },
       select: {
         id: true,
@@ -239,19 +286,20 @@ async function getDriverFinancialSummary(req, res) {
         assigned_at: true,
         is_active: true,
         unassigned_at: true,
-        trips: {
+        trip: {
           select: {
             id: true,
+            company_id: true,
             trip_code: true,
             status: true,
             scheduled_at: true,
             created_at: true,
             financial_status: true,
-            clients: { select: { id: true, name: true } },
-            sites: { select: { id: true, name: true } },
+            client: { select: { id: true, name: true } },
+            site: { select: { id: true, name: true } },
           },
         },
-        vehicles: {
+        vehicle: {
           select: {
             id: true,
             fleet_no: true,
@@ -263,12 +311,19 @@ async function getDriverFinancialSummary(req, res) {
       take: 100,
     });
 
-    const tripIds = Array.from(new Set(assignments.map((a) => a.trip_id).filter(Boolean)));
+    const validAssignments = assignments.filter(
+      (a) => !a.trip || a.trip.company_id === companyId
+    );
+
+    const tripIds = Array.from(
+      new Set(validAssignments.map((a) => a.trip_id).filter(Boolean))
+    );
 
     let expenses = [];
     if (tripIds.length > 0) {
       expenses = await prisma.cash_expenses.findMany({
         where: {
+          company_id: companyId,
           trip_id: { in: tripIds },
         },
         orderBy: { created_at: "desc" },
@@ -282,16 +337,16 @@ async function getDriverFinancialSummary(req, res) {
           approval_status: true,
           payment_source: true,
           created_at: true,
-          trips: {
+          trip: {
             select: {
               id: true,
               trip_code: true,
               status: true,
-              clients: { select: { name: true } },
-              sites: { select: { name: true } },
+              client: { select: { name: true } },
+              site: { select: { name: true } },
             },
           },
-          vehicles: {
+          vehicle: {
             select: {
               id: true,
               fleet_no: true,
@@ -305,59 +360,70 @@ async function getDriverFinancialSummary(req, res) {
     }
 
     const totalTrips = tripIds.length;
-    const completedTrips = assignments.filter((a) => a?.trips?.status === "COMPLETED").length;
-    const activeTrips = assignments.filter((a) => a?.is_active === true).length;
+    const completedTrips = validAssignments.filter(
+      (a) => a?.trip?.status === "COMPLETED"
+    ).length;
+    const activeTrips = validAssignments.filter((a) => a?.is_active === true).length;
 
-    const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const totalExpenses = expenses.reduce(
+      (sum, expense) => sum + Number(expense.amount || 0),
+      0
+    );
+
     const approvedExpenses = expenses
-      .filter((e) => e.approval_status === "APPROVED")
-      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-    const pendingExpenses = expenses
-      .filter((e) => ["PENDING", "APPEALED"].includes(String(e.approval_status || "").toUpperCase()))
-      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      .filter((expense) => expense.approval_status === "APPROVED")
+      .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 
-    const recentTrips = assignments.slice(0, 20).map((a) => ({
-      assignment_id: a.id,
-      trip_id: a.trip_id,
-      trip_code: a.trips?.trip_code || null,
-      assigned_at: a.assigned_at,
-      is_active: a.is_active,
-      unassigned_at: a.unassigned_at,
-      trip_status: a.trips?.status || null,
-      scheduled_at: a.trips?.scheduled_at || null,
-      created_at: a.trips?.created_at || null,
-      financial_status: a.trips?.financial_status || null,
-      client: a.trips?.clients?.name || null,
-      site: buildTripLocationLabel(a.trips),
-      vehicle: a.vehicles
+    const pendingExpenses = expenses
+      .filter((expense) =>
+        ["PENDING", "APPEALED"].includes(
+          String(expense.approval_status || "").toUpperCase()
+        )
+      )
+      .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+
+    const recentTrips = validAssignments.slice(0, 20).map((assignment) => ({
+      assignment_id: assignment.id,
+      trip_id: assignment.trip_id,
+      trip_code: assignment.trip?.trip_code || null,
+      assigned_at: assignment.assigned_at,
+      is_active: assignment.is_active,
+      unassigned_at: assignment.unassigned_at,
+      trip_status: assignment.trip?.status || null,
+      scheduled_at: assignment.trip?.scheduled_at || null,
+      created_at: assignment.trip?.created_at || null,
+      financial_status: assignment.trip?.financial_status || null,
+      client: assignment.trip?.client?.name || null,
+      site: buildTripLocationLabel(assignment.trip),
+      vehicle: assignment.vehicle
         ? {
-            id: a.vehicles.id,
-            fleet_no: a.vehicles.fleet_no,
-            plate_no: a.vehicles.plate_no,
-            display_name: a.vehicles.display_name,
+            id: assignment.vehicle.id,
+            fleet_no: assignment.vehicle.fleet_no,
+            plate_no: assignment.vehicle.plate_no,
+            display_name: assignment.vehicle.display_name,
           }
         : null,
     }));
 
-    const recentExpenses = expenses.slice(0, 20).map((e) => ({
-      id: e.id,
-      trip_id: e.trip_id,
-      trip_code: e.trips?.trip_code || null,
-      expense_type: e.expense_type,
-      amount: Number(e.amount || 0),
-      notes: e.notes,
-      approval_status: e.approval_status,
-      payment_source: e.payment_source,
-      created_at: e.created_at,
-      trip_status: e.trips?.status || null,
-      client: e.trips?.clients?.name || null,
-      site: buildTripLocationLabel(e.trips),
-      vehicle: e.vehicles
+    const recentExpenses = expenses.slice(0, 20).map((expense) => ({
+      id: expense.id,
+      trip_id: expense.trip_id,
+      trip_code: expense.trip?.trip_code || null,
+      expense_type: expense.expense_type,
+      amount: Number(expense.amount || 0),
+      notes: expense.notes,
+      approval_status: expense.approval_status,
+      payment_source: expense.payment_source,
+      created_at: expense.created_at,
+      trip_status: expense.trip?.status || null,
+      client: expense.trip?.client?.name || null,
+      site: buildTripLocationLabel(expense.trip),
+      vehicle: expense.vehicle
         ? {
-            id: e.vehicles.id,
-            fleet_no: e.vehicles.fleet_no,
-            plate_no: e.vehicles.plate_no,
-            display_name: e.vehicles.display_name,
+            id: expense.vehicle.id,
+            fleet_no: expense.vehicle.fleet_no,
+            plate_no: expense.vehicle.plate_no,
+            display_name: expense.vehicle.display_name,
           }
         : null,
     }));
@@ -376,33 +442,39 @@ async function getDriverFinancialSummary(req, res) {
       recent_trips: recentTrips,
       recent_expenses: recentExpenses,
     });
-  } catch (e) {
-    return res.status(500).json({
-      message: "Failed to fetch driver financial summary",
-      error: e.message,
-    });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch driver financial summary");
   }
 }
 
+// =======================
 // POST /drivers
+// =======================
 async function createDriver(req, res) {
   try {
+    const companyId = req.companyId;
+
     const {
+      employee_code,
       full_name,
       phone,
       phone2,
       national_id,
+      address,
+      emergency_contact_name,
+      emergency_contact_phone,
       hire_date,
       license_no,
       license_issue_date,
       license_expiry_date,
       status,
       disable_reason,
-      is_active,
     } = req.body || {};
 
     const name = String(full_name || "").trim();
-    if (!name) return res.status(400).json({ message: "full_name is required" });
+    if (!name) {
+      return res.status(400).json({ message: "full_name is required" });
+    }
 
     const hireDate = parseDateOrNull(hire_date);
     const licIssue = parseDateOrNull(license_issue_date);
@@ -421,214 +493,209 @@ async function createDriver(req, res) {
     const statusUpper = status ? upper(status) : "ACTIVE";
     const reasonUpper = disable_reason ? upper(disable_reason) : null;
 
-    if (!validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
-    if (
-      reasonUpper &&
-      !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
-    ) {
-      return;
+    validateEnumOrThrow("status", statusUpper, DRIVER_STATUS);
+    if (reasonUpper) {
+      validateEnumOrThrow("disable_reason", reasonUpper, DRIVER_DISABLE_REASON);
     }
 
     const data = {
+      company_id: companyId,
+      employee_code: trimOrNull(employee_code),
       full_name: name,
-      phone: phone ? String(phone).trim() : null,
-      phone2: phone2 ? String(phone2).trim() : null,
-      national_id: national_id ? String(national_id).trim() : null,
+      phone: trimOrNull(phone),
+      phone2: trimOrNull(phone2),
+      national_id: trimOrNull(national_id),
+      address: trimOrNull(address),
+      emergency_contact_name: trimOrNull(emergency_contact_name),
+      emergency_contact_phone: trimOrNull(emergency_contact_phone),
       hire_date: hireDate === undefined ? null : hireDate,
-      license_no: license_no ? String(license_no).trim() : null,
+      license_no: trimOrNull(license_no),
       license_issue_date: licIssue === undefined ? null : licIssue,
       license_expiry_date: licExpiry === undefined ? null : licExpiry,
       status: statusUpper,
       disable_reason: reasonUpper,
-      is_active: typeof is_active === "boolean" ? is_active : true,
     };
 
-    if (
-      !applyDriverStateRules(res, data, {
-        status: data.status,
-        disable_reason: data.disable_reason,
-        is_active: data.is_active,
-        license_expiry_date: data.license_expiry_date,
-      })
-    ) {
-      return;
-    }
+    applyDriverStateRules(data, {
+      status: data.status,
+      disable_reason: data.disable_reason,
+      license_expiry_date: data.license_expiry_date,
+    });
 
     const driver = await prisma.drivers.create({ data });
     return res.status(201).json(driver);
-  } catch (e) {
-    const mapped = prismaErrorToHttp(e);
-    if (mapped) {
-      return res.status(mapped.status).json({
-        message: mapped.message,
-        details: mapped.details,
-      });
-    }
-    return res.status(500).json({ message: "Failed to create driver", error: e.message });
+  } catch (error) {
+    return handleError(res, error, "Failed to create driver");
   }
 }
 
+// =======================
 // PATCH /drivers/:id
+// =======================
 async function updateDriver(req, res) {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    const exists = await prisma.drivers.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ message: "Driver not found" });
+    const exists = await getDriverOrThrow(companyId, id);
 
     const {
+      employee_code,
       full_name,
       phone,
       phone2,
       national_id,
+      address,
+      emergency_contact_name,
+      emergency_contact_phone,
       hire_date,
       license_no,
       license_issue_date,
       license_expiry_date,
       status,
       disable_reason,
-      is_active,
     } = req.body || {};
 
     const data = {};
 
+    if (employee_code !== undefined) data.employee_code = trimOrNull(employee_code);
+
     if (full_name !== undefined) {
       const name = String(full_name || "").trim();
-      if (!name) return res.status(400).json({ message: "full_name cannot be empty" });
+      if (!name) {
+        return res.status(400).json({ message: "full_name cannot be empty" });
+      }
       data.full_name = name;
     }
 
-    if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
-    if (phone2 !== undefined) data.phone2 = phone2 ? String(phone2).trim() : null;
-    if (national_id !== undefined) data.national_id = national_id ? String(national_id).trim() : null;
+    if (phone !== undefined) data.phone = trimOrNull(phone);
+    if (phone2 !== undefined) data.phone2 = trimOrNull(phone2);
+    if (national_id !== undefined) data.national_id = trimOrNull(national_id);
+    if (address !== undefined) data.address = trimOrNull(address);
+    if (emergency_contact_name !== undefined) {
+      data.emergency_contact_name = trimOrNull(emergency_contact_name);
+    }
+    if (emergency_contact_phone !== undefined) {
+      data.emergency_contact_phone = trimOrNull(emergency_contact_phone);
+    }
 
     if (hire_date !== undefined) {
       const d = parseDateOrNull(hire_date);
-      if (d === undefined) return res.status(400).json({ message: "Invalid hire_date" });
+      if (d === undefined) {
+        return res.status(400).json({ message: "Invalid hire_date" });
+      }
       data.hire_date = d;
     }
 
-    if (license_no !== undefined) data.license_no = license_no ? String(license_no).trim() : null;
+    if (license_no !== undefined) data.license_no = trimOrNull(license_no);
 
     if (license_issue_date !== undefined) {
       const d = parseDateOrNull(license_issue_date);
-      if (d === undefined) return res.status(400).json({ message: "Invalid license_issue_date" });
+      if (d === undefined) {
+        return res.status(400).json({ message: "Invalid license_issue_date" });
+      }
       data.license_issue_date = d;
     }
 
     if (license_expiry_date !== undefined) {
       const d = parseDateOrNull(license_expiry_date);
-      if (d === undefined) return res.status(400).json({ message: "Invalid license_expiry_date" });
+      if (d === undefined) {
+        return res.status(400).json({ message: "Invalid license_expiry_date" });
+      }
       data.license_expiry_date = d;
     }
 
-    let statusUpper;
     if (status !== undefined) {
-      statusUpper = upper(status);
-      if (!statusUpper) return res.status(400).json({ message: "status cannot be empty" });
-      if (!validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) return;
+      const statusUpper = upper(status);
+      if (!statusUpper) {
+        return res.status(400).json({ message: "status cannot be empty" });
+      }
+      validateEnumOrThrow("status", statusUpper, DRIVER_STATUS);
       data.status = statusUpper;
     }
 
-    let reasonUpper;
     if (disable_reason !== undefined) {
-      reasonUpper = disable_reason ? upper(disable_reason) : null;
-      if (
-        reasonUpper &&
-        !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
-      ) {
-        return;
+      const reasonUpper = disable_reason ? upper(disable_reason) : null;
+      if (reasonUpper) {
+        validateEnumOrThrow("disable_reason", reasonUpper, DRIVER_DISABLE_REASON);
       }
       data.disable_reason = reasonUpper;
     }
 
-    if (typeof is_active === "boolean") data.is_active = is_active;
-
-    const incoming = {
+    applyDriverStateRules(data, {
       status: data.status !== undefined ? data.status : exists.status,
       disable_reason:
         data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
-      is_active: data.is_active !== undefined ? data.is_active : exists.is_active,
       license_expiry_date:
         data.license_expiry_date !== undefined
           ? data.license_expiry_date
           : exists.license_expiry_date,
-    };
+    });
 
-    if (!applyDriverStateRules(res, data, incoming)) return;
+    const updated = await prisma.drivers.update({
+      where: { id: exists.id },
+      data,
+    });
 
-    const updated = await prisma.drivers.update({ where: { id }, data });
     return res.json(updated);
-  } catch (e) {
-    const mapped = prismaErrorToHttp(e);
-    if (mapped) {
-      return res.status(mapped.status).json({
-        message: mapped.message,
-        details: mapped.details,
-      });
-    }
-    return res.status(500).json({ message: "Failed to update driver", error: e.message });
+  } catch (error) {
+    return handleError(res, error, "Failed to update driver");
   }
 }
 
+// =======================
 // PATCH /drivers/:id/status
+// body: { status, disable_reason? }
+// =======================
 async function setDriverStatus(req, res) {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    const exists = await prisma.drivers.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ message: "Driver not found" });
+    const exists = await getDriverOrThrow(companyId, id);
 
-    const isActive = parseBool(req.body?.is_active);
-    const statusUpper = req.body?.status !== undefined ? upper(req.body?.status) : undefined;
+    const statusUpper =
+      req.body?.status !== undefined ? upper(req.body.status) : undefined;
     const reasonUpper =
-      req.body?.disable_reason !== undefined ? upper(req.body?.disable_reason) : undefined;
+      req.body?.disable_reason !== undefined
+        ? req.body.disable_reason
+          ? upper(req.body.disable_reason)
+          : null
+        : undefined;
 
-    if (statusUpper !== undefined && !validateEnumOr400(res, "status", statusUpper, DRIVER_STATUS)) {
-      return;
-    }
-    if (
-      reasonUpper !== undefined &&
-      reasonUpper &&
-      !validateEnumOr400(res, "disable_reason", reasonUpper, DRIVER_DISABLE_REASON)
-    ) {
-      return;
+    if (statusUpper === undefined) {
+      return res.status(400).json({ message: "status is required" });
     }
 
-    const data = {};
+    validateEnumOrThrow("status", statusUpper, DRIVER_STATUS);
 
-    if (typeof isActive === "boolean") data.is_active = isActive;
-
-    if (statusUpper !== undefined) {
-      if (!statusUpper) return res.status(400).json({ message: "status cannot be empty" });
-      data.status = statusUpper;
+    if (reasonUpper !== undefined && reasonUpper !== null) {
+      validateEnumOrThrow("disable_reason", reasonUpper, DRIVER_DISABLE_REASON);
     }
 
-    if (reasonUpper !== undefined) {
-      data.disable_reason = reasonUpper || null;
-    }
-
-    if (Object.keys(data).length === 0) {
-      return res.status(400).json({ message: "Provide is_active and/or status" });
-    }
-
-    const incoming = {
-      status: data.status !== undefined ? data.status : exists.status,
-      disable_reason:
-        data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
-      is_active: data.is_active !== undefined ? data.is_active : exists.is_active,
-      license_expiry_date: exists.license_expiry_date,
+    const data = {
+      status: statusUpper,
     };
 
-    if (!applyDriverStateRules(res, data, incoming)) return;
+    if (reasonUpper !== undefined) {
+      data.disable_reason = reasonUpper;
+    }
 
-    const updated = await prisma.drivers.update({ where: { id }, data });
-    return res.json(updated);
-  } catch (e) {
-    return res.status(500).json({
-      message: "Failed to update driver status",
-      error: e.message,
+    applyDriverStateRules(data, {
+      status: data.status,
+      disable_reason:
+        data.disable_reason !== undefined ? data.disable_reason : exists.disable_reason,
+      license_expiry_date: exists.license_expiry_date,
     });
+
+    const updated = await prisma.drivers.update({
+      where: { id: exists.id },
+      data,
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    return handleError(res, error, "Failed to update driver status");
   }
 }
 

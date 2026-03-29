@@ -1354,6 +1354,13 @@ enum subscription_status {
   CANCELLED
 }
 
+enum company_status {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+  ARCHIVED
+}
+
 enum company_membership_status {
   ACTIVE
   INVITED
@@ -1362,23 +1369,24 @@ enum company_membership_status {
 }
 
 model companies {
-  id                String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  code              String   @unique
+  id                String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  code              String         @unique
   name              String
   legal_name        String?
   tax_no            String?
   commercial_reg_no String?
   industry          String?
   country           String?
-  timezone          String   @default("Africa/Cairo")
-  base_currency     String   @default("EGP")
+  timezone          String         @default("Africa/Cairo")
+  base_currency     String         @default("EGP")
   phone             String?
   email             String?
   address           String?
   logo_url          String?
-  is_active         Boolean  @default(true)
-  created_at        DateTime @default(now()) @db.Timestamptz(6)
-  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  is_active         Boolean        @default(true)
+  status            company_status @default(ACTIVE)
+  created_at        DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
 
   memberships                    company_users[]
   subscriptions                  company_subscriptions[]
@@ -1426,14 +1434,16 @@ model companies {
 }
 
 model company_users {
-  id           String                    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  company_id   String                    @db.Uuid
-  user_id      String                    @db.Uuid
-  company_role user_role
-  status       company_membership_status @default(ACTIVE)
-  is_active    Boolean                   @default(true)
-  joined_at    DateTime                  @default(now()) @db.Timestamptz(6)
-  left_at      DateTime?                 @db.Timestamptz(6)
+  id             String                    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id     String                    @db.Uuid
+  user_id        String                    @db.Uuid
+  company_role   user_role
+  status         company_membership_status @default(ACTIVE)
+  is_active      Boolean                   @default(true)
+  joined_at      DateTime                  @default(now()) @db.Timestamptz(6)
+  invited_at     DateTime?
+  invited_by     String?
+  deactivated_at DateTime?
 
   companies              companies                @relation(fields: [company_id], references: [id], onDelete: Cascade)
   users                  users                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -1443,23 +1453,25 @@ model company_users {
 
   @@unique([company_id, user_id])
   @@index([company_id, company_role])
-  @@index([user_id])
+  @@index([user_id, status, is_active])
 }
 
 model company_subscriptions {
-  id                String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  company_id        String              @db.Uuid
-  plan_code         String
-  status            subscription_status
-  starts_at         DateTime            @db.Timestamptz(6)
-  ends_at           DateTime?           @db.Timestamptz(6)
-  max_users         Int?
-  max_vehicles      Int?
-  max_warehouses    Int?
-  ai_enabled        Boolean             @default(true)
-  analytics_enabled Boolean             @default(true)
-  created_at        DateTime            @default(now()) @db.Timestamptz(6)
-  updated_at        DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+  id                   String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id           String              @db.Uuid
+  plan_code            String
+  status               subscription_status
+  starts_at            DateTime            @db.Timestamptz(6)
+  ends_at              DateTime?           @db.Timestamptz(6)
+  grace_ends_at        DateTime?           @db.Timestamptz(6)
+  cancel_at_period_end Boolean             @default(false)
+  max_users            Int?
+  max_vehicles         Int?
+  max_warehouses       Int?
+  ai_enabled           Boolean             @default(true)
+  analytics_enabled    Boolean             @default(true)
+  created_at           DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
 
   companies companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
 

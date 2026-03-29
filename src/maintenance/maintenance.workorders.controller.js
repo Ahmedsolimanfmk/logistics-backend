@@ -48,6 +48,20 @@ function parseIntQuery(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyId }) {
+  const row = await prisma.vehicle_portfolio.findFirst({
+    where: {
+      company_id: companyId,
+      vehicle_id,
+      field_supervisor_id: userId,
+      is_active: true,
+    },
+    select: { id: true },
+  });
+
+  return !!row;
+}
+
 // =======================
 // Runtime Aggregation Helper
 // =======================
@@ -215,15 +229,15 @@ function buildRuntimeReport(woFull, opts = {}) {
 
 // =======================
 // GET /maintenance/work-orders
-// Query:
-//  page, limit
-//  status, vehicle_id, request_id, vendor_id
-//  q (search vendor/notes)
 // =======================
 async function listWorkOrders(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+    const role = req.user?.role || null;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const page = Math.max(1, parseIntQuery(req.query.page, 1));
     const limit = Math.min(100, Math.max(1, parseIntQuery(req.query.limit, 20)));
@@ -235,7 +249,9 @@ async function listWorkOrders(req, res) {
     const vendor_id = req.query.vendor_id ? String(req.query.vendor_id) : null;
     const q = req.query.q ? String(req.query.q).trim() : "";
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     if (status) where.status = status;
 
@@ -252,6 +268,32 @@ async function listWorkOrders(req, res) {
     if (vendor_id) {
       if (!isUuid(vendor_id)) return res.status(400).json({ message: "Invalid vendor_id" });
       where.vendor_id = vendor_id;
+    }
+
+    if (!isAdminOrAccountant(role)) {
+      const portfolioRows = await prisma.vehicle_portfolio.findMany({
+        where: {
+          company_id: companyId,
+          field_supervisor_id: userId,
+          is_active: true,
+        },
+        select: { vehicle_id: true },
+      });
+
+      const vehicleIds = portfolioRows.map((x) => x.vehicle_id).filter(Boolean);
+
+      if (vehicleIds.length === 0) {
+        return res.json({
+          page,
+          limit,
+          total: 0,
+          items: [],
+        });
+      }
+
+      where.vehicle_id = where.vehicle_id
+        ? where.vehicle_id
+        : { in: vehicleIds };
     }
 
     if (q) {
@@ -275,6 +317,7 @@ async function listWorkOrders(req, res) {
         take: limit,
         select: {
           id: true,
+          company_id: true,
           status: true,
           type: true,
           maintenance_mode: true,
@@ -333,13 +376,20 @@ async function listWorkOrders(req, res) {
 async function getWorkOrderById(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+    const role = req.user?.role || null;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const id = String(req.params.id || "");
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid work order id" });
 
-    const row = await prisma.maintenance_work_orders.findUnique({
-      where: { id },
+    const row = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         vehicles: {
           select: {
@@ -374,6 +424,15 @@ async function getWorkOrderById(req, res) {
 
     if (!row) return res.status(404).json({ message: "Work order not found" });
 
+    if (!isAdminOrAccountant(role)) {
+      const ok = await assertVehicleInSupervisorPortfolio({
+        vehicle_id: row.vehicle_id,
+        userId,
+        companyId,
+      });
+      if (!ok) return res.status(403).json({ message: "Forbidden" });
+    }
+
     return res.json({ work_order: row });
   } catch (e) {
     console.error("GET WORK ORDER ERROR:", e);
@@ -386,13 +445,23 @@ async function getWorkOrderById(req, res) {
 // =======================
 async function getWorkOrderReport(req, res) {
   try {
+    const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+    const role = req.user?.role || null;
+
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
+
     const workOrderId = req.params.id;
     if (!isUuid(workOrderId)) {
       return res.status(400).json({ message: "Invalid work order id" });
     }
 
-    const woFull = await prisma.maintenance_work_orders.findUnique({
-      where: { id: workOrderId },
+    const woFull = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
       include: {
         vehicles: {
           select: {
@@ -421,8 +490,14 @@ async function getWorkOrderReport(req, res) {
           },
         },
         inventory_issues: {
+          where: {
+            company_id: companyId,
+          },
           include: {
             inventory_issue_lines: {
+              where: {
+                company_id: companyId,
+              },
               include: {
                 parts: {
                   select: { id: true, name: true, part_number: true, brand: true, unit: true },
@@ -440,6 +515,9 @@ async function getWorkOrderReport(req, res) {
           },
         },
         work_order_installations: {
+          where: {
+            company_id: companyId,
+          },
           include: {
             parts: {
               select: { id: true, name: true, part_number: true, brand: true, unit: true },
@@ -448,7 +526,10 @@ async function getWorkOrderReport(req, res) {
         },
         post_maintenance_reports: true,
         cash_expenses: {
-          where: { maintenance_work_order_id: workOrderId },
+          where: {
+            company_id: companyId,
+            maintenance_work_order_id: workOrderId,
+          },
           orderBy: { created_at: "desc" },
           select: {
             id: true,
@@ -478,6 +559,15 @@ async function getWorkOrderReport(req, res) {
 
     if (!woFull) {
       return res.status(404).json({ message: "Work order not found" });
+    }
+
+    if (!isAdminOrAccountant(role)) {
+      const ok = await assertVehicleInSupervisorPortfolio({
+        vehicle_id: woFull.vehicle_id,
+        userId,
+        companyId,
+      });
+      if (!ok) return res.status(403).json({ message: "Forbidden" });
     }
 
     const report_runtime = buildRuntimeReport(woFull);
@@ -562,14 +652,15 @@ async function getWorkOrderReport(req, res) {
 
 // =======================
 // POST /maintenance/work-orders/:id/post-report
-// body: { road_test_result?, checklist_json?, remarks? }
 // =======================
 async function upsertPostReport(req, res) {
   try {
     const userId = getAuthUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-
+    const companyId = req.companyId;
     const role = req.user?.role || null;
+
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
     if (!isAdminOrAccountant(role)) {
       return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can submit post report (for now)" });
     }
@@ -580,15 +671,19 @@ async function upsertPostReport(req, res) {
     const { road_test_result, checklist_json, remarks } = req.body || {};
     const now = new Date();
 
-    const wo = await prisma.maintenance_work_orders.findUnique({
-      where: { id: workOrderId },
-      select: { id: true, status: true },
+    const wo = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
+      select: { id: true, company_id: true, status: true },
     });
     if (!wo) return res.status(404).json({ message: "Work order not found" });
 
     const row = await prisma.post_maintenance_reports.upsert({
       where: { work_order_id: workOrderId },
       create: {
+        company_id: companyId,
         work_order_id: workOrderId,
         checked_by: userId,
         checked_at: now,
@@ -615,14 +710,15 @@ async function upsertPostReport(req, res) {
 
 // =======================
 // POST /maintenance/work-orders/:id/complete
-// body: { notes? }
 // =======================
 async function completeWorkOrder(req, res) {
   try {
     const userId = getAuthUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-
+    const companyId = req.companyId;
     const role = req.user?.role || null;
+
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
     if (!isAdminOrAccountant(role)) {
       return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can complete work orders (for now)" });
     }
@@ -633,9 +729,12 @@ async function completeWorkOrder(req, res) {
     const { notes } = req.body || {};
     const now = new Date();
 
-    const wo = await prisma.maintenance_work_orders.findUnique({
-      where: { id: workOrderId },
-      select: { id: true, status: true, vehicle_id: true },
+    const wo = await prisma.maintenance_work_orders.findFirst({
+      where: {
+        id: workOrderId,
+        company_id: companyId,
+      },
+      select: { id: true, company_id: true, status: true, vehicle_id: true },
     });
     if (!wo) return res.status(404).json({ message: "Work order not found" });
 
@@ -663,6 +762,7 @@ async function completeWorkOrder(req, res) {
 
       await tx.maintenance_work_order_events.create({
         data: {
+          company_id: companyId,
           work_order_id: workOrderId,
           event_type: "COMPLETE",
           actor_id: userId,

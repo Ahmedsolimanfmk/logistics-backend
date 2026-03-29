@@ -88,11 +88,9 @@ function normalizeString(v) {
 // =======================
 // Compliance enforcement
 // =======================
-async function enforceDriverCompliance(tx, driver) {
-  if (!driver) return { ok: false, status: 404, message: "Driver not found" };
-
-  if (driver.is_active === false) {
-    return { ok: false, status: 400, message: "Cannot assign inactive driver" };
+async function enforceDriverCompliance(tx, companyId, driver) {
+  if (!driver || driver.company_id !== companyId) {
+    return { ok: false, status: 404, message: "Driver not found" };
   }
 
   const st = upper(driver.status);
@@ -104,7 +102,6 @@ async function enforceDriverCompliance(tx, driver) {
       await tx.drivers.update({
         where: { id: driver.id },
         data: {
-          is_active: false,
           status: "DISABLED",
           disable_reason: "LICENSE_EXPIRED",
         },
@@ -117,11 +114,9 @@ async function enforceDriverCompliance(tx, driver) {
   return { ok: true };
 }
 
-async function enforceVehicleCompliance(tx, vehicle) {
-  if (!vehicle) return { ok: false, status: 404, message: "Vehicle not found" };
-
-  if (typeof vehicle.is_active === "boolean" && !vehicle.is_active) {
-    return { ok: false, status: 400, message: "Cannot assign inactive vehicle" };
+async function enforceVehicleCompliance(tx, companyId, vehicle) {
+  if (!vehicle || vehicle.company_id !== companyId) {
+    return { ok: false, status: 404, message: "Vehicle not found" };
   }
 
   const st = upper(vehicle.status);
@@ -136,7 +131,6 @@ async function enforceVehicleCompliance(tx, vehicle) {
       await tx.vehicles.update({
         where: { id: vehicle.id },
         data: {
-          is_active: false,
           status: "DISABLED",
           disable_reason: "LICENSE_EXPIRED",
         },
@@ -149,23 +143,23 @@ async function enforceVehicleCompliance(tx, vehicle) {
   return { ok: true };
 }
 
-async function runComplianceCheck(driver_id, vehicle_id) {
+async function runComplianceCheck(companyId, driver_id, vehicle_id) {
   const [driver, vehicle] = await Promise.all([
-    prisma.drivers.findUnique({
-      where: { id: driver_id },
+    prisma.drivers.findFirst({
+      where: { id: driver_id, company_id: companyId },
       select: {
         id: true,
-        is_active: true,
+        company_id: true,
         status: true,
         disable_reason: true,
         license_expiry_date: true,
       },
     }),
-    prisma.vehicles.findUnique({
-      where: { id: vehicle_id },
+    prisma.vehicles.findFirst({
+      where: { id: vehicle_id, company_id: companyId },
       select: {
         id: true,
-        is_active: true,
+        company_id: true,
         status: true,
         disable_reason: true,
         license_expiry_date: true,
@@ -174,10 +168,10 @@ async function runComplianceCheck(driver_id, vehicle_id) {
   ]);
 
   return prisma.$transaction(async (tx) => {
-    const d = await enforceDriverCompliance(tx, driver);
+    const d = await enforceDriverCompliance(tx, companyId, driver);
     if (!d.ok) return d;
 
-    const v = await enforceVehicleCompliance(tx, vehicle);
+    const v = await enforceVehicleCompliance(tx, companyId, vehicle);
     if (!v.ok) return v;
 
     return { ok: true };
@@ -188,13 +182,17 @@ async function runComplianceCheck(driver_id, vehicle_id) {
 // Shared validators
 // =======================
 async function validateTripReferences({
+  companyId,
   client_id,
   contract_id,
   site_id,
 }) {
-  const client = await prisma.clients.findUnique({
-    where: { id: client_id },
-    select: { id: true, name: true, is_active: true },
+  const client = await prisma.clients.findFirst({
+    where: {
+      id: client_id,
+      company_id: companyId,
+    },
+    select: { id: true, company_id: true, name: true, is_active: true },
   });
 
   if (!client) {
@@ -205,8 +203,11 @@ async function validateTripReferences({
 
   const [contract, site] = await Promise.all([
     contract_id
-      ? prisma.client_contracts.findUnique({
-          where: { id: contract_id },
+      ? prisma.client_contracts.findFirst({
+          where: {
+            id: contract_id,
+            client_id,
+          },
           select: {
             id: true,
             client_id: true,
@@ -219,9 +220,18 @@ async function validateTripReferences({
         })
       : null,
     site_id
-      ? prisma.sites.findUnique({
-          where: { id: site_id },
-          select: { id: true, client_id: true, name: true, is_active: true },
+      ? prisma.sites.findFirst({
+          where: {
+            id: site_id,
+            company_id: companyId,
+          },
+          select: {
+            id: true,
+            company_id: true,
+            client_id: true,
+            name: true,
+            is_active: true,
+          },
         })
       : null,
   ]);
@@ -278,7 +288,10 @@ async function validateTripReferences({
 async function getTrips(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -287,7 +300,9 @@ async function getTrips(req, res) {
     const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || "25", 10), 1), 100);
     const skip = (page - 1) * pageSize;
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     const statusList = parseStatusList(req.query.status);
     if (statusList && statusList.length === 1) where.status = statusList[0];
@@ -319,7 +334,13 @@ async function getTrips(req, res) {
     if (canViewAllTrips(role)) {
       // no extra filter
     } else if (role === ROLES.FIELD_SUPERVISOR) {
-      where.trip_assignments = { some: { field_supervisor_id: userId } };
+      where.trip_assignments = {
+        some: {
+          company_id: companyId,
+          field_supervisor_id: userId,
+          is_active: true,
+        },
+      };
     }
 
     const [trips, total] = await Promise.all([
@@ -330,6 +351,7 @@ async function getTrips(req, res) {
         take: pageSize,
         select: {
           id: true,
+          company_id: true,
           trip_code: true,
           status: true,
           financial_status: true,
@@ -352,10 +374,10 @@ async function getTrips(req, res) {
           actual_departure_at: true,
           financial_closed_at: true,
           financial_review_opened_at: true,
-          clients: {
+          client: {
             select: { id: true, name: true },
           },
-          client_contracts: {
+          contract: {
             select: { id: true, contract_no: true, status: true, currency: true },
           },
           site: {
@@ -371,9 +393,10 @@ async function getTrips(req, res) {
       return res.json({ page, pageSize, total, items: [] });
     }
 
-    const [activeAssignments, currentRevenues, approvedExpenses] = await Promise.all([
+    const [activeAssignments, latestRevenues, approvedExpenses] = await Promise.all([
       prisma.trip_assignments.findMany({
         where: {
+          company_id: companyId,
           trip_id: { in: tripIds },
           is_active: true,
         },
@@ -386,22 +409,20 @@ async function getTrips(req, res) {
           vehicle_id: true,
           driver_id: true,
           field_supervisor_id: true,
-         vehicles: {
-  select: {
-    id: true,
-    fleet_no: true,
-    plate_no: true,
-    display_name: true,
-    status: true,
-    is_active: true,
-    license_expiry_date: true,
-    disable_reason: true,
-    supervisor_id: true,
-    license_no: true,
-    license_issue_date: true,
-  },
-},
-          drivers: {
+          vehicle: {
+            select: {
+              id: true,
+              fleet_no: true,
+              plate_no: true,
+              display_name: true,
+              status: true,
+              license_expiry_date: true,
+              disable_reason: true,
+              license_no: true,
+              license_issue_date: true,
+            },
+          },
+          driver: {
             select: {
               id: true,
               full_name: true,
@@ -411,30 +432,33 @@ async function getTrips(req, res) {
               disable_reason: true,
             },
           },
-          users_trip_assignments_supervisor: {
+          field_supervisor: {
             select: { id: true, full_name: true },
           },
         },
       }),
 
       prisma.trip_revenues.findMany({
-  where: {
-    trip_id: { in: tripIds },
-  },
-  orderBy: [{ entered_at: "desc" }],
-  select: {
-    id: true,
-    trip_id: true,
-    amount: true,
-    currency: true,
-    source: true,
-    entered_at: true,
-    contract_id: true,
-  },
-}),
+        where: {
+          company_id: companyId,
+          trip_id: { in: tripIds },
+        },
+        orderBy: [{ entered_at: "desc" }],
+        select: {
+          id: true,
+          trip_id: true,
+          amount: true,
+          currency: true,
+          source: true,
+          status: true,
+          entered_at: true,
+          contract_id: true,
+        },
+      }),
 
       prisma.cash_expenses.findMany({
         where: {
+          company_id: companyId,
           trip_id: { in: tripIds },
           approval_status: "APPROVED",
         },
@@ -456,11 +480,11 @@ async function getTrips(req, res) {
     }
 
     const revenueByTripId = new Map();
-    for (const row of currentRevenues) {
-  if (!revenueByTripId.has(row.trip_id)) {
-    revenueByTripId.set(row.trip_id, row);
-  }
-}
+    for (const row of latestRevenues) {
+      if (!revenueByTripId.has(row.trip_id)) {
+        revenueByTripId.set(row.trip_id, row);
+      }
+    }
 
     const expensesAggByTripId = new Map();
     for (const row of approvedExpenses) {
@@ -530,7 +554,10 @@ async function getTrips(req, res) {
 async function getTripById(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -538,46 +565,47 @@ async function getTripById(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
 
-    const trip = await prisma.trips.findUnique({
-      where: { id },
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
-        clients: true,
-        client_contracts: true,
+        client: true,
+        contract: true,
         site: true,
         trip_assignments: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { assigned_at: "desc" },
           include: {
-            vehicles: true,
-            drivers: true,
-            users_trip_assignments_supervisor: true,
+            vehicle: true,
+            driver: true,
+            field_supervisor: true,
           },
         },
         trip_events: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { created_at: "desc" },
           take: 50,
         },
         trip_revenues: {
-  orderBy: [{ entered_at: "desc" }],
+          where: {
+            company_id: companyId,
+          },
+          orderBy: [{ entered_at: "desc" }],
           take: 10,
           include: {
-            users_entered: {
+            entered_by_user: {
               select: { id: true, full_name: true, email: true, role: true },
             },
-            users_approved: {
+            approved_by_user: {
               select: { id: true, full_name: true, email: true, role: true },
             },
-            users_replaced: {
-              select: { id: true, full_name: true, email: true, role: true },
-            },
-            contract_pricing_rules: {
-              select: {
-                id: true,
-                priority: true,
-                base_price: true,
-                currency: true,
-              },
-            },
-            client_contracts: {
+            contract: {
               select: {
                 id: true,
                 contract_no: true,
@@ -585,9 +613,13 @@ async function getTripById(req, res) {
                 currency: true,
               },
             },
+            invoice: true,
           },
         },
         cash_expenses: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { created_at: "desc" },
         },
         invoice_trip_lines: {
@@ -622,7 +654,10 @@ async function getTripById(req, res) {
 async function getTripFinanceSummary(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -633,8 +668,10 @@ async function getTripFinanceSummary(req, res) {
     if (role === ROLES.FIELD_SUPERVISOR) {
       const assignment = await prisma.trip_assignments.findFirst({
         where: {
+          company_id: companyId,
           trip_id: id,
           field_supervisor_id: userId,
+          is_active: true,
         },
         select: { id: true },
       });
@@ -644,7 +681,7 @@ async function getTripFinanceSummary(req, res) {
       }
     }
 
-    const data = await tripFinanceService.getTripFinanceSummary(id);
+    const data = await tripFinanceService.getTripFinanceSummary(id, companyId);
 
     return res.json({
       success: true,
@@ -664,13 +701,30 @@ async function getTripFinanceSummary(req, res) {
 async function autoPriceTrip(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
 
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
+
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!trip) {
+      return res.status(404).json({ message: "Trip not found" });
+    }
 
     const { contract_id, notes, auto_approve } = req.body || {};
 
@@ -701,7 +755,10 @@ async function autoPriceTrip(req, res) {
 async function createTrip(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -730,7 +787,7 @@ async function createTrip(req, res) {
       return res.status(400).json({ message: "Invalid contract_id" });
     }
 
-    if (site_id && !isUuid(site_id)) {
+    if (!isUuid(site_id)) {
       return res.status(400).json({ message: "Invalid site_id" });
     }
 
@@ -759,7 +816,11 @@ async function createTrip(req, res) {
     }
 
     let scheduledAtValue = null;
-    if (scheduled_at !== undefined && scheduled_at !== null && String(scheduled_at).trim() !== "") {
+    if (
+      scheduled_at !== undefined &&
+      scheduled_at !== null &&
+      String(scheduled_at).trim() !== ""
+    ) {
       scheduledAtValue = new Date(scheduled_at);
       if (Number.isNaN(scheduledAtValue.getTime())) {
         return res.status(400).json({ message: "Invalid scheduled_at" });
@@ -767,16 +828,18 @@ async function createTrip(req, res) {
     }
 
     const refs = await validateTripReferences({
+      companyId,
       client_id,
       contract_id: contract_id || null,
-      site_id: site_id || null,
+      site_id,
     });
 
     const created = await prisma.trips.create({
       data: {
+        company_id: companyId,
         client_id,
         contract_id: refs.contract?.id || null,
-        site_id: refs.site?.id || null,
+        site_id: refs.site?.id,
         created_by: userId,
         scheduled_at: scheduledAtValue,
         trip_type: normalizedTripType,
@@ -790,10 +853,11 @@ async function createTrip(req, res) {
         revenue_entry_mode: normalizedRevenueEntryMode,
         status: "DRAFT",
         financial_status: "OPEN",
+        trip_code: `TRIP-${Date.now()}`,
       },
       include: {
-        clients: true,
-        client_contracts: true,
+        client: true,
+        contract: true,
         site: true,
       },
     });
@@ -813,7 +877,10 @@ async function createTrip(req, res) {
 async function assignTrip(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -828,7 +895,12 @@ async function assignTrip(req, res) {
       return res.status(400).json({ message: "Invalid field_supervisor_id" });
     }
 
-    const trip = await prisma.trips.findUnique({ where: { id } });
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "DRAFT") {
@@ -837,7 +909,7 @@ async function assignTrip(req, res) {
       });
     }
 
-    const compliance = await runComplianceCheck(driver_id, vehicle_id);
+    const compliance = await runComplianceCheck(companyId, driver_id, vehicle_id);
     if (!compliance.ok) {
       return res.status(compliance.status || 400).json({
         message: compliance.message,
@@ -846,11 +918,21 @@ async function assignTrip(req, res) {
 
     const [busyDriver, busyVehicle] = await Promise.all([
       prisma.trip_assignments.findFirst({
-        where: { driver_id, is_active: true, trip_id: { not: id } },
+        where: {
+          company_id: companyId,
+          driver_id,
+          is_active: true,
+          trip_id: { not: id },
+        },
         select: { id: true, trip_id: true },
       }),
       prisma.trip_assignments.findFirst({
-        where: { vehicle_id, is_active: true, trip_id: { not: id } },
+        where: {
+          company_id: companyId,
+          vehicle_id,
+          is_active: true,
+          trip_id: { not: id },
+        },
         select: { id: true, trip_id: true },
       }),
     ]);
@@ -869,12 +951,17 @@ async function assignTrip(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.trip_assignments.updateMany({
-        where: { trip_id: id, is_active: true },
+        where: {
+          company_id: companyId,
+          trip_id: id,
+          is_active: true,
+        },
         data: { is_active: false, unassigned_at: new Date() },
       });
 
       const a = await tx.trip_assignments.create({
         data: {
+          company_id: companyId,
           trip_id: id,
           vehicle_id,
           driver_id,
@@ -890,9 +977,10 @@ async function assignTrip(req, res) {
 
       await tx.trip_events.create({
         data: {
+          company_id: companyId,
           trip_id: id,
-          event_type: "ASSIGN",
-          created_by_user: userId,
+          action: "ASSIGN",
+          actor_id: userId,
           payload: {
             vehicle_id,
             driver_id,
@@ -919,7 +1007,10 @@ async function assignTrip(req, res) {
 async function startTrip(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -927,11 +1018,17 @@ async function startTrip(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
 
-    const trip = await prisma.trips.findUnique({
-      where: { id },
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         trip_assignments: {
-          where: { is_active: true },
+          where: {
+            company_id: companyId,
+            is_active: true,
+          },
           take: 1,
           select: { driver_id: true, vehicle_id: true },
         },
@@ -952,6 +1049,7 @@ async function startTrip(req, res) {
     }
 
     const compliance = await runComplianceCheck(
+      companyId,
       activeAssignment.driver_id,
       activeAssignment.vehicle_id
     );
@@ -980,9 +1078,10 @@ async function startTrip(req, res) {
 
       await tx.trip_events.create({
         data: {
+          company_id: companyId,
           trip_id: id,
-          event_type: "START",
-          created_by_user: userId,
+          action: "START",
+          actor_id: userId,
           payload: {},
         },
       });
@@ -1005,7 +1104,10 @@ async function startTrip(req, res) {
 async function finishTrip(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = getAuthRole(req);
     if (!canAccessTrips(role)) return res.status(403).json({ message: "Forbidden" });
@@ -1013,11 +1115,17 @@ async function finishTrip(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
 
-    const trip = await prisma.trips.findUnique({
-      where: { id },
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         trip_assignments: {
-          where: { is_active: true },
+          where: {
+            company_id: companyId,
+            is_active: true,
+          },
           take: 1,
           select: {
             id: true,
@@ -1040,7 +1148,11 @@ async function finishTrip(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.trip_assignments.updateMany({
-        where: { trip_id: id, is_active: true },
+        where: {
+          company_id: companyId,
+          trip_id: id,
+          is_active: true,
+        },
         data: { is_active: false, unassigned_at: new Date() },
       });
 
@@ -1056,6 +1168,7 @@ async function finishTrip(req, res) {
         await tx.vehicles.updateMany({
           where: {
             id: activeAssignment.vehicle_id,
+            company_id: companyId,
             status: "ON_TRIP",
           },
           data: {
@@ -1066,9 +1179,10 @@ async function finishTrip(req, res) {
 
       await tx.trip_events.create({
         data: {
+          company_id: companyId,
           trip_id: id,
-          event_type: "FINISH",
-          created_by_user: userId,
+          action: "FINISH",
+          actor_id: userId,
           payload: {},
         },
       });

@@ -30,7 +30,12 @@ async function listRequests(req, res) {
     const warehouse_id = String(req.query.warehouse_id || "").trim();
     const work_order_id = String(req.query.work_order_id || "").trim();
 
-    const where = {};
+    const companyId = req.companyId;
+
+    const where = {
+      company_id: companyId,
+    };
+
     if (status) where.status = status;
     if (warehouse_id) where.warehouse_id = warehouse_id;
     if (work_order_id) where.work_order_id = work_order_id;

@@ -1,10 +1,13 @@
 const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 const { isAdminOrAccountant } = require("../auth/access");
 
 const tripsController = require("./trips.controller");
 const cashController = require("../cash/cash.controller");
-const { requireTripStartFinishPermission } = require("./trip-permissions.middleware");
+const {
+  requireTripStartFinishPermission,
+} = require("./trip-permissions.middleware");
 
 // Guard helper
 function mustBeFn(name, fn) {
@@ -64,9 +67,10 @@ const closeTripFinance = mustBeFn(
 );
 
 // =======================
-// Routes (JWT required)
+// Routes (JWT + company required)
 // =======================
 router.use(authRequired);
+router.use(requireCompany);
 
 // List / Create / Details
 router.get("/", getTrips);

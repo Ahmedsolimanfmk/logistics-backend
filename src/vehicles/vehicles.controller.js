@@ -1,18 +1,23 @@
 // =======================
 // src/vehicles/vehicles.controller.js
-// FINAL: supports license fields + disable_reason
-// + FIX: allow PATCH supervisor_id (Admin/HR only)
-// + NEW: GET /vehicles/active (for dropdown) with compliance filtering
+// tenant-safe version
 // =======================
 
 const prisma = require("../prisma");
 
-// normalize text (trim + uppercase + single spaces)
+// =======================
+// Helpers
+// =======================
+
 function normalizeText(input) {
   return String(input || "")
     .trim()
     .replace(/\s+/g, " ")
     .toUpperCase();
+}
+
+function upper(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
 function parseBooleanQuery(value) {
@@ -26,43 +31,167 @@ function parseIntQuery(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function parseDateOrNull(v) {
-  if (v === undefined) return undefined; // not provided
-  if (v === null || v === "") return null;
-  const d = new Date(v);
+function parseDateOrNull(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) return undefined;
   return d;
 }
 
 function getAuthRole(req) {
-  return String(req.user?.role || "").toUpperCase();
+  return String(req.user?.role || "").trim().toUpperCase();
 }
 
-function isUuid(v) {
+function getAuthUserId(req) {
+  return req.user?.sub || req.user?.id || null;
+}
+
+function isUuid(value) {
   return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
 }
 
-function upper(v) {
-  return String(v || "").trim().toUpperCase();
+function isExpiredDate(dateValue) {
+  if (!dateValue) return false;
+
+  const d = new Date(dateValue);
+  if (Number.isNaN(d.getTime())) return false;
+
+  return d.getTime() < Date.now();
 }
 
-function isExpiredDate(d) {
-  if (!d) return false;
-  const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return false;
-  return dt.getTime() < Date.now();
+function buildVehicleLabel(vehicle) {
+  const fleetNo = vehicle?.fleet_no ? String(vehicle.fleet_no).trim() : "";
+  const plateNo = vehicle?.plate_no ? String(vehicle.plate_no).trim() : "";
+  const displayName = vehicle?.display_name ? String(vehicle.display_name).trim() : "";
+
+  if (fleetNo && plateNo) return `${fleetNo} - ${plateNo}`;
+  return fleetNo || plateNo || displayName || vehicle?.id;
 }
 
-// dropdown label
-function buildVehicleLabel(v) {
-  const fn = v.fleet_no ? String(v.fleet_no).trim() : "";
-  const pn = v.plate_no ? String(v.plate_no).trim() : "";
-  const dn = v.display_name ? String(v.display_name).trim() : "";
-  if (fn && pn) return `${fn} - ${pn}`;
-  return fn || pn || dn || v.id;
+function asVehicleOption(vehicle) {
+  return {
+    ...vehicle,
+    value: vehicle.id,
+    label: buildVehicleLabel(vehicle),
+  };
+}
+
+function buildVehicleWhere(companyId, query, req) {
+  const { q, status, is_active, unassigned, supervisor_id } = query || {};
+
+  const where = {
+    company_id: companyId,
+  };
+
+  const role = getAuthRole(req);
+  const userId = getAuthUserId(req);
+
+  if (String(unassigned || "").toLowerCase() === "true") {
+    if (role !== "ADMIN" && role !== "HR") {
+      const err = new Error("Forbidden");
+      err.statusCode = 403;
+      throw err;
+    }
+    where.supervisor_id = null;
+  }
+
+  if (role === "FIELD_SUPERVISOR") {
+    where.supervisor_id = userId;
+  } else if (supervisor_id) {
+    where.supervisor_id = String(supervisor_id).trim();
+  }
+
+  if (status) {
+    where.status = upper(status);
+  }
+
+  const isActiveParsed = parseBooleanQuery(is_active);
+  if (typeof isActiveParsed === "boolean") {
+    where.is_active = isActiveParsed;
+  }
+
+  if (q) {
+    const search = String(q).trim();
+
+    where.OR = [
+      { fleet_no: { contains: search, mode: "insensitive" } },
+      { plate_no: { contains: search, mode: "insensitive" } },
+      { display_name: { contains: search, mode: "insensitive" } },
+      { license_no: { contains: search, mode: "insensitive" } },
+      { model: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  return where;
+}
+
+async function getVehicleOrThrow(companyId, id, select) {
+  const vehicle = await prisma.vehicles.findFirst({
+    where: {
+      id,
+      company_id: companyId,
+    },
+    ...(select ? { select } : {}),
+  });
+
+  if (!vehicle) {
+    const err = new Error("Vehicle not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return vehicle;
+}
+
+async function ensureSupervisorBelongsToCompany(companyId, supervisorId) {
+  if (supervisorId === null) return null;
+
+  const sid = String(supervisorId || "").trim();
+  if (!isUuid(sid)) {
+    const err = new Error("Invalid supervisor_id");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const membership = await prisma.company_users.findFirst({
+    where: {
+      company_id: companyId,
+      user_id: sid,
+      is_active: true,
+      status: "ACTIVE",
+    },
+    select: {
+      user_id: true,
+    },
+  });
+
+  if (!membership) {
+    const err = new Error("Supervisor does not belong to this company");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return sid;
+}
+
+function handleKnownError(res, error, fallbackMessage) {
+  const status = error?.statusCode || 500;
+
+  if (error?.code === "P2002") {
+    return res.status(409).json({
+      message: "fleet_no or plate_no already exists in this company",
+    });
+  }
+
+  return res.status(status).json({
+    message: error?.message || fallbackMessage,
+    ...(status >= 500 ? { error: error?.message } : {}),
+  });
 }
 
 // =======================
@@ -73,6 +202,7 @@ async function getActiveVehicles(req, res) {
     const q = String(req.query.q || "").trim();
 
     const where = {
+      company_id: req.companyId,
       is_active: true,
       status: "AVAILABLE",
       ...(q
@@ -99,20 +229,17 @@ async function getActiveVehicles(req, res) {
         is_active: true,
         license_expiry_date: true,
         disable_reason: true,
+        supervisor_id: true,
       },
     });
 
-    const items = (list || [])
-      .filter((v) => !isExpiredDate(v.license_expiry_date))
-      .map((v) => ({
-        ...v,
-        value: v.id,
-        label: buildVehicleLabel(v),
-      }));
+    const items = list
+      .filter((vehicle) => !isExpiredDate(vehicle.license_expiry_date))
+      .map(asVehicleOption);
 
     return res.json(items);
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch active vehicles", error: e.message });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to fetch active vehicles");
   }
 }
 
@@ -126,56 +253,27 @@ async function getActiveVehicles(req, res) {
  *  - supervisor_id
  *  - page
  *  - limit
+ *  - pageSize
  */
 async function getVehicles(req, res) {
   try {
-    const { q, status, is_active, page, limit, pageSize, unassigned, supervisor_id } = req.query || {};
-    const where = {};
+    const query = req.query || {};
+    const where = buildVehicleWhere(req.companyId, query, req);
 
-    const role = getAuthRole(req);
-    const userId = req.user?.sub || null;
-
-    if (String(unassigned || "").toLowerCase() === "true") {
-      if (role !== "ADMIN" && role !== "HR") {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      where.supervisor_id = null;
-    }
-
-    if (role === "FIELD_SUPERVISOR") {
-      where.supervisor_id = userId;
-    } else if (supervisor_id) {
-      where.supervisor_id = String(supervisor_id).trim();
-    }
-
-    if (status) where.status = upper(status);
-
-    const isActiveParsed = parseBooleanQuery(is_active);
-    if (typeof isActiveParsed === "boolean") where.is_active = isActiveParsed;
-
-    if (q) {
-      const query = String(q).trim();
-      where.OR = [
-        { fleet_no: { contains: query, mode: "insensitive" } },
-        { plate_no: { contains: query, mode: "insensitive" } },
-        { display_name: { contains: query, mode: "insensitive" } },
-        { license_no: { contains: query, mode: "insensitive" } },
-      ];
-    }
-
-    const limitInput = limit ?? pageSize;
-    const pageNum = Math.max(1, parseIntQuery(page, 1));
+    const limitInput = query.limit ?? query.pageSize;
+    const pageNum = Math.max(1, parseIntQuery(query.page, 1));
     const limitNum = Math.min(100, Math.max(1, parseIntQuery(limitInput, 20)));
     const skip = (pageNum - 1) * limitNum;
 
     const [itemsRaw, total] = await Promise.all([
       prisma.vehicles.findMany({
         where,
-        orderBy: { created_at: "desc" },
+        orderBy: [{ created_at: "desc" }, { fleet_no: "asc" }],
         skip,
         take: limitNum,
         select: {
           id: true,
+          company_id: true,
           fleet_no: true,
           plate_no: true,
           display_name: true,
@@ -197,11 +295,7 @@ async function getVehicles(req, res) {
       prisma.vehicles.count({ where }),
     ]);
 
-    const items = itemsRaw.map((v) => ({
-      ...v,
-      value: v.id,
-      label: buildVehicleLabel(v),
-    }));
+    const items = itemsRaw.map(asVehicleOption);
 
     return res.json({
       items,
@@ -212,9 +306,8 @@ async function getVehicles(req, res) {
         pages: Math.ceil(total / limitNum),
       },
     });
-  } catch (e) {
-    console.log("GET VEHICLES ERROR:", e);
-    return res.status(500).json({ message: "Failed to fetch vehicles", error: e.message });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to fetch vehicles");
   }
 }
 
@@ -225,12 +318,11 @@ async function getVehicleById(req, res) {
   try {
     const { id } = req.params;
 
-    const vehicle = await prisma.vehicles.findUnique({ where: { id } });
-    if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
+    const vehicle = await getVehicleOrThrow(req.companyId, id);
 
-    return res.json({ ...vehicle, value: vehicle.id, label: buildVehicleLabel(vehicle) });
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to fetch vehicle", error: e.message });
+    return res.json(asVehicleOption(vehicle));
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to fetch vehicle");
   }
 }
 
@@ -249,14 +341,20 @@ async function createVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
+      supervisor_id,
       license_no,
       license_issue_date,
       license_expiry_date,
       disable_reason,
     } = req.body || {};
 
-    if (!fleet_no) return res.status(400).json({ message: "fleet_no is required" });
-    if (!plate_no) return res.status(400).json({ message: "plate_no is required" });
+    if (!fleet_no) {
+      return res.status(400).json({ message: "fleet_no is required" });
+    }
+
+    if (!plate_no) {
+      return res.status(400).json({ message: "plate_no is required" });
+    }
 
     const fleetNormalized = normalizeText(fleet_no);
     const plateNormalized = normalizeText(plate_no);
@@ -265,7 +363,9 @@ async function createVehicle(req, res) {
     if (current_odometer !== undefined && current_odometer !== null) {
       const n = Number(current_odometer);
       if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
-        return res.status(400).json({ message: "current_odometer must be a non-negative integer" });
+        return res.status(400).json({
+          message: "current_odometer must be a non-negative integer",
+        });
       }
       odometerValue = n;
     }
@@ -274,24 +374,36 @@ async function createVehicle(req, res) {
     if (year !== undefined && year !== null) {
       const n = Number(year);
       if (!Number.isFinite(n) || !Number.isInteger(n)) {
-        return res.status(400).json({ message: "year must be an integer" });
+        return res.status(400).json({
+          message: "year must be an integer",
+        });
       }
       yearValue = n;
     }
 
     const licIssue = parseDateOrNull(license_issue_date);
-    const licExpiry = parseDateOrNull(license_expiry_date);
     if (license_issue_date !== undefined && licIssue === undefined) {
       return res.status(400).json({ message: "Invalid license_issue_date" });
     }
+
+    const licExpiry = parseDateOrNull(license_expiry_date);
     if (license_expiry_date !== undefined && licExpiry === undefined) {
       return res.status(400).json({ message: "Invalid license_expiry_date" });
+    }
+
+    let supervisorIdValue = null;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "supervisor_id")) {
+      supervisorIdValue = await ensureSupervisorBelongsToCompany(
+        req.companyId,
+        supervisor_id
+      );
     }
 
     const now = new Date();
 
     const vehicle = await prisma.vehicles.create({
       data: {
+        company_id: req.companyId,
         fleet_no: fleetNormalized,
         plate_no: plateNormalized,
         status: status ? upper(status) : "AVAILABLE",
@@ -301,6 +413,7 @@ async function createVehicle(req, res) {
         current_odometer: odometerValue,
         gps_device_id: gps_device_id ? String(gps_device_id).trim() : null,
         is_active: typeof is_active === "boolean" ? is_active : true,
+        supervisor_id: supervisorIdValue,
         license_no: license_no ? String(license_no).trim() : null,
         license_issue_date: licIssue === undefined ? null : licIssue,
         license_expiry_date: licExpiry === undefined ? null : licExpiry,
@@ -310,13 +423,9 @@ async function createVehicle(req, res) {
       },
     });
 
-    return res.status(201).json({ ...vehicle, value: vehicle.id, label: buildVehicleLabel(vehicle) });
-  } catch (e) {
-    if (e.code === "P2002") {
-      return res.status(409).json({ message: "fleet_no or plate_no already exists" });
-    }
-    console.log("CREATE VEHICLE ERROR:", e);
-    return res.status(500).json({ message: "Failed to create vehicle", error: e.message });
+    return res.status(201).json(asVehicleOption(vehicle));
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to create vehicle");
   }
 }
 
@@ -327,8 +436,7 @@ async function updateVehicle(req, res) {
   try {
     const { id } = req.params;
 
-    const exists = await prisma.vehicles.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ message: "Vehicle not found" });
+    await getVehicleOrThrow(req.companyId, id);
 
     const role = getAuthRole(req);
     const body = req.body || {};
@@ -353,22 +461,35 @@ async function updateVehicle(req, res) {
     const data = {};
 
     if (fleet_no !== undefined) {
-      if (!fleet_no) return res.status(400).json({ message: "fleet_no cannot be empty" });
+      if (!fleet_no) {
+        return res.status(400).json({ message: "fleet_no cannot be empty" });
+      }
       data.fleet_no = normalizeText(fleet_no);
     }
 
     if (plate_no !== undefined) {
-      if (!plate_no) return res.status(400).json({ message: "plate_no cannot be empty" });
+      if (!plate_no) {
+        return res.status(400).json({ message: "plate_no cannot be empty" });
+      }
       data.plate_no = normalizeText(plate_no);
     }
 
-    if (status !== undefined) data.status = status ? upper(status) : null;
-    if (display_name !== undefined) data.display_name = display_name ? String(display_name).trim() : null;
-    if (model !== undefined) data.model = model ? String(model).trim() : null;
+    if (status !== undefined) {
+      data.status = status ? upper(status) : null;
+    }
+
+    if (display_name !== undefined) {
+      data.display_name = display_name ? String(display_name).trim() : null;
+    }
+
+    if (model !== undefined) {
+      data.model = model ? String(model).trim() : null;
+    }
 
     if (year !== undefined) {
-      if (year === null) data.year = null;
-      else {
+      if (year === null) {
+        data.year = null;
+      } else {
         const n = Number(year);
         if (!Number.isFinite(n) || !Number.isInteger(n)) {
           return res.status(400).json({ message: "year must be an integer" });
@@ -378,59 +499,74 @@ async function updateVehicle(req, res) {
     }
 
     if (current_odometer !== undefined) {
-      if (current_odometer === null) data.current_odometer = null;
-      else {
+      if (current_odometer === null) {
+        data.current_odometer = null;
+      } else {
         const n = Number(current_odometer);
         if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
-          return res.status(400).json({ message: "current_odometer must be a non-negative integer" });
+          return res.status(400).json({
+            message: "current_odometer must be a non-negative integer",
+          });
         }
         data.current_odometer = n;
       }
     }
 
-    if (gps_device_id !== undefined) data.gps_device_id = gps_device_id ? String(gps_device_id).trim() : null;
-    if (typeof is_active === "boolean") data.is_active = is_active;
+    if (gps_device_id !== undefined) {
+      data.gps_device_id = gps_device_id ? String(gps_device_id).trim() : null;
+    }
 
-    if (license_no !== undefined) data.license_no = license_no ? String(license_no).trim() : null;
+    if (typeof is_active === "boolean") {
+      data.is_active = is_active;
+    }
+
+    if (license_no !== undefined) {
+      data.license_no = license_no ? String(license_no).trim() : null;
+    }
 
     if (license_issue_date !== undefined) {
       const d = parseDateOrNull(license_issue_date);
-      if (d === undefined) return res.status(400).json({ message: "Invalid license_issue_date" });
+      if (d === undefined) {
+        return res.status(400).json({ message: "Invalid license_issue_date" });
+      }
       data.license_issue_date = d;
     }
 
     if (license_expiry_date !== undefined) {
       const d = parseDateOrNull(license_expiry_date);
-      if (d === undefined) return res.status(400).json({ message: "Invalid license_expiry_date" });
+      if (d === undefined) {
+        return res.status(400).json({ message: "Invalid license_expiry_date" });
+      }
       data.license_expiry_date = d;
     }
 
-    if (disable_reason !== undefined) data.disable_reason = disable_reason ? upper(disable_reason) : null;
+    if (disable_reason !== undefined) {
+      data.disable_reason = disable_reason ? upper(disable_reason) : null;
+    }
 
     if (Object.prototype.hasOwnProperty.call(body, "supervisor_id")) {
       if (role !== "ADMIN" && role !== "HR") {
-        return res.status(403).json({ message: "Forbidden (supervisor assignment is ADMIN/HR only)" });
+        return res.status(403).json({
+          message: "Forbidden (supervisor assignment is ADMIN/HR only)",
+        });
       }
 
-      if (supervisor_id === null) {
-        data.supervisor_id = null;
-      } else {
-        const sid = String(supervisor_id || "").trim();
-        if (!isUuid(sid)) return res.status(400).json({ message: "Invalid supervisor_id" });
-        data.supervisor_id = sid;
-      }
+      data.supervisor_id = await ensureSupervisorBelongsToCompany(
+        req.companyId,
+        supervisor_id
+      );
     }
 
     data.updated_at = new Date();
 
-    const updated = await prisma.vehicles.update({ where: { id }, data });
+    const updated = await prisma.vehicles.update({
+      where: { id },
+      data,
+    });
 
-    return res.json({ ...updated, value: updated.id, label: buildVehicleLabel(updated) });
-  } catch (e) {
-    if (e.code === "P2002") {
-      return res.status(409).json({ message: "fleet_no or plate_no already exists" });
-    }
-    return res.status(500).json({ message: "Failed to update vehicle", error: e.message });
+    return res.json(asVehicleOption(updated));
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to update vehicle");
   }
 }
 
@@ -441,71 +577,79 @@ async function toggleVehicle(req, res) {
   try {
     const { id } = req.params;
 
-    const exists = await prisma.vehicles.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ message: "Vehicle not found" });
+    const existing = await getVehicleOrThrow(req.companyId, id);
 
     const updated = await prisma.vehicles.update({
       where: { id },
-      data: { is_active: !exists.is_active, updated_at: new Date() },
+      data: {
+        is_active: !existing.is_active,
+        updated_at: new Date(),
+      },
     });
 
-    return res.json({ ...updated, value: updated.id, label: buildVehicleLabel(updated) });
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to toggle vehicle", error: e.message });
+    return res.json(asVehicleOption(updated));
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to toggle vehicle");
   }
 }
 
 /**
  * DELETE /vehicles/:id
+ * soft delete = deactivate
  */
 async function deleteVehicle(req, res) {
   try {
     const { id } = req.params;
 
-    const exists = await prisma.vehicles.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ message: "Vehicle not found" });
+    await getVehicleOrThrow(req.companyId, id);
 
     const updated = await prisma.vehicles.update({
       where: { id },
-      data: { is_active: false, updated_at: new Date() },
+      data: {
+        is_active: false,
+        updated_at: new Date(),
+      },
     });
 
-    return res.json({ ok: true, vehicle: updated });
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to delete/deactivate vehicle", error: e.message });
+    return res.json({
+      ok: true,
+      vehicle: asVehicleOption(updated),
+    });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to delete/deactivate vehicle");
   }
 }
-// =======================
-// GET /vehicles/:id/summary
-// =======================
+
+/**
+ * GET /vehicles/:id/summary
+ */
 async function getVehicleSummary(req, res) {
   try {
     const { id } = req.params;
 
-    const vehicle = await prisma.vehicles.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        fleet_no: true,
-        plate_no: true,
-        display_name: true,
-        license_no: true,
-        license_issue_date: true,
-        license_expiry_date: true,
-        status: true,
-        is_active: true,
-        disable_reason: true,
-        created_at: true,
-        updated_at: true,
-      },
+    const vehicle = await getVehicleOrThrow(req.companyId, id, {
+      id: true,
+      company_id: true,
+      fleet_no: true,
+      plate_no: true,
+      display_name: true,
+      license_no: true,
+      license_issue_date: true,
+      license_expiry_date: true,
+      status: true,
+      is_active: true,
+      disable_reason: true,
+      current_odometer: true,
+      supervisor_id: true,
+      created_at: true,
+      updated_at: true,
     });
 
-    if (!vehicle) {
-      return res.status(404).json({ message: "Vehicle not found" });
-    }
-
     const assignments = await prisma.trip_assignments.findMany({
-      where: { vehicle_id: id },
+      where: {
+        company_id: req.companyId,
+        vehicle_id: id,
+      },
       orderBy: { assigned_at: "desc" },
       take: 100,
       select: {
@@ -516,11 +660,20 @@ async function getVehicleSummary(req, res) {
         trips: {
           select: {
             id: true,
+            company_id: true,
             status: true,
             scheduled_at: true,
             financial_status: true,
-            clients: { select: { name: true } },
-            sites: { select: { name: true } },
+            clients: {
+              select: {
+                name: true,
+              },
+            },
+            sites: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
         drivers: {
@@ -533,59 +686,67 @@ async function getVehicleSummary(req, res) {
       },
     });
 
-    const tripIds = assignments.map(a => a.trip_id).filter(Boolean);
+    const validAssignments = assignments.filter(
+      (item) => !item.trips || item.trips.company_id === req.companyId
+    );
+
+    const uniqueTripIds = [...new Set(validAssignments.map((item) => item.trip_id).filter(Boolean))];
 
     let expenses = [];
-
-    if (tripIds.length > 0) {
+    if (uniqueTripIds.length > 0) {
       expenses = await prisma.cash_expenses.findMany({
         where: {
-          trip_id: { in: tripIds },
+          company_id: req.companyId,
           vehicle_id: id,
+          trip_id: {
+            in: uniqueTripIds,
+          },
         },
         orderBy: { created_at: "desc" },
         take: 200,
       });
     }
 
-    const totalTrips = tripIds.length;
-    const completedTrips = assignments.filter(a => a?.trips?.status === "COMPLETED").length;
-    const activeTrips = assignments.filter(a => a.is_active === true).length;
+    const completedTrips = validAssignments.filter(
+      (item) => item?.trips?.status === "COMPLETED"
+    ).length;
 
-    const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const activeTrips = validAssignments.filter(
+      (item) => item.is_active === true
+    ).length;
+
+    const totalExpenses = expenses.reduce(
+      (sum, expense) => sum + Number(expense.amount || 0),
+      0
+    );
+
     const approvedExpenses = expenses
-      .filter(e => e.approval_status === "APPROVED")
-      .reduce((s, e) => s + Number(e.amount || 0), 0);
+      .filter((expense) => expense.approval_status === "APPROVED")
+      .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 
     return res.json({
-      vehicle,
-
+      vehicle: asVehicleOption(vehicle),
       summary: {
-        total_trips: totalTrips,
+        total_trips: uniqueTripIds.length,
         completed_trips: completedTrips,
         active_trips: activeTrips,
         expenses_count: expenses.length,
         total_expenses: totalExpenses,
         approved_expenses: approvedExpenses,
       },
-
-      recent_trips: assignments.slice(0, 20),
-
+      recent_trips: validAssignments.slice(0, 20),
       recent_expenses: expenses.slice(0, 20),
     });
-
-  } catch (e) {
-    return res.status(500).json({
-      message: "Failed to fetch vehicle summary",
-      error: e.message,
-    });
+  } catch (error) {
+    return handleKnownError(res, error, "Failed to fetch vehicle summary");
   }
 }
+
 module.exports = {
   getActiveVehicles,
   getVehicles,
   getVehicleById,
-  getVehicleSummary, // ✅ NEW
+  getVehicleSummary,
   createVehicle,
   updateVehicle,
   toggleVehicle,

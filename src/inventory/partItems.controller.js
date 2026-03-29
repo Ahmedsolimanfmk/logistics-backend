@@ -13,15 +13,22 @@ function isUuid(v) {
   );
 }
 
+
 async function listPartItems(req, res) {
   try {
+    
     const q = String(req.query.q || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
     const part_id = String(req.query.part_id || "").trim();
     const status = String(req.query.status || "").trim();
     // IN_STOCK | RESERVED | ISSUED | INSTALLED | SCRAPPED
 
-    const where = {};
+    const companyId = req.companyId;
+
+    const where = {
+      company_id: companyId,
+    };
+
 
     // ✅ Guard UUID filters (avoid Prisma runtime errors on invalid UUID)
     if (warehouse_id) {

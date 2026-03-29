@@ -1,5 +1,6 @@
 const express = require("express");
 const { authRequired } = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
 const controller = require("./trip-revenues.controller");
 
 const router = express.Router();
@@ -16,29 +17,39 @@ function mustBeFn(name, fn) {
   return fn;
 }
 
+function isUuid(v) {
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+  );
+}
+
+function requireUuidParam(paramName = "tripId") {
+  return (req, res, next) => {
+    const v = req.params?.[paramName];
+    if (!isUuid(v)) {
+      return res.status(404).json({ message: "Not found" });
+    }
+    return next();
+  };
+}
+
 // =======================
 // Bind handlers safely
 // =======================
-const getByTripId = mustBeFn(
-  "getByTripId",
-  controller.getByTripId
-);
-
+const getByTripId = mustBeFn("getByTripId", controller.getByTripId);
 const getRevenueHistoryByTripId = mustBeFn(
   "getRevenueHistoryByTripId",
   controller.getRevenueHistoryByTripId
 );
-
 const createOrUpdateRevenue = mustBeFn(
   "createOrUpdateRevenue",
   controller.createOrUpdateRevenue
 );
-
 const approveCurrentRevenue = mustBeFn(
   "approveCurrentRevenue",
   controller.approveCurrentRevenue
 );
-
 const getTripProfitability = mustBeFn(
   "getTripProfitability",
   controller.getTripProfitability
@@ -48,14 +59,27 @@ const getTripProfitability = mustBeFn(
 // Routes
 // =======================
 router.use(authRequired);
+router.use(requireCompany);
 
 // Revenue by trip
-router.get("/:tripId/revenue", getByTripId);
-router.get("/:tripId/revenue/history", getRevenueHistoryByTripId);
-router.put("/:tripId/revenue", createOrUpdateRevenue);
-router.post("/:tripId/revenue/approve", approveCurrentRevenue);
+router.get("/:tripId/revenue", requireUuidParam("tripId"), getByTripId);
+router.get(
+  "/:tripId/revenue/history",
+  requireUuidParam("tripId"),
+  getRevenueHistoryByTripId
+);
+router.put("/:tripId/revenue", requireUuidParam("tripId"), createOrUpdateRevenue);
+router.post(
+  "/:tripId/revenue/approve",
+  requireUuidParam("tripId"),
+  approveCurrentRevenue
+);
 
 // Profitability by trip
-router.get("/:tripId/profitability", getTripProfitability);
+router.get(
+  "/:tripId/profitability",
+  requireUuidParam("tripId"),
+  getTripProfitability
+);
 
 module.exports = router;

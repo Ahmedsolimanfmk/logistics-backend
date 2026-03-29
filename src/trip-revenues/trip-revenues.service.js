@@ -26,11 +26,15 @@ function buildNotFound(message) {
   return err;
 }
 
-async function getTripOrThrow(tripId) {
-  const trip = await prisma.trips.findUnique({
-    where: { id: tripId },
+async function getTripOrThrow(tripId, companyId) {
+  const trip = await prisma.trips.findFirst({
+    where: {
+      id: tripId,
+      company_id: companyId,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       contract_id: true,
       agreed_revenue: true,
@@ -47,6 +51,7 @@ async function getTripOrThrow(tripId) {
       client_contracts: {
         select: {
           id: true,
+          company_id: true,
           client_id: true,
           contract_no: true,
           status: true,
@@ -57,6 +62,7 @@ async function getTripOrThrow(tripId) {
       pickup_site: {
         select: {
           id: true,
+          company_id: true,
           zone_id: true,
           client_id: true,
           name: true,
@@ -65,6 +71,7 @@ async function getTripOrThrow(tripId) {
       dropoff_site: {
         select: {
           id: true,
+          company_id: true,
           zone_id: true,
           client_id: true,
           name: true,
@@ -73,19 +80,24 @@ async function getTripOrThrow(tripId) {
       routes: {
         select: {
           id: true,
+          company_id: true,
           name: true,
           code: true,
           distance_km: true,
         },
       },
       trip_assignments: {
-        where: { is_active: true },
+        where: {
+          company_id: companyId,
+          is_active: true,
+        },
         take: 1,
         select: {
           vehicle_id: true,
           vehicles: {
             select: {
               id: true,
+              company_id: true,
               vehicle_class_id: true,
             },
           },
@@ -124,13 +136,17 @@ function validateSource(source) {
   return normalized;
 }
 
-async function validateContractForTrip({ trip, contract_id }) {
+async function validateContractForTrip({ trip, companyId, contract_id }) {
   if (!contract_id) return null;
 
-  const contract = await prisma.client_contracts.findUnique({
-    where: { id: contract_id },
+  const contract = await prisma.client_contracts.findFirst({
+    where: {
+      id: contract_id,
+      company_id: companyId,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       status: true,
       contract_no: true,
@@ -154,13 +170,22 @@ async function validateContractForTrip({ trip, contract_id }) {
   return contract;
 }
 
-async function validateInvoiceForTrip({ trip, invoice_id, contract_id = null }) {
+async function validateInvoiceForTrip({
+  trip,
+  companyId,
+  invoice_id,
+  contract_id = null,
+}) {
   if (!invoice_id) return null;
 
-  const invoice = await prisma.ar_invoices.findUnique({
-    where: { id: invoice_id },
+  const invoice = await prisma.ar_invoices.findFirst({
+    where: {
+      id: invoice_id,
+      company_id: companyId,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       contract_id: true,
       invoice_no: true,
@@ -181,20 +206,33 @@ async function validateInvoiceForTrip({ trip, invoice_id, contract_id = null }) 
     throw buildBadRequest("invoice_id does not belong to the selected contract");
   }
 
-  if (trip.contract_id && invoice.contract_id && invoice.contract_id !== trip.contract_id) {
+  if (
+    trip.contract_id &&
+    invoice.contract_id &&
+    invoice.contract_id !== trip.contract_id
+  ) {
     throw buildBadRequest("invoice contract does not match trip contract_id");
   }
 
   return invoice;
 }
 
-async function validatePricingRuleForTrip({ trip, pricing_rule_id, contract_id }) {
+async function validatePricingRuleForTrip({
+  trip,
+  companyId,
+  pricing_rule_id,
+  contract_id,
+}) {
   if (!pricing_rule_id) return null;
 
-  const rule = await prisma.contract_pricing_rules.findUnique({
-    where: { id: pricing_rule_id },
+  const rule = await prisma.contract_pricing_rules.findFirst({
+    where: {
+      id: pricing_rule_id,
+      company_id: companyId,
+    },
     select: {
       id: true,
+      company_id: true,
       contract_id: true,
       client_id: true,
       route_id: true,
@@ -254,7 +292,9 @@ function validatePricingRuleAgainstTrip(rule, trip) {
 
   if (rule.pickup_site_id) {
     if (!trip.pickup_site_id) {
-      throw buildBadRequest("Trip has no pickup_site_id but pricing_rule requires pickup_site_id");
+      throw buildBadRequest(
+        "Trip has no pickup_site_id but pricing_rule requires pickup_site_id"
+      );
     }
     if (rule.pickup_site_id !== trip.pickup_site_id) {
       throw buildBadRequest("pricing_rule_id does not match trip pickup_site_id");
@@ -263,7 +303,9 @@ function validatePricingRuleAgainstTrip(rule, trip) {
 
   if (rule.dropoff_site_id) {
     if (!trip.dropoff_site_id) {
-      throw buildBadRequest("Trip has no dropoff_site_id but pricing_rule requires dropoff_site_id");
+      throw buildBadRequest(
+        "Trip has no dropoff_site_id but pricing_rule requires dropoff_site_id"
+      );
     }
     if (rule.dropoff_site_id !== trip.dropoff_site_id) {
       throw buildBadRequest("pricing_rule_id does not match trip dropoff_site_id");
@@ -272,7 +314,9 @@ function validatePricingRuleAgainstTrip(rule, trip) {
 
   if (rule.from_zone_id) {
     if (!trip.pickup_zone_id) {
-      throw buildBadRequest("Trip has no pickup zone but pricing_rule requires from_zone_id");
+      throw buildBadRequest(
+        "Trip has no pickup zone but pricing_rule requires from_zone_id"
+      );
     }
     if (rule.from_zone_id !== trip.pickup_zone_id) {
       throw buildBadRequest("pricing_rule_id does not match trip pickup zone");
@@ -281,7 +325,9 @@ function validatePricingRuleAgainstTrip(rule, trip) {
 
   if (rule.to_zone_id) {
     if (!trip.dropoff_zone_id) {
-      throw buildBadRequest("Trip has no dropoff zone but pricing_rule requires to_zone_id");
+      throw buildBadRequest(
+        "Trip has no dropoff zone but pricing_rule requires to_zone_id"
+      );
     }
     if (rule.to_zone_id !== trip.dropoff_zone_id) {
       throw buildBadRequest("pricing_rule_id does not match trip dropoff zone");
@@ -290,7 +336,9 @@ function validatePricingRuleAgainstTrip(rule, trip) {
 
   if (rule.cargo_type_id) {
     if (!trip.cargo_type_id) {
-      throw buildBadRequest("Trip has no cargo_type_id but pricing_rule requires cargo_type_id");
+      throw buildBadRequest(
+        "Trip has no cargo_type_id but pricing_rule requires cargo_type_id"
+      );
     }
     if (rule.cargo_type_id !== trip.cargo_type_id) {
       throw buildBadRequest("pricing_rule_id does not match trip cargo_type_id");
@@ -344,12 +392,9 @@ function buildPricingRuleSnapshot(rule, resolver = null) {
       ? {
           matched: !!resolver.matched,
           matched_rules_count: resolver.matched_rules_count || 0,
-          resolved_amount:
-            resolver.resolved_rule?.resolved_amount ?? null,
+          resolved_amount: resolver.resolved_rule?.resolved_amount ?? null,
           resolved_currency:
-            resolver.resolved_rule?.resolved_currency ||
-            rule.currency ||
-            null,
+            resolver.resolved_rule?.resolved_currency || rule.currency || null,
         }
       : null,
     data: {
@@ -421,12 +466,13 @@ function includeRevenueRelations() {
 // =======================
 // Queries
 // =======================
-async function getByTripId(tripId) {
-  await getTripOrThrow(tripId);
+async function getByTripId(tripId, companyId) {
+  await getTripOrThrow(tripId, companyId);
 
   const row = await prisma.trip_revenues.findFirst({
     where: {
       trip_id: tripId,
+      company_id: companyId,
       is_current: true,
     },
     orderBy: [{ version_no: "desc" }],
@@ -436,11 +482,14 @@ async function getByTripId(tripId) {
   return row;
 }
 
-async function getRevenueHistoryByTripId(tripId) {
-  await getTripOrThrow(tripId);
+async function getRevenueHistoryByTripId(tripId, companyId) {
+  await getTripOrThrow(tripId, companyId);
 
   return prisma.trip_revenues.findMany({
-    where: { trip_id: tripId },
+    where: {
+      trip_id: tripId,
+      company_id: companyId,
+    },
     orderBy: [{ version_no: "desc" }, { entered_at: "desc" }],
     include: includeRevenueRelations(),
   });
@@ -450,6 +499,7 @@ async function getRevenueHistoryByTripId(tripId) {
 // Commands
 // =======================
 async function createOrUpdateRevenue({
+  companyId,
   trip_id,
   amount,
   currency,
@@ -460,7 +510,7 @@ async function createOrUpdateRevenue({
   notes,
   entered_by,
 }) {
-  const trip = await getTripOrThrow(trip_id);
+  const trip = await getTripOrThrow(trip_id, companyId);
 
   if (upper(trip.financial_status) === "CLOSED") {
     const err = new Error("Trip finance is CLOSED. Revenue cannot be changed");
@@ -477,24 +527,32 @@ async function createOrUpdateRevenue({
 
   const selectedContract = await validateContractForTrip({
     trip,
+    companyId,
     contract_id: contract_id || trip.contract_id || null,
   });
 
   const invoice = await validateInvoiceForTrip({
     trip,
+    companyId,
     invoice_id: invoice_id || null,
     contract_id: selectedContract?.id || trip.contract_id || null,
   });
 
   const pricingRule = await validatePricingRuleForTrip({
     trip,
+    companyId,
     pricing_rule_id: pricing_rule_id || null,
     contract_id: selectedContract?.id || trip.contract_id || null,
   });
 
   validatePricingRuleAgainstTrip(pricingRule, trip);
 
-  if (normalizedSource === "CONTRACT" && !selectedContract && !pricingRule && !trip.contract_id) {
+  if (
+    normalizedSource === "CONTRACT" &&
+    !selectedContract &&
+    !pricingRule &&
+    !trip.contract_id
+  ) {
     throw buildBadRequest(
       "For CONTRACT revenue, trip must have contract_id or you must pass contract_id or pricing_rule_id"
     );
@@ -528,6 +586,7 @@ async function createOrUpdateRevenue({
   const current = await prisma.trip_revenues.findFirst({
     where: {
       trip_id,
+      company_id: companyId,
       is_current: true,
     },
     select: {
@@ -551,6 +610,7 @@ async function createOrUpdateRevenue({
 
     const created = await tx.trip_revenues.create({
       data: {
+        company_id: companyId,
         trip_id,
         client_id: trip.client_id,
         contract_id: effectiveContractId,
@@ -591,11 +651,12 @@ async function createOrUpdateRevenue({
 }
 
 async function approveCurrentRevenue({
+  companyId,
   trip_id,
   approved_by,
   approval_notes,
 }) {
-  const trip = await getTripOrThrow(trip_id);
+  const trip = await getTripOrThrow(trip_id, companyId);
 
   if (upper(trip.financial_status) === "CLOSED") {
     const err = new Error("Trip finance is CLOSED. Revenue cannot be approved");
@@ -606,6 +667,7 @@ async function approveCurrentRevenue({
   const current = await prisma.trip_revenues.findFirst({
     where: {
       trip_id,
+      company_id: companyId,
       is_current: true,
     },
     select: {
@@ -658,21 +720,20 @@ async function approveCurrentRevenue({
   return updated;
 }
 
-/**
- * Auto resolve contract price for trip, then create/update trip revenue.
- * This is the main automation layer for Phase 1.
- */
 async function autoCalculateTripRevenue({
+  companyId,
   trip_id,
   entered_by,
   notes,
   contract_id = null,
   autoApprove = false,
 }) {
-  const trip = await getTripOrThrow(trip_id);
+  const trip = await getTripOrThrow(trip_id, companyId);
 
   if (upper(trip.financial_status) === "CLOSED") {
-    const err = new Error("Trip finance is CLOSED. Revenue cannot be auto-calculated");
+    const err = new Error(
+      "Trip finance is CLOSED. Revenue cannot be auto-calculated"
+    );
     err.statusCode = 409;
     throw err;
   }
@@ -680,6 +741,7 @@ async function autoCalculateTripRevenue({
   const resolver = await contractPricingService.resolveTripPrice({
     tripId: trip_id,
     contractId: contract_id || trip.contract_id || null,
+    companyId,
   });
 
   if (!resolver?.matched || !resolver?.resolved_rule) {
@@ -704,6 +766,7 @@ async function autoCalculateTripRevenue({
 
   const rule = await validatePricingRuleForTrip({
     trip,
+    companyId,
     pricing_rule_id: pricingRuleId,
     contract_id: effectiveContractId,
   });
@@ -715,6 +778,7 @@ async function autoCalculateTripRevenue({
   const current = await prisma.trip_revenues.findFirst({
     where: {
       trip_id,
+      company_id: companyId,
       is_current: true,
     },
     select: {
@@ -737,6 +801,7 @@ async function autoCalculateTripRevenue({
 
     const newRow = await tx.trip_revenues.create({
       data: {
+        company_id: companyId,
         trip_id,
         client_id: trip.client_id,
         contract_id: effectiveContractId,
@@ -747,9 +812,7 @@ async function autoCalculateTripRevenue({
         currency,
         source: "CONTRACT",
         entered_by: entered_by || null,
-        notes:
-          notes ||
-          "AUTO_CALCULATED_FROM_PRICING_RULE",
+        notes: notes || "AUTO_CALCULATED_FROM_PRICING_RULE",
         version_no: current ? current.version_no + 1 : 1,
         is_current: true,
         is_approved: !!autoApprove,
@@ -783,8 +846,8 @@ async function autoCalculateTripRevenue({
   };
 }
 
-async function getTripProfitability(tripId) {
-  return tripFinanceService.getTripFinanceSummary(tripId);
+async function getTripProfitability(tripId, companyId) {
+  return tripFinanceService.getTripFinanceSummary(tripId, companyId);
 }
 
 module.exports = {

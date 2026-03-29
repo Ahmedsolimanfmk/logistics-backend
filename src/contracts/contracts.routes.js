@@ -1,25 +1,98 @@
 // =======================
-// src/contracts/contracts.routes.js
+// src/contracts/contracts.controller.js
 // =======================
 
-const router = require("express").Router();
+const service = require("./contracts.service");
 
-const controller = require("./contracts.controller");
-const { requireAdminOrAccountant } = require("../auth/role.middleware");
-
+// =======================
 // CREATE
-router.post("/", requireAdminOrAccountant, controller.create);
+// =======================
+exports.create = async (req, res) => {
+  try {
+    const result = await service.createContract({
+      ...req.body,
+      company_id: req.companyId,
+    });
 
+    return res.status(201).json(result);
+  } catch (e) {
+    return res.status(e.status || e.statusCode || 500).json({
+      message: e.message || "Failed to create contract",
+    });
+  }
+};
+
+// =======================
 // LIST
-router.get("/", controller.list);
+// =======================
+exports.list = async (req, res) => {
+  try {
+    const { client_id, page, limit } = req.query;
 
-// GET
-router.get("/:id", controller.getById);
+    const result = await service.listContracts({
+      company_id: req.companyId,
+      client_id,
+      page: Number(page) || 1,
+      limit: Number(limit) || 20,
+    });
 
+    return res.json(result);
+  } catch (e) {
+    return res.status(e.status || e.statusCode || 500).json({
+      message: e.message || "Failed to list contracts",
+    });
+  }
+};
+
+// =======================
+// GET BY ID
+// =======================
+exports.getById = async (req, res) => {
+  try {
+    const result = await service.getContractById(req.params.id, req.companyId);
+    return res.json(result);
+  } catch (e) {
+    return res.status(e.status || e.statusCode || 500).json({
+      message: e.message || "Failed to fetch contract",
+    });
+  }
+};
+
+// =======================
 // UPDATE
-router.patch("/:id", requireAdminOrAccountant, controller.update);
+// =======================
+exports.update = async (req, res) => {
+  try {
+    const result = await service.updateContract(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+    return res.json(result);
+  } catch (e) {
+    return res.status(e.status || e.statusCode || 500).json({
+      message: e.message || "Failed to update contract",
+    });
+  }
+};
 
-// STATUS
-router.patch("/:id/status", requireAdminOrAccountant, controller.setStatus);
+// =======================
+// SET STATUS
+// =======================
+exports.setStatus = async (req, res) => {
+  try {
+    const { status } = req.body || {};
 
-module.exports = router;
+    const result = await service.setContractStatus(
+      req.params.id,
+      status,
+      req.companyId
+    );
+
+    return res.json(result);
+  } catch (e) {
+    return res.status(e.status || e.statusCode || 500).json({
+      message: e.message || "Failed to set contract status",
+    });
+  }
+};

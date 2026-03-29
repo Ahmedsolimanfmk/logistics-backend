@@ -24,10 +24,11 @@ function isUuid(v) {
   );
 }
 
-// المشرف يقدر يشتغل بس على عربياته
-async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
+// المشرف يقدر يشتغل بس على عربياته داخل نفس الشركة
+async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyId }) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
+      company_id: companyId,
       vehicle_id,
       field_supervisor_id: userId,
       is_active: true,
@@ -44,7 +45,10 @@ async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
 async function createMaintenanceRequest(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const { vehicle_id, problem_title, problem_description } = req.body || {};
 
@@ -55,15 +59,23 @@ async function createMaintenanceRequest(req, res) {
       return res.status(400).json({ message: "problem_title is required" });
     }
 
-    const vehicle = await prisma.vehicles.findUnique({
-      where: { id: vehicle_id },
-      select: { id: true },
+    const vehicle = await prisma.vehicles.findFirst({
+      where: {
+        id: vehicle_id,
+        company_id: companyId,
+      },
+      select: { id: true, company_id: true },
     });
+
     if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
 
     const role = req.user?.role || null;
     if (!isAdminOrAccountant(role)) {
-      const ok = await assertVehicleInSupervisorPortfolio({ vehicle_id, userId });
+      const ok = await assertVehicleInSupervisorPortfolio({
+        vehicle_id,
+        userId,
+        companyId,
+      });
       if (!ok) {
         return res.status(403).json({ message: "Forbidden: vehicle not in your portfolio" });
       }
@@ -73,6 +85,7 @@ async function createMaintenanceRequest(req, res) {
 
     const row = await prisma.maintenance_requests.create({
       data: {
+        company_id: companyId,
         vehicle_id,
         problem_title: String(problem_title).trim(),
         problem_description: problem_description
@@ -99,13 +112,20 @@ async function createMaintenanceRequest(req, res) {
 async function listMaintenanceRequests(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const { status, vehicle_id, page, limit } = req.query || {};
     const role = req.user?.role || null;
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
+
     if (status) where.status = String(status).toUpperCase();
+
     if (vehicle_id) {
       if (!isUuid(vehicle_id)) return res.status(400).json({ message: "vehicle_id must be uuid" });
       where.vehicle_id = vehicle_id;
@@ -150,15 +170,21 @@ async function listMaintenanceRequests(req, res) {
 async function getMaintenanceRequestById(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const { id } = req.params;
     if (!isUuid(id)) {
       return res.status(400).json({ message: "Invalid request id" });
     }
 
-    const row = await prisma.maintenance_requests.findUnique({
-      where: { id },
+    const row = await prisma.maintenance_requests.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         vehicles: {
           select: {
@@ -176,8 +202,15 @@ async function getMaintenanceRequestById(req, res) {
         reviewed_by_user: {
           select: { id: true, full_name: true },
         },
-        attachments: true,
+        attachments: {
+          where: {
+            company_id: companyId,
+          },
+        },
         work_orders: {
+          where: {
+            company_id: companyId,
+          },
           orderBy: { opened_at: "desc" },
           select: {
             id: true,
@@ -214,6 +247,7 @@ async function getMaintenanceRequestById(req, res) {
       const ok = await assertVehicleInSupervisorPortfolio({
         vehicle_id: row.vehicle_id,
         userId,
+        companyId,
       });
       if (!ok) return res.status(403).json({ message: "Forbidden" });
     }
@@ -227,21 +261,15 @@ async function getMaintenanceRequestById(req, res) {
 
 // =======================
 // POST /maintenance/requests/:id/approve
-// body:
-// {
-//   vendor_id?: string,
-//   maintenance_mode?: "INTERNAL" | "EXTERNAL" | "HYBRID",
-//   type?: "CORRECTIVE" | "PREVENTIVE" | "EMERGENCY" | "INSPECTION",
-//   odometer?: number,
-//   notes?: string
-// }
 // =======================
 async function approveMaintenanceRequest(req, res) {
   try {
     const actorId = getAuthUserId(req);
+    const companyId = req.companyId;
     const role = req.user?.role || null;
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
     if (!isAdminOrAccountant(role)) {
       return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can approve" });
     }
@@ -257,10 +285,14 @@ async function approveMaintenanceRequest(req, res) {
       notes,
     } = req.body || {};
 
-    const reqRow = await prisma.maintenance_requests.findUnique({
-      where: { id },
+    const reqRow = await prisma.maintenance_requests.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       select: {
         id: true,
+        company_id: true,
         vehicle_id: true,
         status: true,
       },
@@ -278,8 +310,11 @@ async function approveMaintenanceRequest(req, res) {
         return res.status(400).json({ message: "Invalid vendor_id" });
       }
 
-      const vendor = await prisma.vendors.findUnique({
-        where: { id: String(vendor_id) },
+      const vendor = await prisma.vendors.findFirst({
+        where: {
+          id: String(vendor_id),
+          company_id: companyId,
+        },
         select: {
           id: true,
           name: true,
@@ -331,6 +366,7 @@ async function approveMaintenanceRequest(req, res) {
 
       const wo = await tx.maintenance_work_orders.create({
         data: {
+          company_id: companyId,
           vehicle_id: reqRow.vehicle_id,
           request_id: reqRow.id,
           vendor_id: normalizedVendorId,
@@ -391,9 +427,11 @@ async function approveMaintenanceRequest(req, res) {
 async function rejectMaintenanceRequest(req, res) {
   try {
     const actorId = getAuthUserId(req);
+    const companyId = req.companyId;
     const role = req.user?.role || null;
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
     if (!isAdminOrAccountant(role)) {
       return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can reject" });
     }
@@ -406,7 +444,13 @@ async function rejectMaintenanceRequest(req, res) {
       return res.status(400).json({ message: "reason is required" });
     }
 
-    const reqRow = await prisma.maintenance_requests.findUnique({ where: { id } });
+    const reqRow = await prisma.maintenance_requests.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
+
     if (!reqRow) return res.status(404).json({ message: "Request not found" });
 
     if (reqRow.status !== "SUBMITTED") {

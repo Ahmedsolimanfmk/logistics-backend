@@ -70,30 +70,46 @@ function buildTripTypeValue(value) {
   return x;
 }
 
+function requireCompanyId(company_id) {
+  if (!company_id || !isUuid(company_id)) {
+    throw buildError("Invalid or missing company_id", 400);
+  }
+  return company_id;
+}
+
 // =======================
 // Generic Master Data Helpers
 // =======================
-async function ensureClientExists(clientId) {
+async function ensureClientExists(clientId, company_id) {
   if (!clientId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(clientId)) throw buildError("Invalid client_id");
 
-  const row = await prisma.clients.findUnique({
-    where: { id: clientId },
-    select: { id: true, name: true },
+  const row = await prisma.clients.findFirst({
+    where: {
+      id: clientId,
+      company_id,
+    },
+    select: { id: true, company_id: true, name: true },
   });
 
   if (!row) throw buildError("Client not found", 404);
   return row;
 }
 
-async function ensureContractExists(contractId) {
+async function ensureContractExists(contractId, company_id) {
   if (!contractId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(contractId)) throw buildError("Invalid contract_id");
 
-  const row = await prisma.client_contracts.findUnique({
-    where: { id: contractId },
+  const row = await prisma.client_contracts.findFirst({
+    where: {
+      id: contractId,
+      company_id,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       contract_no: true,
       status: true,
@@ -107,14 +123,19 @@ async function ensureContractExists(contractId) {
   return row;
 }
 
-async function ensureRouteExists(routeId) {
+async function ensureRouteExists(routeId, company_id) {
   if (!routeId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(routeId)) throw buildError("Invalid route_id");
 
-  const row = await prisma.routes.findUnique({
-    where: { id: routeId },
+  const row = await prisma.routes.findFirst({
+    where: {
+      id: routeId,
+      company_id,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       pickup_site_id: true,
       dropoff_site_id: true,
@@ -129,14 +150,19 @@ async function ensureRouteExists(routeId) {
   return row;
 }
 
-async function ensureSiteExists(siteId, label = "site_id") {
+async function ensureSiteExists(siteId, company_id, label = "site_id") {
   if (!siteId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(siteId)) throw buildError(`Invalid ${label}`);
 
-  const row = await prisma.sites.findUnique({
-    where: { id: siteId },
+  const row = await prisma.sites.findFirst({
+    where: {
+      id: siteId,
+      company_id,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       zone_id: true,
       name: true,
@@ -148,39 +174,69 @@ async function ensureSiteExists(siteId, label = "site_id") {
   return row;
 }
 
-async function ensureZoneExists(zoneId, label = "zone_id") {
+async function ensureZoneExists(zoneId, company_id, label = "zone_id") {
   if (!zoneId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(zoneId)) throw buildError(`Invalid ${label}`);
 
-  const row = await prisma.zones.findUnique({
-    where: { id: zoneId },
-    select: { id: true, name: true, code: true, is_active: true },
+  const row = await prisma.zones.findFirst({
+    where: {
+      id: zoneId,
+      company_id,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      name: true,
+      code: true,
+      is_active: true,
+    },
   });
 
   if (!row) throw buildError(`${label} not found`, 404);
   return row;
 }
 
-async function ensureCargoTypeExists(cargoTypeId) {
+async function ensureCargoTypeExists(cargoTypeId, company_id) {
   if (!cargoTypeId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(cargoTypeId)) throw buildError("Invalid cargo_type_id");
 
-  const row = await prisma.cargo_types.findUnique({
-    where: { id: cargoTypeId },
-    select: { id: true, code: true, name: true, is_active: true },
+  const row = await prisma.cargo_types.findFirst({
+    where: {
+      id: cargoTypeId,
+      company_id,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      code: true,
+      name: true,
+      is_active: true,
+    },
   });
 
   if (!row) throw buildError("cargo_type_id not found", 404);
   return row;
 }
 
-async function ensureVehicleClassExists(vehicleClassId) {
+async function ensureVehicleClassExists(vehicleClassId, company_id) {
   if (!vehicleClassId) return null;
+  requireCompanyId(company_id);
   if (!isUuid(vehicleClassId)) throw buildError("Invalid vehicle_class_id");
 
-  const row = await prisma.vehicle_classes.findUnique({
-    where: { id: vehicleClassId },
-    select: { id: true, code: true, name: true, is_active: true },
+  const row = await prisma.vehicle_classes.findFirst({
+    where: {
+      id: vehicleClassId,
+      company_id,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      code: true,
+      name: true,
+      is_active: true,
+    },
   });
 
   if (!row) throw buildError("vehicle_class_id not found", 404);
@@ -191,11 +247,12 @@ async function ensureVehicleClassExists(vehicleClassId) {
 // Vehicle Classes
 // =======================
 async function listVehicleClasses(query = {}) {
+  const company_id = requireCompanyId(query.company_id);
   const { page, pageSize, skip } = parsePaging(query);
   const q = s(query.q);
   const is_active = toBool(query.is_active, null);
 
-  const where = {};
+  const where = { company_id };
 
   if (q) {
     where.OR = [
@@ -222,11 +279,15 @@ async function listVehicleClasses(query = {}) {
   return { items, total, page, pageSize };
 }
 
-async function getVehicleClassById(id) {
+async function getVehicleClassById(id, company_id) {
+  requireCompanyId(company_id);
   if (!isUuid(id)) throw buildError("Invalid vehicle class id");
 
-  const row = await prisma.vehicle_classes.findUnique({
-    where: { id },
+  const row = await prisma.vehicle_classes.findFirst({
+    where: {
+      id,
+      company_id,
+    },
   });
 
   if (!row) throw buildError("Vehicle class not found", 404);
@@ -234,6 +295,7 @@ async function getVehicleClassById(id) {
 }
 
 async function createVehicleClass(payload = {}) {
+  const company_id = requireCompanyId(payload.company_id);
   const code = s(payload.code);
   const name = s(payload.name);
   const description = s(payload.description);
@@ -244,6 +306,7 @@ async function createVehicleClass(payload = {}) {
 
   return prisma.vehicle_classes.create({
     data: {
+      company_id,
       code: upper(code),
       name,
       description,
@@ -252,8 +315,9 @@ async function createVehicleClass(payload = {}) {
   });
 }
 
-async function updateVehicleClass(id, payload = {}) {
-  await getVehicleClassById(id);
+async function updateVehicleClass(id, payload = {}, company_id) {
+  requireCompanyId(company_id);
+  await getVehicleClassById(id, company_id);
 
   const data = {};
 
@@ -278,11 +342,12 @@ async function updateVehicleClass(id, payload = {}) {
   });
 }
 
-async function toggleVehicleClass(id) {
-  const row = await getVehicleClassById(id);
+async function toggleVehicleClass(id, company_id) {
+  requireCompanyId(company_id);
+  const row = await getVehicleClassById(id, company_id);
 
   return prisma.vehicle_classes.update({
-    where: { id },
+    where: { id: row.id },
     data: { is_active: !row.is_active },
   });
 }
@@ -291,11 +356,12 @@ async function toggleVehicleClass(id) {
 // Cargo Types
 // =======================
 async function listCargoTypes(query = {}) {
+  const company_id = requireCompanyId(query.company_id);
   const { page, pageSize, skip } = parsePaging(query);
   const q = s(query.q);
   const is_active = toBool(query.is_active, null);
 
-  const where = {};
+  const where = { company_id };
 
   if (q) {
     where.OR = [
@@ -322,11 +388,15 @@ async function listCargoTypes(query = {}) {
   return { items, total, page, pageSize };
 }
 
-async function getCargoTypeById(id) {
+async function getCargoTypeById(id, company_id) {
+  requireCompanyId(company_id);
   if (!isUuid(id)) throw buildError("Invalid cargo type id");
 
-  const row = await prisma.cargo_types.findUnique({
-    where: { id },
+  const row = await prisma.cargo_types.findFirst({
+    where: {
+      id,
+      company_id,
+    },
   });
 
   if (!row) throw buildError("Cargo type not found", 404);
@@ -334,6 +404,7 @@ async function getCargoTypeById(id) {
 }
 
 async function createCargoType(payload = {}) {
+  const company_id = requireCompanyId(payload.company_id);
   const code = s(payload.code);
   const name = s(payload.name);
   const description = s(payload.description);
@@ -344,6 +415,7 @@ async function createCargoType(payload = {}) {
 
   return prisma.cargo_types.create({
     data: {
+      company_id,
       code: upper(code),
       name,
       description,
@@ -352,8 +424,9 @@ async function createCargoType(payload = {}) {
   });
 }
 
-async function updateCargoType(id, payload = {}) {
-  await getCargoTypeById(id);
+async function updateCargoType(id, payload = {}, company_id) {
+  requireCompanyId(company_id);
+  await getCargoTypeById(id, company_id);
 
   const data = {};
 
@@ -378,11 +451,12 @@ async function updateCargoType(id, payload = {}) {
   });
 }
 
-async function toggleCargoType(id) {
-  const row = await getCargoTypeById(id);
+async function toggleCargoType(id, company_id) {
+  requireCompanyId(company_id);
+  const row = await getCargoTypeById(id, company_id);
 
   return prisma.cargo_types.update({
-    where: { id },
+    where: { id: row.id },
     data: { is_active: !row.is_active },
   });
 }
@@ -391,11 +465,12 @@ async function toggleCargoType(id) {
 // Zones
 // =======================
 async function listZones(query = {}) {
+  const company_id = requireCompanyId(query.company_id);
   const { page, pageSize, skip } = parsePaging(query);
   const q = s(query.q);
   const is_active = toBool(query.is_active, null);
 
-  const where = {};
+  const where = { company_id };
 
   if (q) {
     where.OR = [
@@ -420,11 +495,15 @@ async function listZones(query = {}) {
   return { items, total, page, pageSize };
 }
 
-async function getZoneById(id) {
+async function getZoneById(id, company_id) {
+  requireCompanyId(company_id);
   if (!isUuid(id)) throw buildError("Invalid zone id");
 
-  const row = await prisma.zones.findUnique({
-    where: { id },
+  const row = await prisma.zones.findFirst({
+    where: {
+      id,
+      company_id,
+    },
   });
 
   if (!row) throw buildError("Zone not found", 404);
@@ -432,6 +511,7 @@ async function getZoneById(id) {
 }
 
 async function createZone(payload = {}) {
+  const company_id = requireCompanyId(payload.company_id);
   const code = s(payload.code);
   const name = s(payload.name);
   const description = s(payload.description);
@@ -441,6 +521,7 @@ async function createZone(payload = {}) {
 
   return prisma.zones.create({
     data: {
+      company_id,
       code: code ? upper(code) : null,
       name,
       description,
@@ -449,8 +530,9 @@ async function createZone(payload = {}) {
   });
 }
 
-async function updateZone(id, payload = {}) {
-  await getZoneById(id);
+async function updateZone(id, payload = {}, company_id) {
+  requireCompanyId(company_id);
+  await getZoneById(id, company_id);
 
   const data = {};
 
@@ -471,11 +553,12 @@ async function updateZone(id, payload = {}) {
   });
 }
 
-async function toggleZone(id) {
-  const row = await getZoneById(id);
+async function toggleZone(id, company_id) {
+  requireCompanyId(company_id);
+  const row = await getZoneById(id, company_id);
 
   return prisma.zones.update({
-    where: { id },
+    where: { id: row.id },
     data: { is_active: !row.is_active },
   });
 }
@@ -484,6 +567,7 @@ async function toggleZone(id) {
 // Routes Master
 // =======================
 async function listRoutes(query = {}) {
+  const company_id = requireCompanyId(query.company_id);
   const { page, pageSize, skip } = parsePaging(query);
   const q = s(query.q);
   const client_id = s(query.client_id);
@@ -495,7 +579,7 @@ async function listRoutes(query = {}) {
   if (pickup_site_id && !isUuid(pickup_site_id)) throw buildError("Invalid pickup_site_id");
   if (dropoff_site_id && !isUuid(dropoff_site_id)) throw buildError("Invalid dropoff_site_id");
 
-  const where = {};
+  const where = { company_id };
 
   if (client_id) where.client_id = client_id;
   if (pickup_site_id) where.pickup_site_id = pickup_site_id;
@@ -530,11 +614,15 @@ async function listRoutes(query = {}) {
   return { items, total, page, pageSize };
 }
 
-async function getRouteById(id) {
+async function getRouteById(id, company_id) {
+  requireCompanyId(company_id);
   if (!isUuid(id)) throw buildError("Invalid route id");
 
-  const row = await prisma.routes.findUnique({
-    where: { id },
+  const row = await prisma.routes.findFirst({
+    where: {
+      id,
+      company_id,
+    },
     include: {
       clients: { select: { id: true, name: true } },
       pickup_site: { select: { id: true, name: true } },
@@ -547,6 +635,7 @@ async function getRouteById(id) {
 }
 
 async function createRoute(payload = {}) {
+  const company_id = requireCompanyId(payload.company_id);
   const code = s(payload.code);
   const name = s(payload.name);
   const client_id = s(payload.client_id);
@@ -560,9 +649,9 @@ async function createRoute(payload = {}) {
 
   if (!name) throw buildError("name is required");
 
-  const client = await ensureClientExists(client_id);
-  const pickupSite = await ensureSiteExists(pickup_site_id, "pickup_site_id");
-  const dropoffSite = await ensureSiteExists(dropoff_site_id, "dropoff_site_id");
+  const client = await ensureClientExists(client_id, company_id);
+  const pickupSite = await ensureSiteExists(pickup_site_id, company_id, "pickup_site_id");
+  const dropoffSite = await ensureSiteExists(dropoff_site_id, company_id, "dropoff_site_id");
 
   if (pickupSite && client && pickupSite.client_id !== client.id) {
     throw buildError("pickup_site_id does not belong to client_id");
@@ -578,6 +667,7 @@ async function createRoute(payload = {}) {
 
   return prisma.routes.create({
     data: {
+      company_id,
       code: code ? upper(code) : null,
       name,
       client_id: client?.id || null,
@@ -597,8 +687,9 @@ async function createRoute(payload = {}) {
   });
 }
 
-async function updateRoute(id, payload = {}) {
-  const existing = await getRouteById(id);
+async function updateRoute(id, payload = {}, company_id) {
+  requireCompanyId(company_id);
+  const existing = await getRouteById(id, company_id);
 
   const nextClientId =
     payload.client_id !== undefined ? s(payload.client_id) : existing.client_id;
@@ -607,9 +698,9 @@ async function updateRoute(id, payload = {}) {
   const nextDropoffSiteId =
     payload.dropoff_site_id !== undefined ? s(payload.dropoff_site_id) : existing.dropoff_site_id;
 
-  const client = await ensureClientExists(nextClientId);
-  const pickupSite = await ensureSiteExists(nextPickupSiteId, "pickup_site_id");
-  const dropoffSite = await ensureSiteExists(nextDropoffSiteId, "dropoff_site_id");
+  const client = await ensureClientExists(nextClientId, company_id);
+  const pickupSite = await ensureSiteExists(nextPickupSiteId, company_id, "pickup_site_id");
+  const dropoffSite = await ensureSiteExists(nextDropoffSiteId, company_id, "dropoff_site_id");
 
   if (pickupSite && client && pickupSite.client_id !== client.id) {
     throw buildError("pickup_site_id does not belong to client_id");
@@ -647,7 +738,7 @@ async function updateRoute(id, payload = {}) {
   if (payload.notes !== undefined) data.notes = s(payload.notes);
 
   return prisma.routes.update({
-    where: { id },
+    where: { id: existing.id },
     data,
     include: {
       clients: { select: { id: true, name: true } },
@@ -657,11 +748,12 @@ async function updateRoute(id, payload = {}) {
   });
 }
 
-async function toggleRoute(id) {
-  const row = await getRouteById(id);
+async function toggleRoute(id, company_id) {
+  requireCompanyId(company_id);
+  const row = await getRouteById(id, company_id);
 
   return prisma.routes.update({
-    where: { id },
+    where: { id: row.id },
     data: { is_active: !row.is_active },
     include: {
       clients: { select: { id: true, name: true } },
@@ -675,7 +767,8 @@ async function toggleRoute(id) {
 // Pricing Rules
 // =======================
 function buildPricingRuleWhere(query = {}) {
-  const where = {};
+  const company_id = requireCompanyId(query.company_id);
+  const where = { company_id };
 
   const contract_id = s(query.contract_id);
   const client_id = s(query.client_id);
@@ -765,11 +858,15 @@ async function listPricingRules(query = {}) {
   return { items, total, page, pageSize };
 }
 
-async function getPricingRuleById(id) {
+async function getPricingRuleById(id, company_id) {
+  requireCompanyId(company_id);
   if (!isUuid(id)) throw buildError("Invalid pricing rule id");
 
-  const row = await prisma.contract_pricing_rules.findUnique({
-    where: { id },
+  const row = await prisma.contract_pricing_rules.findFirst({
+    where: {
+      id,
+      company_id,
+    },
     include: {
       clients: { select: { id: true, name: true } },
       client_contracts: { select: { id: true, contract_no: true, status: true } },
@@ -787,7 +884,9 @@ async function getPricingRuleById(id) {
   return row;
 }
 
-async function validatePricingRulePayload(payload = {}, existing = null) {
+async function validatePricingRulePayload(payload = {}, company_id, existing = null) {
+  requireCompanyId(company_id);
+
   const nextContractId =
     payload.contract_id !== undefined ? s(payload.contract_id) : existing?.contract_id || null;
 
@@ -797,8 +896,8 @@ async function validatePricingRulePayload(payload = {}, existing = null) {
   if (!nextContractId) throw buildError("contract_id is required");
   if (!nextClientId) throw buildError("client_id is required");
 
-  const contract = await ensureContractExists(nextContractId);
-  const client = await ensureClientExists(nextClientId);
+  const contract = await ensureContractExists(nextContractId, company_id);
+  const client = await ensureClientExists(nextClientId, company_id);
 
   if (contract.client_id !== client.id) {
     throw buildError("contract_id does not belong to client_id");
@@ -835,13 +934,13 @@ async function validatePricingRulePayload(payload = {}, existing = null) {
       ? s(payload.cargo_type_id)
       : existing?.cargo_type_id || null;
 
-  const route = await ensureRouteExists(routeId);
-  const pickupSite = await ensureSiteExists(pickupSiteId, "pickup_site_id");
-  const dropoffSite = await ensureSiteExists(dropoffSiteId, "dropoff_site_id");
-  const fromZone = await ensureZoneExists(fromZoneId, "from_zone_id");
-  const toZone = await ensureZoneExists(toZoneId, "to_zone_id");
-  const vehicleClass = await ensureVehicleClassExists(vehicleClassId);
-  const cargoType = await ensureCargoTypeExists(cargoTypeId);
+  const route = await ensureRouteExists(routeId, company_id);
+  const pickupSite = await ensureSiteExists(pickupSiteId, company_id, "pickup_site_id");
+  const dropoffSite = await ensureSiteExists(dropoffSiteId, company_id, "dropoff_site_id");
+  const fromZone = await ensureZoneExists(fromZoneId, company_id, "from_zone_id");
+  const toZone = await ensureZoneExists(toZoneId, company_id, "to_zone_id");
+  const vehicleClass = await ensureVehicleClassExists(vehicleClassId, company_id);
+  const cargoType = await ensureCargoTypeExists(cargoTypeId, company_id);
 
   if (route && route.client_id && route.client_id !== client.id) {
     throw buildError("route_id does not belong to client_id");
@@ -968,10 +1067,12 @@ async function validatePricingRulePayload(payload = {}, existing = null) {
 }
 
 async function createPricingRule(payload = {}) {
-  const normalized = await validatePricingRulePayload(payload);
+  const company_id = requireCompanyId(payload.company_id);
+  const normalized = await validatePricingRulePayload(payload, company_id);
 
   return prisma.contract_pricing_rules.create({
     data: {
+      company_id,
       contract_id: normalized.contract.id,
       client_id: normalized.client.id,
       route_id: normalized.route?.id || null,
@@ -1009,12 +1110,13 @@ async function createPricingRule(payload = {}) {
   });
 }
 
-async function updatePricingRule(id, payload = {}) {
-  const existing = await getPricingRuleById(id);
-  const normalized = await validatePricingRulePayload(payload, existing);
+async function updatePricingRule(id, payload = {}, company_id) {
+  requireCompanyId(company_id);
+  const existing = await getPricingRuleById(id, company_id);
+  const normalized = await validatePricingRulePayload(payload, company_id, existing);
 
   return prisma.contract_pricing_rules.update({
-    where: { id },
+    where: { id: existing.id },
     data: {
       contract_id: normalized.contract.id,
       client_id: normalized.client.id,
@@ -1053,11 +1155,12 @@ async function updatePricingRule(id, payload = {}) {
   });
 }
 
-async function togglePricingRule(id) {
-  const row = await getPricingRuleById(id);
+async function togglePricingRule(id, company_id) {
+  requireCompanyId(company_id);
+  const row = await getPricingRuleById(id, company_id);
 
   return prisma.contract_pricing_rules.update({
-    where: { id },
+    where: { id: row.id },
     data: { is_active: !row.is_active },
     include: {
       clients: { select: { id: true, name: true } },
@@ -1182,17 +1285,22 @@ function computeResolvedAmount(rule, trip) {
   return Math.round(amount * 100) / 100;
 }
 
-async function resolveTripPrice({ tripId, contractId = null }) {
-  if (!isUuid(tripId)) throw buildError("Invalid tripId");
+async function resolveTripPrice({ tripId, contractId = null, company_id }) {
+  requireCompanyId(company_id);
 
+  if (!isUuid(tripId)) throw buildError("Invalid tripId");
   if (contractId && !isUuid(contractId)) {
     throw buildError("Invalid contractId");
   }
 
-  const trip = await prisma.trips.findUnique({
-    where: { id: tripId },
+  const trip = await prisma.trips.findFirst({
+    where: {
+      id: tripId,
+      company_id,
+    },
     select: {
       id: true,
+      company_id: true,
       client_id: true,
       contract_id: true,
       route_id: true,
@@ -1234,12 +1342,16 @@ async function resolveTripPrice({ tripId, contractId = null }) {
         },
       },
       trip_assignments: {
-        where: { is_active: true },
+        where: {
+          company_id,
+          is_active: true,
+        },
         take: 1,
         select: {
           vehicles: {
             select: {
               id: true,
+              company_id: true,
               vehicle_class_id: true,
             },
           },
@@ -1260,7 +1372,7 @@ async function resolveTripPrice({ tripId, contractId = null }) {
     throw buildError("Trip has no contract_id. Please assign contract to trip first", 400);
   }
 
-  const contract = await ensureContractExists(selectedContractId);
+  const contract = await ensureContractExists(selectedContractId, company_id);
 
   if (contract.client_id !== trip.client_id) {
     throw buildError("Contract does not belong to trip client");
@@ -1279,6 +1391,7 @@ async function resolveTripPrice({ tripId, contractId = null }) {
 
   const tripShape = {
     id: trip.id,
+    company_id: trip.company_id,
     client_id: trip.client_id,
     contract_id: contract.id,
     route_id: trip.route_id || null,
@@ -1296,6 +1409,7 @@ async function resolveTripPrice({ tripId, contractId = null }) {
 
   const rules = await prisma.contract_pricing_rules.findMany({
     where: {
+      company_id,
       contract_id: contract.id,
       client_id: trip.client_id,
       is_active: true,

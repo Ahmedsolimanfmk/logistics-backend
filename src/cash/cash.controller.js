@@ -21,8 +21,17 @@ function isTripFinancialLocked(financial_status) {
   return ["UNDER_REVIEW", "CLOSED"].includes(s);
 }
 
-async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
-  const where = { trip_id, field_supervisor_id: userId };
+async function assertTripBelongsToSupervisor({
+  trip_id,
+  userId,
+  vehicle_id,
+  companyId,
+}) {
+  const where = {
+    company_id: companyId,
+    trip_id,
+    field_supervisor_id: userId,
+  };
   if (vehicle_id) where.vehicle_id = vehicle_id;
 
   const row = await prisma.trip_assignments.findFirst({
@@ -34,9 +43,14 @@ async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   return !!row;
 }
 
-async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
+async function assertVehicleInSupervisorPortfolio({
+  vehicle_id,
+  userId,
+  companyId,
+}) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
+      company_id: companyId,
       vehicle_id,
       field_supervisor_id: userId,
       is_active: true,
@@ -49,13 +63,14 @@ async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
 
 async function writeExpenseAuditSafe(
   tx,
-  { expense_id, action, actor_id, before, after, notes }
+  { companyId, expense_id, action, actor_id, before, after, notes }
 ) {
   try {
     if (!tx.cash_expense_audits?.create) return;
 
     await tx.cash_expense_audits.create({
       data: {
+        company_id: companyId,
         expense_id,
         action,
         actor_id,
@@ -77,9 +92,12 @@ function mapExpenseVendorFields(expense) {
   };
 }
 
-async function getExpenseOr404(id, res) {
-  const expense = await prisma.cash_expenses.findUnique({
-    where: { id },
+async function getExpenseOr404(id, companyId, res) {
+  const expense = await prisma.cash_expenses.findFirst({
+    where: {
+      id,
+      company_id: companyId,
+    },
     include: {
       vendors: {
         select: {
@@ -102,9 +120,12 @@ async function getExpenseOr404(id, res) {
   return expense;
 }
 
-async function getExpenseFullOr404(id, res) {
-  const expense = await prisma.cash_expenses.findUnique({
-    where: { id },
+async function getExpenseFullOr404(id, companyId, res) {
+  const expense = await prisma.cash_expenses.findFirst({
+    where: {
+      id,
+      company_id: companyId,
+    },
     include: {
       cash_advances: true,
       trips: true,
@@ -175,7 +196,6 @@ function normalizeAdvanceSettlementType(v) {
 
   if (!s) return null;
 
-  // legacy mappings
   if (["RETURN", "FULL"].includes(s)) return "FULL";
   if (["SHORTAGE", "PARTIAL"].includes(s)) return "PARTIAL";
   if (["ADJUSTMENT", "ADJUSTED"].includes(s)) return "ADJUSTED";
@@ -185,18 +205,132 @@ function normalizeAdvanceSettlementType(v) {
 }
 
 // =======================
+// Strict relation validators
+// =======================
+
+async function ensureCompanyUserMembership(userId, companyId) {
+  const row = await prisma.company_users.findFirst({
+    where: {
+      user_id: userId,
+      company_id: companyId,
+      is_active: true,
+      status: "ACTIVE",
+    },
+    select: {
+      user_id: true,
+      role: true,
+    },
+  });
+
+  return row;
+}
+
+async function ensureVendorInCompany(vendorId, companyId) {
+  if (!vendorId) return null;
+
+  const vendor = await prisma.vendors.findFirst({
+    where: {
+      id: vendorId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+    },
+  });
+
+  return vendor;
+}
+
+async function ensureTripInCompany(tripId, companyId) {
+  if (!tripId) return null;
+
+  const trip = await prisma.trips.findFirst({
+    where: {
+      id: tripId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      financial_status: true,
+      status: true,
+    },
+  });
+
+  return trip;
+}
+
+async function ensureVehicleInCompany(vehicleId, companyId) {
+  if (!vehicleId) return null;
+
+  const vehicle = await prisma.vehicles.findFirst({
+    where: {
+      id: vehicleId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      status: true,
+    },
+  });
+
+  return vehicle;
+}
+
+async function ensureCashAdvanceInCompany(cashAdvanceId, companyId) {
+  if (!cashAdvanceId) return null;
+
+  const advance = await prisma.cash_advances.findFirst({
+    where: {
+      id: cashAdvanceId,
+      company_id: companyId,
+    },
+  });
+
+  return advance;
+}
+
+async function ensureMaintenanceWorkOrderInCompany(mwoId, companyId) {
+  if (!mwoId) return null;
+
+  const mwo = await prisma.maintenance_work_orders.findFirst({
+    where: {
+      id: mwoId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      company_id: true,
+      vehicle_id: true,
+      vendor_id: true,
+      trip_id: true,
+      status: true,
+    },
+  });
+
+  return mwo;
+}
+
+// =======================
 // Cash Advances
 // =======================
 
 async function getCashAdvancesSummary(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
     const { status, q } = req.query || {};
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     if (status) where.status = String(status).toUpperCase();
 
@@ -248,12 +382,16 @@ async function getCashAdvancesSummary(req, res) {
 async function getCashAdvances(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
     const { status, q, page = "1", page_size = "50" } = req.query || {};
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     if (status) where.status = String(status).toUpperCase();
 
@@ -283,6 +421,7 @@ async function getCashAdvances(req, res) {
           users_cash_advances_field_supervisor_idTousers: true,
           users_cash_advances_issued_byTousers: true,
           cash_expenses: {
+            where: { company_id: companyId },
             orderBy: { created_at: "desc" },
             include: {
               vendors: {
@@ -315,6 +454,7 @@ async function getCashAdvances(req, res) {
 async function createCashAdvance(req, res) {
   try {
     const issuerId = getUserId(req);
+    const companyId = req.companyId;
 
     if (!issuerId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -332,15 +472,20 @@ async function createCashAdvance(req, res) {
       return res.status(400).json({ message: "amount must be greater than 0" });
     }
 
-    const supervisor = await prisma.users.findUnique({
-      where: { id: field_supervisor_id },
-    });
-    if (!supervisor) {
-      return res.status(400).json({ message: "Invalid field_supervisor_id" });
+    const supervisorMembership = await ensureCompanyUserMembership(
+      field_supervisor_id,
+      companyId
+    );
+
+    if (!supervisorMembership) {
+      return res.status(400).json({
+        message: "Invalid field_supervisor_id for current company",
+      });
     }
 
     const created = await prisma.cash_advances.create({
       data: {
+        company_id: companyId,
         amount,
         status: "OPEN",
         users_cash_advances_field_supervisor_idTousers: {
@@ -368,6 +513,7 @@ async function createCashAdvance(req, res) {
 async function submitCashAdvanceForReview(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -379,7 +525,13 @@ async function submitCashAdvanceForReview(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
-    const advance = await prisma.cash_advances.findUnique({ where: { id } });
+    const advance = await prisma.cash_advances.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
+
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = safeUpper(advance.status || "OPEN");
@@ -408,6 +560,7 @@ async function submitCashAdvanceForReview(req, res) {
 async function closeCashAdvance(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -433,7 +586,13 @@ async function closeCashAdvance(req, res) {
       return res.status(400).json({ message: "amount must be a number >= 0" });
     }
 
-    const advance = await prisma.cash_advances.findUnique({ where: { id } });
+    const advance = await prisma.cash_advances.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
+
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = safeUpper(advance.status || "OPEN");
@@ -446,6 +605,7 @@ async function closeCashAdvance(req, res) {
 
     const pendingCount = await prisma.cash_expenses.count({
       where: {
+        company_id: companyId,
         cash_advance_id: id,
         approval_status: { in: ["PENDING", "APPEALED"] },
       },
@@ -460,6 +620,7 @@ async function closeCashAdvance(req, res) {
 
     const approvedExpenses = await prisma.cash_expenses.findMany({
       where: {
+        company_id: companyId,
         cash_advance_id: id,
         approval_status: "APPROVED",
       },
@@ -532,6 +693,7 @@ async function closeCashAdvance(req, res) {
 async function reopenCashAdvance(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
@@ -543,7 +705,13 @@ async function reopenCashAdvance(req, res) {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
-    const advance = await prisma.cash_advances.findUnique({ where: { id } });
+    const advance = await prisma.cash_advances.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
+
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
     const st = safeUpper(advance.status || "OPEN");
@@ -580,15 +748,25 @@ async function reopenCashAdvance(req, res) {
 
 async function getAdvanceExpenses(req, res) {
   try {
+    const companyId = req.companyId;
     const { id } = req.params;
     const { status } = req.query;
 
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
-    const advance = await prisma.cash_advances.findUnique({ where: { id } });
+    const advance = await prisma.cash_advances.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+    });
+
     if (!advance) return res.status(404).json({ message: "Cash advance not found" });
 
-    const where = { cash_advance_id: id };
+    const where = {
+      company_id: companyId,
+      cash_advance_id: id,
+    };
     if (status) where.approval_status = String(status).toUpperCase();
 
     const list = await prisma.cash_expenses.findMany({
@@ -621,6 +799,8 @@ async function getAdvanceExpenses(req, res) {
 async function createCashExpense(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const {
@@ -668,11 +848,7 @@ async function createCashExpense(req, res) {
         return res.status(400).json({ message: "Invalid vendor_id" });
       }
 
-      const vendor = await prisma.vendors.findUnique({
-        where: { id: String(vendor_id) },
-        select: { id: true, name: true, status: true },
-      });
-
+      const vendor = await ensureVendorInCompany(String(vendor_id), companyId);
       if (!vendor) {
         return res.status(400).json({ message: "Invalid vendor_id" });
       }
@@ -680,19 +856,65 @@ async function createCashExpense(req, res) {
       normalizedVendorId = vendor.id;
     }
 
+    let validatedTrip = null;
+    if (trip_id) {
+      validatedTrip = await ensureTripInCompany(trip_id, companyId);
+      if (!validatedTrip) {
+        return res.status(400).json({ message: "Invalid trip_id" });
+      }
+
+      if (isTripFinancialLocked(validatedTrip.financial_status)) {
+        return res.status(409).json({
+          message: `Trip is financially locked (${validatedTrip.financial_status}). No more expenses allowed.`,
+        });
+      }
+    }
+
+    let validatedVehicle = null;
+    if (vehicle_id) {
+      validatedVehicle = await ensureVehicleInCompany(vehicle_id, companyId);
+      if (!validatedVehicle) {
+        return res.status(400).json({ message: "Invalid vehicle_id" });
+      }
+    }
+
+    let validatedMwo = null;
     let mwoVehicleId = null;
     if (maintenance_work_order_id) {
-      const mwo = await prisma.maintenance_work_orders.findUnique({
-        where: { id: maintenance_work_order_id },
-        select: { id: true, vehicle_id: true, vendor_id: true },
-      });
-      if (!mwo) {
+      validatedMwo = await ensureMaintenanceWorkOrderInCompany(
+        maintenance_work_order_id,
+        companyId
+      );
+
+      if (!validatedMwo) {
         return res.status(400).json({ message: "Invalid maintenance_work_order_id" });
       }
-      mwoVehicleId = mwo.vehicle_id || null;
 
-      if (!normalizedVendorId && mwo.vendor_id) {
-        normalizedVendorId = mwo.vendor_id;
+      mwoVehicleId = validatedMwo.vehicle_id || null;
+
+      if (validatedMwo.vendor_id) {
+        const mwoVendor = await ensureVendorInCompany(validatedMwo.vendor_id, companyId);
+        if (!mwoVendor) {
+          return res.status(400).json({
+            message: "maintenance_work_order vendor is invalid for current company",
+          });
+        }
+      }
+
+      if (!normalizedVendorId && validatedMwo.vendor_id) {
+        normalizedVendorId = validatedMwo.vendor_id;
+      }
+
+      if (validatedMwo.trip_id && trip_id && validatedMwo.trip_id !== trip_id) {
+        return res.status(400).json({
+          message: "maintenance_work_order_id does not belong to trip_id",
+        });
+      }
+
+      if (validatedMwo.vehicle_id && vehicle_id && validatedMwo.vehicle_id !== vehicle_id) {
+        return res.status(400).json({
+          message: "maintenance_work_order_id does not belong to vehicle_id",
+        });
       }
     }
 
@@ -727,23 +949,22 @@ async function createCashExpense(req, res) {
         });
       }
 
-      if (trip_id) {
-        const trip = await prisma.trips.findUnique({
-          where: { id: trip_id },
-          select: { id: true, financial_status: true },
-        });
-        if (!trip) return res.status(400).json({ message: "Invalid trip_id" });
-        if (isTripFinancialLocked(trip.financial_status)) {
-          return res.status(409).json({
-            message: `Trip is financially locked (${trip.financial_status}). No more expenses allowed.`,
-          });
+      const finalVehicleId = vehicle_id || mwoVehicleId || null;
+
+      if (trip_id && !validatedTrip) {
+        return res.status(400).json({ message: "Invalid trip_id" });
+      }
+
+      if (finalVehicleId) {
+        const finalVehicle = await ensureVehicleInCompany(finalVehicleId, companyId);
+        if (!finalVehicle) {
+          return res.status(400).json({ message: "Invalid vehicle_id" });
         }
       }
 
-      const finalVehicleId = vehicle_id || mwoVehicleId || null;
-
       const created = await prisma.cash_expenses.create({
         data: {
+          company_id: companyId,
           payment_source: "COMPANY",
           cash_advance_id: null,
           vendor_id: normalizedVendorId,
@@ -786,9 +1007,7 @@ async function createCashExpense(req, res) {
       });
     }
 
-    const advance = await prisma.cash_advances.findUnique({
-      where: { id: cash_advance_id },
-    });
+    const advance = await ensureCashAdvanceInCompany(cash_advance_id, companyId);
 
     if (!advance || !isAdvanceOpenStatus(advance.status)) {
       return res.status(400).json({ message: "Cash advance not found or not OPEN" });
@@ -801,23 +1020,11 @@ async function createCashExpense(req, res) {
     }
 
     if (trip_id) {
-      const trip = await prisma.trips.findUnique({
-        where: { id: trip_id },
-        select: { id: true, financial_status: true },
-      });
-
-      if (!trip) return res.status(400).json({ message: "Invalid trip_id" });
-
-      if (isTripFinancialLocked(trip.financial_status)) {
-        return res.status(409).json({
-          message: `Trip is financially locked (${trip.financial_status}). No more expenses allowed.`,
-        });
-      }
-
       const okTrip = await assertTripBelongsToSupervisor({
         trip_id,
         userId,
         vehicle_id: vehicle_id || null,
+        companyId,
       });
 
       if (!okTrip) {
@@ -831,6 +1038,7 @@ async function createCashExpense(req, res) {
       const okVehicle = await assertVehicleInSupervisorPortfolio({
         vehicle_id,
         userId,
+        companyId,
       });
 
       if (!okVehicle) {
@@ -840,16 +1048,24 @@ async function createCashExpense(req, res) {
       }
     }
 
+    const finalVehicleId = vehicle_id || mwoVehicleId || null;
+
+    if (finalVehicleId) {
+      const finalVehicle = await ensureVehicleInCompany(finalVehicleId, companyId);
+      if (!finalVehicle) {
+        return res.status(400).json({ message: "Invalid vehicle_id" });
+      }
+    }
+
     const created = await prisma.cash_expenses.create({
       data: {
+        company_id: companyId,
         payment_source: "ADVANCE",
         cash_advances: { connect: { id: cash_advance_id } },
         vendor_id: normalizedVendorId,
 
         trips: trip_id ? { connect: { id: trip_id } } : undefined,
-        vehicles: vehicle_id || mwoVehicleId
-          ? { connect: { id: vehicle_id || mwoVehicleId } }
-          : undefined,
+        vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
         maintenance_work_orders: maintenance_work_order_id
           ? { connect: { id: maintenance_work_order_id } }
           : undefined,
@@ -882,12 +1098,16 @@ async function createCashExpense(req, res) {
 async function listCashExpenses(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
     const { status, payment_source, q, vendor_id, page = "1", page_size = "50" } = req.query || {};
 
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     if (status) where.approval_status = String(status).toUpperCase();
     if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
@@ -969,17 +1189,23 @@ async function listCashExpenses(req, res) {
 async function getCashAdvanceById(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid cash advance id" });
 
-    const row = await prisma.cash_advances.findUnique({
-      where: { id },
+    const row = await prisma.cash_advances.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         users_cash_advances_field_supervisor_idTousers: true,
         users_cash_advances_issued_byTousers: true,
         cash_expenses: {
+          where: { company_id: companyId },
           orderBy: { created_at: "desc" },
           include: {
             vendors: {
@@ -1014,11 +1240,15 @@ async function getCashAdvanceById(req, res) {
 async function getCashExpensesSummary(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
     const { status, payment_source, q, vendor_id } = req.query || {};
-    const where = {};
+    const where = {
+      company_id: companyId,
+    };
 
     if (status) where.approval_status = String(status).toUpperCase();
     if (payment_source) where.payment_source = normalizePaymentSource(payment_source);
@@ -1117,13 +1347,18 @@ async function getCashExpensesSummary(req, res) {
 async function getCashExpenseById(req, res) {
   try {
     const userId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-    const row = await prisma.cash_expenses.findUnique({
-      where: { id },
+    const row = await prisma.cash_expenses.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
       include: {
         cash_advances: true,
         trips: true,
@@ -1159,6 +1394,8 @@ async function getCashExpenseById(req, res) {
 async function approveCashExpense(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1171,7 +1408,7 @@ async function approveCashExpense(req, res) {
 
     const notes = req.body?.notes ? String(req.body.notes) : null;
 
-    const expense = await getExpenseOr404(id, res);
+    const expense = await getExpenseOr404(id, companyId, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
@@ -1205,6 +1442,7 @@ async function approveCashExpense(req, res) {
       });
 
       await writeExpenseAuditSafe(tx, {
+        companyId,
         expense_id: id,
         action: st === "APPEALED" ? "APPROVE_APPEAL" : "APPROVE",
         actor_id: actorId,
@@ -1228,6 +1466,8 @@ async function approveCashExpense(req, res) {
 async function rejectCashExpense(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1244,7 +1484,7 @@ async function rejectCashExpense(req, res) {
       ? String(req.body.notes)
       : null;
 
-    const expense = await getExpenseOr404(id, res);
+    const expense = await getExpenseOr404(id, companyId, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
@@ -1276,6 +1516,7 @@ async function rejectCashExpense(req, res) {
       });
 
       await writeExpenseAuditSafe(tx, {
+        companyId,
         expense_id: id,
         action: "REJECT",
         actor_id: actorId,
@@ -1299,6 +1540,8 @@ async function rejectCashExpense(req, res) {
 async function appealRejectedExpense(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
@@ -1310,7 +1553,7 @@ async function appealRejectedExpense(req, res) {
       ? String(req.body.notes)
       : null;
 
-    const expense = await getExpenseFullOr404(id, res);
+    const expense = await getExpenseFullOr404(id, companyId, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
@@ -1350,6 +1593,7 @@ async function appealRejectedExpense(req, res) {
       });
 
       await writeExpenseAuditSafe(tx, {
+        companyId,
         expense_id: id,
         action: "APPEAL",
         actor_id: actorId,
@@ -1373,6 +1617,8 @@ async function appealRejectedExpense(req, res) {
 async function resolveAppeal(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1390,7 +1636,7 @@ async function resolveAppeal(req, res) {
       return res.status(400).json({ message: "decision must be APPROVE | REJECT" });
     }
 
-    const expense = await getExpenseOr404(id, res);
+    const expense = await getExpenseOr404(id, companyId, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
@@ -1445,6 +1691,7 @@ async function resolveAppeal(req, res) {
       }
 
       await writeExpenseAuditSafe(tx, {
+        companyId,
         expense_id: id,
         action: decision === "APPROVE" ? "RESOLVE_APPEAL_APPROVE" : "RESOLVE_APPEAL_REJECT",
         actor_id: actorId,
@@ -1468,6 +1715,8 @@ async function resolveAppeal(req, res) {
 async function reopenRejectedExpense(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1478,7 +1727,7 @@ async function reopenRejectedExpense(req, res) {
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-    const expense = await getExpenseOr404(id, res);
+    const expense = await getExpenseOr404(id, companyId, res);
     if (!expense) return;
 
     const st = safeUpper(expense.approval_status);
@@ -1513,6 +1762,7 @@ async function reopenRejectedExpense(req, res) {
       });
 
       await writeExpenseAuditSafe(tx, {
+        companyId,
         expense_id: id,
         action: "REOPEN",
         actor_id: actorId,
@@ -1536,12 +1786,14 @@ async function reopenRejectedExpense(req, res) {
 async function getExpenseAudit(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
     const { id } = req.params || {};
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid expense id" });
 
-    const expense = await getExpenseFullOr404(id, res);
+    const expense = await getExpenseFullOr404(id, companyId, res);
     if (!expense) return;
 
     const isPrivileged = isAdminOrAccountant(req);
@@ -1560,7 +1812,10 @@ async function getExpenseAudit(req, res) {
     }
 
     const items = await prisma.cash_expense_audits.findMany({
-      where: { expense_id: id },
+      where: {
+        company_id: companyId,
+        expense_id: id,
+      },
       orderBy: { created_at: "desc" },
     });
 
@@ -1576,6 +1831,8 @@ async function getExpenseAudit(req, res) {
 async function getSupervisorDeficitReport(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1585,7 +1842,9 @@ async function getSupervisorDeficitReport(req, res) {
 
     const status = req.query?.status ? safeUpper(req.query.status) : null;
 
-    const whereAdv = {};
+    const whereAdv = {
+      company_id: companyId,
+    };
     if (status) whereAdv.status = status;
 
     const advances = await prisma.cash_advances.findMany({
@@ -1602,6 +1861,7 @@ async function getSupervisorDeficitReport(req, res) {
     const expenses = ids.length
       ? await prisma.cash_expenses.findMany({
           where: {
+            company_id: companyId,
             cash_advance_id: { in: ids },
             approval_status: "APPROVED",
           },
@@ -1654,6 +1914,8 @@ async function getSupervisorDeficitReport(req, res) {
 async function openTripFinanceReview(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1664,8 +1926,11 @@ async function openTripFinanceReview(req, res) {
     const trip_id = String(req.params?.id || req.params?.trip_id || "").trim();
     if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
 
-    const trip = await prisma.trips.findUnique({
-      where: { id: trip_id },
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id: trip_id,
+        company_id: companyId,
+      },
       select: { id: true, financial_status: true },
     });
 
@@ -1699,6 +1964,8 @@ async function openTripFinanceReview(req, res) {
 async function closeTripFinance(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
     if (!isAdminOrAccountant(req)) {
       return res.status(403).json({
@@ -1709,8 +1976,11 @@ async function closeTripFinance(req, res) {
     const trip_id = String(req.params?.id || req.params?.trip_id || "").trim();
     if (!isUuid(trip_id)) return res.status(400).json({ message: "Invalid trip_id" });
 
-    const trip = await prisma.trips.findUnique({
-      where: { id: trip_id },
+    const trip = await prisma.trips.findFirst({
+      where: {
+        id: trip_id,
+        company_id: companyId,
+      },
       select: {
         id: true,
         financial_status: true,
@@ -1729,12 +1999,14 @@ async function closeTripFinance(req, res) {
     const [pendingExpenseCount, currentRevenue, currentApprovedRevenue] = await Promise.all([
       prisma.cash_expenses.count({
         where: {
+          company_id: companyId,
           trip_id,
           approval_status: { in: ["PENDING", "APPEALED"] },
         },
       }),
       prisma.trip_revenues.findFirst({
         where: {
+          company_id: companyId,
           trip_id,
           is_current: true,
         },
@@ -1749,6 +2021,7 @@ async function closeTripFinance(req, res) {
       }),
       prisma.trip_revenues.findFirst({
         where: {
+          company_id: companyId,
           trip_id,
           is_current: true,
           is_approved: true,
@@ -1809,6 +2082,8 @@ async function closeTripFinance(req, res) {
 async function getTripFinanceSummary(req, res) {
   try {
     const actorId = getUserId(req);
+    const companyId = req.companyId;
+
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
 
     const isPrivileged = isAdminOrAccountant(req);
@@ -1831,6 +2106,7 @@ async function getTripFinanceSummary(req, res) {
       const allowed = await assertTripBelongsToSupervisor({
         trip_id,
         userId: actorId,
+        companyId,
       });
 
       if (!allowed) {
@@ -1838,7 +2114,7 @@ async function getTripFinanceSummary(req, res) {
       }
     }
 
-    const data = await tripFinanceService.getTripFinanceSummary(trip_id);
+    const data = await tripFinanceService.getTripFinanceSummary(trip_id, companyId);
 
     return res.json({
       success: true,

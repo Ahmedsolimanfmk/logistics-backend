@@ -55,13 +55,14 @@ const CACHE_TTL_MS = 30_000;
 
 function cacheKey(user, filters) {
   const role = String(user?.role || "");
-  const uid = String(user?.id || "");
+  const uid = String(user?.id || user?.sub || "");
+  const companyId = String(filters?.companyId || "");
   const tab = String(filters?.tab || "operations");
   const from = filters?.from || "";
   const to = filters?.to || "";
   const clientId = filters?.clientId || "";
   const siteId = filters?.siteId || "";
-  return `${role}:${uid}:${tab}:${from}:${to}:${clientId}:${siteId}`;
+  return `${companyId}:${role}:${uid}:${tab}:${from}:${to}:${clientId}:${siteId}`;
 }
 function cacheGet(key) {
   const e = _cache.get(key);
@@ -101,7 +102,7 @@ function daysBetweenCairo(fromDate, toDate) {
   return Math.round(to.diff(from, "days").days);
 }
 
-async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
+async function getArDueAlerts({ companyId, clientId = null, top = 10 } = {}) {
   const todayStartCairo = DateTime.now().setZone(CAIRO_TZ).startOf("day");
   const dueSoonEndExclusiveCairo = todayStartCairo.plus({ days: 8 });
 
@@ -117,13 +118,26 @@ async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
       i.total_amount::numeric AS total_amount,
       i.status,
       c.name AS client_name,
-      COALESCE(SUM(a.amount_allocated), 0)::numeric AS allocated_amount
+      COALESCE(
+        SUM(
+          CASE
+            WHEN p.status = 'POSTED' THEN a.amount_allocated
+            ELSE 0
+          END
+        ),
+        0
+      )::numeric AS allocated_amount
     FROM ar_invoices i
     LEFT JOIN ar_payment_allocations a
       ON a.invoice_id = i.id
+    LEFT JOIN ar_payments p
+      ON p.id = a.payment_id
+     AND p.company_id = ${companyId}::uuid
     LEFT JOIN clients c
       ON c.id = i.client_id
-    WHERE i.status IN ('APPROVED', 'PARTIALLY_PAID')
+     AND c.company_id = ${companyId}::uuid
+    WHERE i.company_id = ${companyId}::uuid
+      AND i.status IN ('APPROVED', 'PARTIALLY_PAID')
       AND i.due_date IS NOT NULL
       AND (${clientId}::uuid IS NULL OR i.client_id = ${clientId}::uuid)
     GROUP BY
@@ -219,14 +233,22 @@ async function getArDueAlerts({ clientId = null, top = 10 } = {}) {
 exports.getSummary = async (user, filters = {}) => {
   const tab = String(filters.tab || "operations").toLowerCase();
 
+  const companyId = normalizeUuidOrNull(filters.companyId);
   const clientId = normalizeUuidOrNull(filters.clientId);
   const siteId = normalizeUuidOrNull(filters.siteId);
 
+  if (!companyId) {
+    const err = new Error("Company context is missing");
+    err.status = 400;
+    throw err;
+  }
+
   const today = getCairoDayRange(filters.from, filters.to);
   const month = getCairoMonthRange();
+  const userId = user?.id || user?.sub || null;
   const isSupervisor = isSupervisorRole(user?.role);
 
-  const key = cacheKey(user, { ...filters, tab });
+  const key = cacheKey(user, { ...filters, tab, companyId });
   const cached = cacheGet(key);
   if (cached) return cached;
 
@@ -241,12 +263,14 @@ exports.getSummary = async (user, filters = {}) => {
   };
 
   const tripWhereTodayBase = {
+    company_id: companyId,
     created_at: { gte: today.from, lte: today.to },
     ...(clientId ? { client_id: clientId } : {}),
     ...(siteId ? { site_id: siteId } : {}),
   };
 
   const tripWhereMonthBase = {
+    company_id: companyId,
     created_at: { gte: month.from, lte: month.to },
     ...(clientId ? { client_id: clientId } : {}),
     ...(siteId ? { site_id: siteId } : {}),
@@ -264,11 +288,14 @@ exports.getSummary = async (user, filters = {}) => {
       tripsTodayByStatus = await prisma.$queryRaw`
         SELECT t.status, COUNT(DISTINCT t.id)::int AS count
         FROM trips t
-        JOIN trip_assignments ta ON ta.trip_id = t.id
-        WHERE t.created_at >= ${today.from}
+        JOIN trip_assignments ta
+          ON ta.trip_id = t.id
+         AND ta.company_id = ${companyId}::uuid
+        WHERE t.company_id = ${companyId}::uuid
+          AND t.created_at >= ${today.from}
           AND t.created_at <= ${today.to}
           AND ta.is_active = true
-          AND ta.field_supervisor_id = ${user.id}::uuid
+          AND ta.field_supervisor_id = ${userId}::uuid
           AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
           AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
         GROUP BY t.status
@@ -291,10 +318,13 @@ exports.getSummary = async (user, filters = {}) => {
       const rows = await prisma.$queryRaw`
         SELECT COUNT(DISTINCT t.id)::int AS count
         FROM trips t
-        JOIN trip_assignments ta ON ta.trip_id = t.id
-        WHERE t.created_at >= ${month.from}
+        JOIN trip_assignments ta
+          ON ta.trip_id = t.id
+         AND ta.company_id = ${companyId}::uuid
+        WHERE t.company_id = ${companyId}::uuid
+          AND t.created_at >= ${month.from}
           AND t.created_at <= ${month.to}
-          AND ta.field_supervisor_id = ${user.id}::uuid
+          AND ta.field_supervisor_id = ${userId}::uuid
           AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
           AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid);
       `;
@@ -303,6 +333,9 @@ exports.getSummary = async (user, filters = {}) => {
 
     const vehiclesAgg = await prisma.vehicles.groupBy({
       by: ["status"],
+      where: {
+        company_id: companyId,
+      },
       _count: { status: true },
     });
 
@@ -326,13 +359,25 @@ exports.getSummary = async (user, filters = {}) => {
         d.id AS driver_id,
         d.full_name AS driver_name
       FROM trips t
-      JOIN trip_assignments ta ON ta.trip_id = t.id AND ta.is_active = true
-      LEFT JOIN clients c ON c.id = t.client_id
-      LEFT JOIN sites s ON s.id = t.site_id
-      LEFT JOIN vehicles v ON v.id = ta.vehicle_id
-      LEFT JOIN drivers d ON d.id = ta.driver_id
-      WHERE t.status IN ('ASSIGNED', 'IN_PROGRESS')
-        AND (${isSupervisor}::boolean = false OR ta.field_supervisor_id = ${user.id}::uuid)
+      JOIN trip_assignments ta
+        ON ta.trip_id = t.id
+       AND ta.company_id = ${companyId}::uuid
+       AND ta.is_active = true
+      LEFT JOIN clients c
+        ON c.id = t.client_id
+       AND c.company_id = ${companyId}::uuid
+      LEFT JOIN sites s
+        ON s.id = t.site_id
+       AND s.company_id = ${companyId}::uuid
+      LEFT JOIN vehicles v
+        ON v.id = ta.vehicle_id
+       AND v.company_id = ${companyId}::uuid
+      LEFT JOIN drivers d
+        ON d.id = ta.driver_id
+       AND d.company_id = ${companyId}::uuid
+      WHERE t.company_id = ${companyId}::uuid
+        AND t.status IN ('ASSIGNED', 'IN_PROGRESS')
+        AND (${isSupervisor}::boolean = false OR ta.field_supervisor_id = ${userId}::uuid)
         AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
         AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
       ORDER BY t.created_at DESC
@@ -351,51 +396,57 @@ exports.getSummary = async (user, filters = {}) => {
       driver_name: r.driver_name,
     }));
 
-    const needingClose = await prisma.trips.findMany({
-      where: {
-        status: "COMPLETED",
-        financial_closed_at: null,
-        ...(clientId ? { client_id: clientId } : {}),
-        ...(siteId ? { site_id: siteId } : {}),
-      },
-      select: {
-        id: true,
-        status: true,
-        created_at: true,
-        financial_status: true,
-        financial_review_opened_at: true,
-        clients: { select: { name: true } },
-        site: { select: { name: true } },
-      },
-      orderBy: { created_at: "desc" },
-      take: 10,
-    });
+    const needingCloseRows = await prisma.$queryRaw`
+      SELECT
+        t.id,
+        t.status,
+        t.created_at,
+        t.financial_status,
+        t.financial_review_opened_at,
+        c.name AS client_name,
+        s.name AS site_name
+      FROM trips t
+      LEFT JOIN clients c
+        ON c.id = t.client_id
+       AND c.company_id = ${companyId}::uuid
+      LEFT JOIN sites s
+        ON s.id = t.site_id
+       AND s.company_id = ${companyId}::uuid
+      WHERE t.company_id = ${companyId}::uuid
+        AND t.status = 'COMPLETED'
+        AND t.financial_closed_at IS NULL
+        AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
+        AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
+      ORDER BY t.created_at DESC
+      LIMIT 10;
+    `;
 
     out.cards.trips_today = tripsToday;
     out.cards.trips_month_total = tripsMonthCount;
     out.cards.vehicles = vehicles;
 
     out.tables.active_trips_now = active_trips_now;
-    out.tables.trips_needing_finance_close = needingClose.map((t) => ({
+    out.tables.trips_needing_finance_close = (needingCloseRows || []).map((t) => ({
       id: t.id,
       status: t.status,
       created_at: t.created_at,
       financial_status: t.financial_status,
       financial_review_opened_at: t.financial_review_opened_at,
-      client: t.clients?.name,
-      site: t.site?.name,
+      client: t.client_name,
+      site: t.site_name,
     }));
 
     out.alerts.active_trips_now_count = active_trips_now.length;
-    out.alerts.trips_completed_not_closed = needingClose.length;
+    out.alerts.trips_completed_not_closed = (needingCloseRows || []).length;
   };
 
   const loadFinance = async () => {
     const expensesAgg = await prisma.cash_expenses.groupBy({
       by: ["approval_status"],
       where: {
+        company_id: companyId,
         created_at: { gte: today.from, lte: today.to },
-        ...(isSupervisor ? { created_by: user.id } : {}),
+        ...(isSupervisor ? { created_by: userId } : {}),
       },
       _sum: { amount: true },
     });
@@ -411,9 +462,10 @@ exports.getSummary = async (user, filters = {}) => {
     const topTypes = await prisma.cash_expenses.groupBy({
       by: ["expense_type"],
       where: {
+        company_id: companyId,
         created_at: { gte: today.from, lte: today.to },
         approval_status: "APPROVED",
-        ...(isSupervisor ? { created_by: user.id } : {}),
+        ...(isSupervisor ? { created_by: userId } : {}),
       },
       _sum: { amount: true },
       orderBy: { _sum: { amount: "desc" } },
@@ -431,17 +483,25 @@ exports.getSummary = async (user, filters = {}) => {
         a.amount::numeric AS advance_amount,
         a.created_at,
         a.field_supervisor_id,
-        COALESCE(SUM(CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END), 0)::numeric AS approved_expenses
+        COALESCE(
+          SUM(
+            CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END
+          ),
+          0
+        )::numeric AS approved_expenses
       FROM cash_advances a
-      LEFT JOIN cash_expenses e ON e.cash_advance_id = a.id
-      WHERE a.status IN ('OPEN', 'IN_REVIEW')
-        AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${user.id}::uuid)
+      LEFT JOIN cash_expenses e
+        ON e.cash_advance_id = a.id
+       AND e.company_id = ${companyId}::uuid
+      WHERE a.company_id = ${companyId}::uuid
+        AND a.status IN ('OPEN', 'IN_REVIEW')
+        AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
       GROUP BY a.id, a.amount, a.created_at, a.field_supervisor_id;
     `;
 
     let advancesOutstandingCount = 0;
     let advancesRemainingTotal = 0;
-    for (const r of advancesRows) {
+    for (const r of advancesRows || []) {
       advancesOutstandingCount += 1;
       const adv = Number(r.advance_amount ?? 0);
       const exp = Number(r.approved_expenses ?? 0);
@@ -454,24 +514,27 @@ exports.getSummary = async (user, filters = {}) => {
 
     const pendingExpensesTooLong = await prisma.cash_expenses.count({
       where: {
+        company_id: companyId,
         approval_status: "PENDING",
         created_at: { lt: pending48h },
-        ...(isSupervisor ? { created_by: user.id } : {}),
+        ...(isSupervisor ? { created_by: userId } : {}),
       },
     });
 
     const advancesOpenTooLong = await prisma.cash_advances.count({
       where: {
+        company_id: companyId,
         status: { in: ["OPEN", "IN_REVIEW"] },
         created_at: { lt: advance7d },
-        ...(isSupervisor ? { field_supervisor_id: user.id } : {}),
+        ...(isSupervisor ? { field_supervisor_id: userId } : {}),
       },
     });
 
     const pendingExpenses = await prisma.cash_expenses.findMany({
       where: {
+        company_id: companyId,
         approval_status: "PENDING",
-        ...(isSupervisor ? { created_by: user.id } : {}),
+        ...(isSupervisor ? { created_by: userId } : {}),
       },
       select: {
         id: true,
@@ -481,12 +544,12 @@ exports.getSummary = async (user, filters = {}) => {
         trip_id: true,
         vehicle_id: true,
         cash_advance_id: true,
-        trips: {
+        trip: {
           select: {
             id: true,
-            clients: { select: { name: true } },
-            site: { select: { name: true } },
             status: true,
+            client: { select: { name: true } },
+            site: { select: { name: true } },
           },
         },
       },
@@ -502,9 +565,9 @@ exports.getSummary = async (user, filters = {}) => {
       trip_id: e.trip_id,
       vehicle_id: e.vehicle_id,
       cash_advance_id: e.cash_advance_id,
-      trip_status: e.trips?.status,
-      client: e.trips?.clients?.name,
-      site: e.trips?.site?.name,
+      trip_status: e.trip?.status,
+      client: e.trip?.client?.name,
+      site: e.trip?.site?.name,
     }));
 
     const openAdvancesList = await prisma.$queryRaw`
@@ -514,11 +577,19 @@ exports.getSummary = async (user, filters = {}) => {
         a.amount::numeric AS advance_amount,
         a.status,
         a.field_supervisor_id,
-        COALESCE(SUM(CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END), 0)::numeric AS approved_expenses
+        COALESCE(
+          SUM(
+            CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END
+          ),
+          0
+        )::numeric AS approved_expenses
       FROM cash_advances a
-      LEFT JOIN cash_expenses e ON e.cash_advance_id = a.id
-      WHERE a.status IN ('OPEN', 'IN_REVIEW')
-        AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${user.id}::uuid)
+      LEFT JOIN cash_expenses e
+        ON e.cash_advance_id = a.id
+       AND e.company_id = ${companyId}::uuid
+      WHERE a.company_id = ${companyId}::uuid
+        AND a.status IN ('OPEN', 'IN_REVIEW')
+        AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
       GROUP BY a.id, a.created_at, a.amount, a.status, a.field_supervisor_id
       ORDER BY a.created_at ASC
       LIMIT 10;
@@ -539,6 +610,7 @@ exports.getSummary = async (user, filters = {}) => {
     });
 
     const arDue = await getArDueAlerts({
+      companyId,
       clientId,
       top: 10,
     });
@@ -598,13 +670,17 @@ exports.getSummary = async (user, filters = {}) => {
     const dayTo = today.to;
 
     const open_work_orders = await prisma.maintenance_work_orders.count({
-      where: { status: { in: ["OPEN", "IN_PROGRESS"] } },
+      where: {
+        company_id: companyId,
+        status: { in: ["OPEN", "IN_PROGRESS"] },
+      },
     });
 
     const completedTodayRows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS count
       FROM maintenance_work_orders wo
-      WHERE wo.status = 'COMPLETED'
+      WHERE wo.company_id = ${companyId}::uuid
+        AND wo.status = 'COMPLETED'
         AND COALESCE(wo.completed_at, wo.updated_at) >= ${dayFrom}
         AND COALESCE(wo.completed_at, wo.updated_at) <= ${dayTo};
     `;
@@ -614,7 +690,8 @@ exports.getSummary = async (user, filters = {}) => {
       SELECT COALESCE(SUM(l.total_cost), 0)::numeric AS value
       FROM inventory_issue_lines l
       JOIN inventory_issues i ON i.id = l.issue_id
-      WHERE i.created_at >= ${dayFrom}
+      WHERE i.company_id = ${companyId}::uuid
+        AND i.created_at >= ${dayFrom}
         AND i.created_at <= ${dayTo};
     `;
     const maintenance_parts_cost_today = Number(partsCostTodayRows?.[0]?.value ?? 0);
@@ -622,7 +699,8 @@ exports.getSummary = async (user, filters = {}) => {
     const cashTodayRows = await prisma.$queryRaw`
       SELECT COALESCE(SUM(e.amount), 0)::numeric AS value
       FROM cash_expenses e
-      WHERE e.maintenance_work_order_id IS NOT NULL
+      WHERE e.company_id = ${companyId}::uuid
+        AND e.maintenance_work_order_id IS NOT NULL
         AND e.created_at >= ${dayFrom}
         AND e.created_at <= ${dayTo};
     `;
@@ -636,7 +714,8 @@ exports.getSummary = async (user, filters = {}) => {
       FROM maintenance_work_orders wo
       LEFT JOIN post_maintenance_reports pr
         ON pr.work_order_id = wo.id
-      WHERE wo.status = 'COMPLETED'
+      WHERE wo.company_id = ${companyId}::uuid
+        AND wo.status = 'COMPLETED'
         AND pr.id IS NULL;
     `;
     const qa_needs = Number(qaNeedsRows?.[0]?.count ?? 0);
@@ -644,7 +723,10 @@ exports.getSummary = async (user, filters = {}) => {
     const qaFailedRows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS count
       FROM post_maintenance_reports pr
-      WHERE pr.road_test_result = 'FAIL';
+      JOIN maintenance_work_orders wo
+        ON wo.id = pr.work_order_id
+      WHERE wo.company_id = ${companyId}::uuid
+        AND pr.road_test_result = 'FAIL';
     `;
     const qa_failed = Number(qaFailedRows?.[0]?.count ?? 0);
 
@@ -653,11 +735,13 @@ exports.getSummary = async (user, filters = {}) => {
         SELECT i.work_order_id, l.part_id, COALESCE(SUM(l.qty), 0)::numeric AS issued_qty
         FROM inventory_issues i
         JOIN inventory_issue_lines l ON l.issue_id = i.id
+        WHERE i.company_id = ${companyId}::uuid
         GROUP BY i.work_order_id, l.part_id
       ),
       installed AS (
         SELECT ins.work_order_id, ins.part_id, COALESCE(SUM(ins.qty_installed), 0)::numeric AS installed_qty
         FROM work_order_installations ins
+        WHERE ins.company_id = ${companyId}::uuid
         GROUP BY ins.work_order_id, ins.part_id
       ),
       diff AS (
@@ -674,7 +758,8 @@ exports.getSummary = async (user, filters = {}) => {
       SELECT COUNT(DISTINCT d.work_order_id)::int AS count
       FROM diff d
       JOIN maintenance_work_orders wo ON wo.id = d.work_order_id
-      WHERE wo.status = 'COMPLETED'
+      WHERE wo.company_id = ${companyId}::uuid
+        AND wo.status = 'COMPLETED'
         AND (d.issued_qty <> d.installed_qty);
     `;
     const parts_mismatch = Number(mismatchRows?.[0]?.count ?? 0);
@@ -692,6 +777,9 @@ exports.getSummary = async (user, filters = {}) => {
 
     out.tables.maintenance_recent_work_orders =
       await prisma.maintenance_work_orders.findMany({
+        where: {
+          company_id: companyId,
+        },
         select: {
           id: true,
           status: true,
@@ -712,7 +800,7 @@ exports.getSummary = async (user, filters = {}) => {
   if (tab === "finance") await loadFinance();
   else if (tab === "maintenance") await loadMaintenance();
   else await loadOperations();
-console.log("dashboard summary version: site-not-sites");
+
   cacheSet(key, out);
   return out;
 };
@@ -722,15 +810,22 @@ exports.getTrends = async (user, params) => {
   const bucket = params.bucket || "daily";
   const trunc = bucketToDateTrunc(bucket);
 
+  const companyId = normalizeUuidOrNull(params.companyId);
   const clientId = normalizeUuidOrNull(params.clientId);
   const siteId = normalizeUuidOrNull(params.siteId);
   const vehicleId = normalizeUuidOrNull(params.vehicleId);
   const cashAdvanceId = normalizeUuidOrNull(params.cashAdvanceId);
 
+  if (!companyId) {
+    const err = new Error("Company context is missing");
+    err.status = 400;
+    throw err;
+  }
+
   const { from, to } = getCairoRangeDefault14Days(params.from, params.to);
 
   if (metric === "trips_created") {
-    const createdByFilter = user.role === "FIELD_SUPERVISOR" ? user.id : null;
+    const createdByFilter = user.role === "FIELD_SUPERVISOR" ? (user.id || user.sub) : null;
 
     const rows = await prisma.$queryRaw`
       SELECT
@@ -740,7 +835,8 @@ exports.getTrends = async (user, params) => {
         ) AS bucket,
         COUNT(*)::int AS value
       FROM trips t
-      WHERE t.created_at >= ${from}
+      WHERE t.company_id = ${companyId}::uuid
+        AND t.created_at >= ${from}
         AND t.created_at <= ${to}
         AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
         AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
@@ -759,7 +855,7 @@ exports.getTrends = async (user, params) => {
   }
 
   if (metric === "trips_assigned") {
-    const supervisorFilter = user.role === "FIELD_SUPERVISOR" ? user.id : null;
+    const supervisorFilter = user.role === "FIELD_SUPERVISOR" ? (user.id || user.sub) : null;
 
     const rows = await prisma.$queryRaw`
       SELECT
@@ -770,7 +866,9 @@ exports.getTrends = async (user, params) => {
         COUNT(DISTINCT ta.trip_id)::int AS value
       FROM trip_assignments ta
       JOIN trips t ON t.id = ta.trip_id
-      WHERE ta.assigned_at >= ${from}
+      WHERE ta.company_id = ${companyId}::uuid
+        AND t.company_id = ${companyId}::uuid
+        AND ta.assigned_at >= ${from}
         AND ta.assigned_at <= ${to}
         AND (${supervisorFilter}::uuid IS NULL OR ta.field_supervisor_id = ${supervisorFilter}::uuid)
         AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
@@ -791,7 +889,7 @@ exports.getTrends = async (user, params) => {
   if (metric === "expenses_approved" || metric === "expenses_pending") {
     const approvalStatus =
       metric === "expenses_approved" ? "APPROVED" : "PENDING";
-    const createdByFilter = user.role === "FIELD_SUPERVISOR" ? user.id : null;
+    const createdByFilter = user.role === "FIELD_SUPERVISOR" ? (user.id || user.sub) : null;
 
     const rows = await prisma.$queryRaw`
       SELECT
@@ -801,8 +899,11 @@ exports.getTrends = async (user, params) => {
         ) AS bucket,
         COALESCE(SUM(e.amount), 0)::numeric AS value
       FROM cash_expenses e
-      LEFT JOIN trips t ON t.id = e.trip_id
-      WHERE e.created_at >= ${from}
+      LEFT JOIN trips t
+        ON t.id = e.trip_id
+       AND t.company_id = ${companyId}::uuid
+      WHERE e.company_id = ${companyId}::uuid
+        AND e.created_at >= ${from}
         AND e.created_at <= ${to}
         AND e.approval_status = ${approvalStatus}
         AND (${vehicleId}::uuid IS NULL OR e.vehicle_id = ${vehicleId}::uuid)
@@ -836,15 +937,22 @@ exports.getTrendsBundle = async (user, params) => {
   const bucket = params.bucket || "daily";
   const trunc = bucketToDateTrunc(bucket);
 
+  const companyId = normalizeUuidOrNull(params.companyId);
   const clientId = normalizeUuidOrNull(params.clientId);
   const siteId = normalizeUuidOrNull(params.siteId);
   const vehicleId = normalizeUuidOrNull(params.vehicleId);
   const cashAdvanceId = normalizeUuidOrNull(params.cashAdvanceId);
 
+  if (!companyId) {
+    const err = new Error("Company context is missing");
+    err.status = 400;
+    throw err;
+  }
+
   const { from, to } = getCairoRangeDefault14Days(params.from, params.to);
 
-  const createdByFilter = user.role === "FIELD_SUPERVISOR" ? user.id : null;
-  const supervisorFilter = user.role === "FIELD_SUPERVISOR" ? user.id : null;
+  const createdByFilter = user.role === "FIELD_SUPERVISOR" ? (user.id || user.sub) : null;
+  const supervisorFilter = user.role === "FIELD_SUPERVISOR" ? (user.id || user.sub) : null;
 
   const [tripsCreated, tripsAssigned, expensesApproved, expensesPending] =
     await Promise.all([
@@ -856,7 +964,8 @@ exports.getTrendsBundle = async (user, params) => {
           ) AS bucket,
           COUNT(*)::int AS value
         FROM trips t
-        WHERE t.created_at >= ${from}
+        WHERE t.company_id = ${companyId}::uuid
+          AND t.created_at >= ${from}
           AND t.created_at <= ${to}
           AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
           AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
@@ -873,7 +982,9 @@ exports.getTrendsBundle = async (user, params) => {
           COUNT(DISTINCT ta.trip_id)::int AS value
         FROM trip_assignments ta
         JOIN trips t ON t.id = ta.trip_id
-        WHERE ta.assigned_at >= ${from}
+        WHERE ta.company_id = ${companyId}::uuid
+          AND t.company_id = ${companyId}::uuid
+          AND ta.assigned_at >= ${from}
           AND ta.assigned_at <= ${to}
           AND (${supervisorFilter}::uuid IS NULL OR ta.field_supervisor_id = ${supervisorFilter}::uuid)
           AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
@@ -889,8 +1000,11 @@ exports.getTrendsBundle = async (user, params) => {
           ) AS bucket,
           COALESCE(SUM(e.amount), 0)::numeric AS value
         FROM cash_expenses e
-        LEFT JOIN trips t ON t.id = e.trip_id
-        WHERE e.created_at >= ${from}
+        LEFT JOIN trips t
+          ON t.id = e.trip_id
+         AND t.company_id = ${companyId}::uuid
+        WHERE e.company_id = ${companyId}::uuid
+          AND e.created_at >= ${from}
           AND e.created_at <= ${to}
           AND e.approval_status = 'APPROVED'
           AND (${vehicleId}::uuid IS NULL OR e.vehicle_id = ${vehicleId}::uuid)
@@ -909,8 +1023,11 @@ exports.getTrendsBundle = async (user, params) => {
           ) AS bucket,
           COALESCE(SUM(e.amount), 0)::numeric AS value
         FROM cash_expenses e
-        LEFT JOIN trips t ON t.id = e.trip_id
-        WHERE e.created_at >= ${from}
+        LEFT JOIN trips t
+          ON t.id = e.trip_id
+         AND t.company_id = ${companyId}::uuid
+        WHERE e.company_id = ${companyId}::uuid
+          AND e.created_at >= ${from}
           AND e.created_at <= ${to}
           AND e.approval_status = 'PENDING'
           AND (${vehicleId}::uuid IS NULL OR e.vehicle_id = ${vehicleId}::uuid)

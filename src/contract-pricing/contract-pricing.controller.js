@@ -32,7 +32,10 @@ function forbid(res) {
 // =======================
 async function listVehicleClasses(req, res) {
   try {
-    const data = await service.listVehicleClasses(req.query);
+    const data = await service.listVehicleClasses({
+      ...req.query,
+      company_id: req.companyId,
+    });
     return res.json({ success: true, ...data });
   } catch (error) {
     return handleError(res, error);
@@ -41,7 +44,10 @@ async function listVehicleClasses(req, res) {
 
 async function getVehicleClassById(req, res) {
   try {
-    const data = await service.getVehicleClassById(req.params.id);
+    const data = await service.getVehicleClassById(
+      req.params.id,
+      req.companyId
+    );
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -52,7 +58,11 @@ async function createVehicleClass(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.createVehicleClass(req.body);
+    const data = await service.createVehicleClass({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Vehicle class created successfully",
@@ -67,7 +77,12 @@ async function updateVehicleClass(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.updateVehicleClass(req.params.id, req.body);
+    const data = await service.updateVehicleClass(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Vehicle class updated successfully",
@@ -82,7 +97,11 @@ async function toggleVehicleClass(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleVehicleClass(req.params.id);
+    const data = await service.toggleVehicleClass(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Vehicle class status updated successfully",
@@ -98,7 +117,10 @@ async function toggleVehicleClass(req, res) {
 // =======================
 async function listCargoTypes(req, res) {
   try {
-    const data = await service.listCargoTypes(req.query);
+    const data = await service.listCargoTypes({
+      ...req.query,
+      company_id: req.companyId,
+    });
     return res.json({ success: true, ...data });
   } catch (error) {
     return handleError(res, error);
@@ -107,7 +129,10 @@ async function listCargoTypes(req, res) {
 
 async function getCargoTypeById(req, res) {
   try {
-    const data = await service.getCargoTypeById(req.params.id);
+    const data = await service.getCargoTypeById(
+      req.params.id,
+      req.companyId
+    );
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -118,7 +143,11 @@ async function createCargoType(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.createCargoType(req.body);
+    const data = await service.createCargoType({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Cargo type created successfully",
@@ -133,7 +162,12 @@ async function updateCargoType(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.updateCargoType(req.params.id, req.body);
+    const data = await service.updateCargoType(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Cargo type updated successfully",
@@ -148,7 +182,11 @@ async function toggleCargoType(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleCargoType(req.params.id);
+    const data = await service.toggleCargoType(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Cargo type status updated successfully",
@@ -164,7 +202,10 @@ async function toggleCargoType(req, res) {
 // =======================
 async function listZones(req, res) {
   try {
-    const data = await service.listZones(req.query);
+    const data = await service.listZones({
+      ...req.query,
+      company_id: req.companyId,
+    });
     return res.json({ success: true, ...data });
   } catch (error) {
     return handleError(res, error);
@@ -173,7 +214,10 @@ async function listZones(req, res) {
 
 async function getZoneById(req, res) {
   try {
-    const data = await service.getZoneById(req.params.id);
+    const data = await service.getZoneById(
+      req.params.id,
+      req.companyId
+    );
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -184,7 +228,11 @@ async function createZone(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.createZone(req.body);
+    const data = await service.createZone({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Zone created successfully",
@@ -199,7 +247,12 @@ async function updateZone(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.updateZone(req.params.id, req.body);
+    const data = await service.updateZone(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Zone updated successfully",
@@ -214,7 +267,11 @@ async function toggleZone(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleZone(req.params.id);
+    const data = await service.toggleZone(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Zone status updated successfully",
@@ -230,7 +287,10 @@ async function toggleZone(req, res) {
 // =======================
 async function listRoutes(req, res) {
   try {
-    const data = await service.listRoutes(req.query);
+    const data = await service.listRoutes({
+      ...req.query,
+      company_id: req.companyId,
+    });
     return res.json({ success: true, ...data });
   } catch (error) {
     return handleError(res, error);
@@ -239,7 +299,10 @@ async function listRoutes(req, res) {
 
 async function getRouteById(req, res) {
   try {
-    const data = await service.getRouteById(req.params.id);
+    const data = await service.getRouteById(
+      req.params.id,
+      req.companyId
+    );
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -250,7 +313,11 @@ async function createRoute(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.createRoute(req.body);
+    const data = await service.createRoute({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Route created successfully",
@@ -265,7 +332,12 @@ async function updateRoute(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.updateRoute(req.params.id, req.body);
+    const data = await service.updateRoute(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Route updated successfully",
@@ -280,7 +352,11 @@ async function toggleRoute(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleRoute(req.params.id);
+    const data = await service.toggleRoute(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Route status updated successfully",
@@ -296,7 +372,10 @@ async function toggleRoute(req, res) {
 // =======================
 async function listPricingRules(req, res) {
   try {
-    const data = await service.listPricingRules(req.query);
+    const data = await service.listPricingRules({
+      ...req.query,
+      company_id: req.companyId,
+    });
     return res.json({ success: true, ...data });
   } catch (error) {
     return handleError(res, error);
@@ -305,7 +384,10 @@ async function listPricingRules(req, res) {
 
 async function getPricingRuleById(req, res) {
   try {
-    const data = await service.getPricingRuleById(req.params.id);
+    const data = await service.getPricingRuleById(
+      req.params.id,
+      req.companyId
+    );
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -316,7 +398,11 @@ async function createPricingRule(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.createPricingRule(req.body);
+    const data = await service.createPricingRule({
+      ...req.body,
+      company_id: req.companyId,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Pricing rule created successfully",
@@ -331,7 +417,12 @@ async function updatePricingRule(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.updatePricingRule(req.params.id, req.body);
+    const data = await service.updatePricingRule(
+      req.params.id,
+      req.body,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Pricing rule updated successfully",
@@ -346,7 +437,11 @@ async function togglePricingRule(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.togglePricingRule(req.params.id);
+    const data = await service.togglePricingRule(
+      req.params.id,
+      req.companyId
+    );
+
     return res.json({
       success: true,
       message: "Pricing rule status updated successfully",
@@ -370,6 +465,7 @@ async function resolveTripPrice(req, res) {
     const data = await service.resolveTripPrice({
       tripId,
       contractId,
+      company_id: req.companyId,
     });
 
     return res.json({

@@ -64,12 +64,18 @@ async function listReceipts(req, res) {
   try {
     const status = String(req.query.status || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
+    
 
     if (warehouse_id && !isUuid(warehouse_id)) {
       return res.status(400).json({ message: "warehouse_id is invalid" });
     }
 
-    const where = {};
+    const companyId = req.companyId;
+
+    const where = {
+      company_id: companyId,
+    };
+
     if (status) where.status = status;
     if (warehouse_id) where.warehouse_id = warehouse_id;
 

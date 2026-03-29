@@ -5,8 +5,9 @@
 const express = require("express");
 const router = express.Router();
 
-// ✅ jwt.middleware عندك بيعمل: module.exports = { authRequired }
 const jwtMod = require("../auth/jwt.middleware");
+const { requireCompany } = require("../auth/company.middleware");
+
 const authRequired =
   typeof jwtMod === "function"
     ? jwtMod
@@ -18,7 +19,6 @@ if (!authRequired) {
   console.error("❌ authRequired is not a function. Check ../auth/jwt.middleware export.");
 }
 
-// Controllers as modules (مش destructuring مباشرة)
 const reqCtrl = require("./maintenance.requests.controller");
 const invCtrl = require("./maintenance.inventory.controller");
 const instCtrl = require("./maintenance.installations.controller");
@@ -26,7 +26,6 @@ const workCtrl = require("./maintenance.workorders.controller");
 const vehCtrl = require("./maintenance.vehicles.controller");
 const attCtrl = require("./maintenance.attachments.controller");
 
-// helper: pick a handler function safely
 function pick(mod, names) {
   if (!mod) return null;
   if (typeof mod === "function") return mod;
@@ -44,11 +43,6 @@ function fallback(name) {
     });
 }
 
-// =======================
-// Handlers wiring
-// =======================
-
-// ===== Requests =====
 const createMaintenanceRequest =
   pick(reqCtrl, ["createMaintenanceRequest"]) || fallback("createMaintenanceRequest");
 
@@ -64,28 +58,23 @@ const approveMaintenanceRequest =
 const rejectMaintenanceRequest =
   pick(reqCtrl, ["rejectMaintenanceRequest"]) || fallback("rejectMaintenanceRequest");
 
-// ===== Inventory =====
 const createIssueForWorkOrder =
   pick(invCtrl, ["createIssueForWorkOrder"]) || fallback("createIssueForWorkOrder");
 
 const addIssueLines = pick(invCtrl, ["addIssueLines"]) || fallback("addIssueLines");
 
-// ===== Installations =====
 const addInstallations = pick(instCtrl, ["addInstallations"]) || fallback("addInstallations");
 
 const listInstallations = pick(instCtrl, ["listInstallations"]) || fallback("listInstallations");
 
-// ===== Work Orders =====
 const completeWorkOrder = pick(workCtrl, ["completeWorkOrder"]) || fallback("completeWorkOrder");
 
 const getWorkOrderReport = pick(workCtrl, ["getWorkOrderReport"]) || fallback("getWorkOrderReport");
 
 const upsertPostReport = pick(workCtrl, ["upsertPostReport"]) || fallback("upsertPostReport");
 
-// ===== Vehicles Options =====
 const listVehicleOptions = pick(vehCtrl, ["listVehicleOptions"]) || fallback("listVehicleOptions");
 
-// ===== Attachments =====
 const listRequestAttachments =
   pick(attCtrl, ["listRequestAttachments"]) || fallback("listRequestAttachments");
 
@@ -97,146 +86,47 @@ const uploadRequestAttachments =
     ? attCtrl.uploadRequestAttachments
     : fallback("uploadRequestAttachments");
 
-
 const deleteAttachment = pick(attCtrl, ["deleteAttachment"]) || fallback("deleteAttachment");
 
-// Debug prints
-console.log("MAINT ROUTES WIRING:", {
-  authRequired: typeof authRequired,
-
-  // requests
-  createMaintenanceRequest: typeof createMaintenanceRequest,
-  listMaintenanceRequests: typeof listMaintenanceRequests,
-  getMaintenanceRequestById: typeof getMaintenanceRequestById,
-  approveMaintenanceRequest: typeof approveMaintenanceRequest,
-  rejectMaintenanceRequest: typeof rejectMaintenanceRequest,
-
-  // inventory
-  createIssueForWorkOrder: typeof createIssueForWorkOrder,
-  addIssueLines: typeof addIssueLines,
-
-  // installations
-  addInstallations: typeof addInstallations,
-  listInstallations: typeof listInstallations,
-
-  // work orders
-  completeWorkOrder: typeof completeWorkOrder,
-  getWorkOrderReport: typeof getWorkOrderReport,
-  upsertPostReport: typeof upsertPostReport,
-
-  // vehicles
-  listVehicleOptions: typeof listVehicleOptions,
-
-  // attachments
-  listRequestAttachments: typeof listRequestAttachments,
-  uploadRequestAttachments: typeof uploadRequestAttachments,
-  deleteAttachment: typeof deleteAttachment,
-});
-
-// =======================
-// Routes
-// =======================
+// Global enforcement
+router.use(authRequired || fallback("authRequired"));
+router.use(requireCompany);
 
 // Requests
-router.post("/requests", authRequired || fallback("authRequired"), createMaintenanceRequest);
-router.get("/requests", authRequired || fallback("authRequired"), listMaintenanceRequests);
-router.get("/requests/:id", authRequired || fallback("authRequired"), getMaintenanceRequestById);
+router.post("/requests", createMaintenanceRequest);
+router.get("/requests", listMaintenanceRequests);
+router.get("/requests/:id", getMaintenanceRequestById);
 
-router.post(
-  "/requests/:id/approve",
-  authRequired || fallback("authRequired"),
-  approveMaintenanceRequest
-);
-
-router.post(
-  "/requests/:id/reject",
-  authRequired || fallback("authRequired"),
-  rejectMaintenanceRequest
-);
+router.post("/requests/:id/approve", approveMaintenanceRequest);
+router.post("/requests/:id/reject", rejectMaintenanceRequest);
 
 // Attachments
-router.get(
-  "/requests/:id/attachments",
-  authRequired || fallback("authRequired"),
-  listRequestAttachments
-);
+router.get("/requests/:id/attachments", listRequestAttachments);
 
-// uploadRequestAttachments is an array [multerMiddleware, handler]
 if (Array.isArray(uploadRequestAttachments)) {
-  router.post(
-    "/requests/:id/attachments",
-    authRequired || fallback("authRequired"),
-    ...uploadRequestAttachments
-  );
+  router.post("/requests/:id/attachments", ...uploadRequestAttachments);
 } else {
-  router.post(
-    "/requests/:id/attachments",
-    authRequired || fallback("authRequired"),
-    uploadRequestAttachments
-  );
+  router.post("/requests/:id/attachments", uploadRequestAttachments);
 }
 
-router.delete(
-  "/attachments/:attachmentId",
-  authRequired || fallback("authRequired"),
-  deleteAttachment
-);
+router.delete("/attachments/:attachmentId", deleteAttachment);
 
 // Inventory issues
-router.post(
-  "/work-orders/:id/issues",
-  authRequired || fallback("authRequired"),
-  createIssueForWorkOrder
-);
-
-router.post(
-  "/issues/:issueId/lines",
-  authRequired || fallback("authRequired"),
-  addIssueLines
-);
+router.post("/work-orders/:id/issues", createIssueForWorkOrder);
+router.post("/issues/:issueId/lines", addIssueLines);
 
 // Installations
-router.post(
-  "/work-orders/:id/installations",
-  authRequired || fallback("authRequired"),
-  addInstallations
-);
+router.post("/work-orders/:id/installations", addInstallations);
+router.get("/work-orders/:id/installations", listInstallations);
 
-router.get(
-  "/work-orders/:id/installations",
-  authRequired || fallback("authRequired"),
-  listInstallations
-);
-
-// Work Order complete
-router.post(
-  "/work-orders/:id/complete",
-  authRequired || fallback("authRequired"),
-  completeWorkOrder
-);
-
-// Work Order runtime report (no close)
-router.get(
-  "/work-orders/:id/report",
-  authRequired || fallback("authRequired"),
-  getWorkOrderReport
-);
-
-// Post Maintenance QA (Upsert)
-router.post(
-  "/work-orders/:id/post-report",
-  authRequired || fallback("authRequired"),
-  upsertPostReport
-);
+// Work Orders
+router.post("/work-orders/:id/complete", completeWorkOrder);
+router.get("/work-orders/:id/report", getWorkOrderReport);
+router.post("/work-orders/:id/post-report", upsertPostReport);
+router.get("/work-orders", listWorkOrders);
+router.get("/work-orders/:id", getWorkOrderById);
 
 // Vehicles options
-router.get(
-  "/vehicles/options",
-  authRequired || fallback("authRequired"),
-  listVehicleOptions
-);
-
-router.get("/work-orders", authRequired || fallback("authRequired"), listWorkOrders);
-router.get("/work-orders/:id", authRequired || fallback("authRequired"), getWorkOrderById);
+router.get("/vehicles/options", listVehicleOptions);
 
 module.exports = router;

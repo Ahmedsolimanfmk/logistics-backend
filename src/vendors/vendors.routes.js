@@ -1,7 +1,10 @@
 const express = require("express");
 const controller = require("./vendors.controller");
+const { requireCompany } = require("../auth/company.middleware");
 
 const router = express.Router();
+
+router.use(requireCompany);
 
 // lightweight options list for selects/dropdowns
 router.get("/options/list", controller.options);

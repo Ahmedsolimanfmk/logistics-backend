@@ -26,13 +26,18 @@ function buildLabel(v) {
 async function listVehicleOptions(req, res) {
   try {
     const userId = getAuthUserId(req);
+    const companyId = req.companyId;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!companyId) return res.status(403).json({ message: "Company context missing" });
 
     const role = req.user?.role || null;
 
     if (isAdminOrAccountant(role)) {
       const rows = await prisma.vehicles.findMany({
-        where: { is_active: true },
+        where: {
+          company_id: companyId,
+          is_active: true,
+        },
         orderBy: [{ fleet_no: "asc" }, { plate_no: "asc" }],
         select: {
           id: true,
@@ -55,6 +60,7 @@ async function listVehicleOptions(req, res) {
 
     const rows = await prisma.vehicle_portfolio.findMany({
       where: {
+        company_id: companyId,
         field_supervisor_id: userId,
         is_active: true,
       },

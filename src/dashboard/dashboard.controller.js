@@ -15,6 +15,7 @@ async function getDashboardSummary(req, res, next) {
   try {
     const user = req.user;
     const filters = {
+      companyId: req.companyId,
       tab: req.query.tab || "operations",
       from: req.query.from,
       to: req.query.to,
@@ -33,6 +34,7 @@ async function getDashboardTrends(req, res, next) {
   try {
     const user = req.user;
     const params = {
+      companyId: req.companyId,
       metric: req.query.metric || "trips_created",
       bucket: req.query.bucket || "daily",
       from: req.query.from,
@@ -54,6 +56,7 @@ async function getDashboardTrendsBundle(req, res, next) {
   try {
     const user = req.user;
     const params = {
+      companyId: req.companyId,
       bucket: req.query.bucket || "daily",
       from: req.query.from,
       to: req.query.to,
@@ -73,6 +76,7 @@ async function getDashboardTrendsBundle(req, res, next) {
 // GET /dashboard/compliance-alerts?days=30&limit=100
 async function getComplianceAlerts(req, res, next) {
   try {
+    const companyId = req.companyId;
     const days = Math.min(365, Math.max(1, parseIntSafe(req.query.days, 30)));
     const limit = Math.min(200, Math.max(10, parseIntSafe(req.query.limit, 100)));
 
@@ -92,6 +96,7 @@ async function getComplianceAlerts(req, res, next) {
     ] = await Promise.all([
       prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -102,6 +107,7 @@ async function getComplianceAlerts(req, res, next) {
         take: limit,
         select: {
           id: true,
+          company_id: true,
           fleet_no: true,
           plate_no: true,
           display_name: true,
@@ -118,6 +124,7 @@ async function getComplianceAlerts(req, res, next) {
 
       prisma.vehicles.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
@@ -127,6 +134,7 @@ async function getComplianceAlerts(req, res, next) {
         take: limit,
         select: {
           id: true,
+          company_id: true,
           fleet_no: true,
           plate_no: true,
           display_name: true,
@@ -143,6 +151,7 @@ async function getComplianceAlerts(req, res, next) {
 
       prisma.vehicles.count({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -153,6 +162,7 @@ async function getComplianceAlerts(req, res, next) {
 
       prisma.vehicles.count({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
@@ -162,6 +172,7 @@ async function getComplianceAlerts(req, res, next) {
 
       prisma.drivers.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -172,6 +183,7 @@ async function getComplianceAlerts(req, res, next) {
         take: limit,
         select: {
           id: true,
+          company_id: true,
           full_name: true,
           phone: true,
           phone2: true,
@@ -182,13 +194,13 @@ async function getComplianceAlerts(req, res, next) {
           license_expiry_date: true,
           status: true,
           disable_reason: true,
-          is_active: true,
           updated_at: true,
         },
       }),
 
       prisma.drivers.findMany({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
@@ -198,6 +210,7 @@ async function getComplianceAlerts(req, res, next) {
         take: limit,
         select: {
           id: true,
+          company_id: true,
           full_name: true,
           phone: true,
           phone2: true,
@@ -208,13 +221,13 @@ async function getComplianceAlerts(req, res, next) {
           license_expiry_date: true,
           status: true,
           disable_reason: true,
-          is_active: true,
           updated_at: true,
         },
       }),
 
       prisma.drivers.count({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             gte: now,
@@ -225,6 +238,7 @@ async function getComplianceAlerts(req, res, next) {
 
       prisma.drivers.count({
         where: {
+          company_id: companyId,
           license_expiry_date: {
             not: null,
             lt: now,
