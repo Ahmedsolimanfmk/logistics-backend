@@ -1035,7 +1035,7 @@ async function main() {
       data: {
         payment_id: payment1.id,
         invoice_id: invoice1.id,
-        amount_allocated: 21090,
+        amount_allocated: 21090,admin@logistics.local
       },
     });
   }

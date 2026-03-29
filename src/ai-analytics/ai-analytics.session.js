@@ -18,15 +18,19 @@ function pickFirstNonEmpty(obj, keys = []) {
 function inferEntityFromItem(item) {
   if (!item || typeof item !== "object") return null;
 
+  const clientHint = pickFirstNonEmpty(item, ["client_name"]);
+  const siteHint = pickFirstNonEmpty(item, ["site_name"]);
+  const vehicleHint = pickFirstNonEmpty(item, [
+    "display_name",
+    "vehicle_name",
+    "fleet_no",
+    "plate_no",
+  ]);
+
   return {
-    client_hint: pickFirstNonEmpty(item, ["client_name"]),
-    site_hint: pickFirstNonEmpty(item, ["site_name"]),
-    vehicle_hint: pickFirstNonEmpty(item, [
-      "display_name",
-      "vehicle_name",
-      "fleet_no",
-      "plate_no",
-    ]),
+    client_hint: clientHint,
+    site_hint: siteHint,
+    vehicle_hint: vehicleHint,
   };
 }
 
@@ -40,16 +44,75 @@ function buildAppliedEntities(parsed) {
   };
 }
 
+function buildPrimaryEntity({ parsed, firstEntity }) {
+  const entityTypeFromParsed =
+    parsed?.entities?.client_hint
+      ? "client"
+      : parsed?.entities?.site_hint
+      ? "site"
+      : parsed?.entities?.vehicle_hint
+      ? "vehicle"
+      : null;
+
+  const entityLabelFromParsed =
+    parsed?.entities?.client_hint ||
+    parsed?.entities?.site_hint ||
+    parsed?.entities?.vehicle_hint ||
+    null;
+
+  if (entityTypeFromParsed && entityLabelFromParsed) {
+    return {
+      type: entityTypeFromParsed,
+      label: entityLabelFromParsed,
+    };
+  }
+
+  if (firstEntity?.client_hint) {
+    return {
+      type: "client",
+      label: firstEntity.client_hint,
+    };
+  }
+
+  if (firstEntity?.site_hint) {
+    return {
+      type: "site",
+      label: firstEntity.site_hint,
+    };
+  }
+
+  if (firstEntity?.vehicle_hint) {
+    return {
+      type: "vehicle",
+      label: firstEntity.vehicle_hint,
+    };
+  }
+
+  return null;
+}
+
+function buildEntityContext({ parsed, firstEntity }) {
+  return {
+    primary_entity: buildPrimaryEntity({ parsed, firstEntity }),
+  };
+}
+
 function buildSessionSnapshot({ parsed, result }) {
   const items = pickItems(result).slice(0, 20);
   const firstItem = items[0] || null;
+  const firstEntity = inferEntityFromItem(firstItem);
+  const appliedEntities = buildAppliedEntities(parsed);
 
   return {
     parsed: parsed || null,
     items,
     first_item: firstItem,
-    first_entity: inferEntityFromItem(firstItem),
-    applied_entities: buildAppliedEntities(parsed),
+    first_entity: firstEntity,
+    applied_entities: appliedEntities,
+    entity_context: buildEntityContext({
+      parsed,
+      firstEntity,
+    }),
     count: items.length,
     created_at: new Date().toISOString(),
   };

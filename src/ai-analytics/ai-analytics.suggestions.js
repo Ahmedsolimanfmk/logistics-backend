@@ -119,10 +119,7 @@ function fieldSupervisorQuestions() {
 }
 
 function hrQuestions() {
-  return [
-    ...maintenanceQuestions(),
-    ...tripsQuestions(),
-  ];
+  return [...maintenanceQuestions(), ...tripsQuestions()];
 }
 
 function questionsByRole(role, context) {
@@ -303,14 +300,13 @@ function getDynamicQuestions({ context = null, signals = {} }) {
   ];
 }
 
-function getSuggestedQuestions({ user, context = null, signals = {} }) {
+function getSuggestedQuestions({ companyId, user, context = null, signals = {} }) {
+  void companyId;
+
   const base = questionsByRole(user?.role, context);
   const dynamic = getDynamicQuestions({ context, signals });
 
-  return uniqueQuestions([
-    ...dynamic,
-    ...base,
-  ]).slice(0, 12);
+  return uniqueQuestions([...dynamic, ...base]).slice(0, 12);
 }
 
 module.exports = {

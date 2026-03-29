@@ -28,22 +28,46 @@ function roleUpper(role) {
 function allowedModulesByRole(role) {
   const r = roleUpper(role);
 
-  if (r === "ADMIN") return ["finance", "ar", "maintenance", "inventory", "trips"];
-  if (r === "ACCOUNTANT") return ["finance", "ar", "trips"];
-  if (r === "STOREKEEPER") return ["inventory"];
-  if (r === "FIELD_SUPERVISOR") return ["finance", "maintenance", "trips"];
-  if (r === "HR") return ["maintenance", "trips"];
+  if (r === "ADMIN") {
+    return ["finance", "ar", "maintenance", "inventory", "trips"];
+  }
+
+  if (r === "ACCOUNTANT") {
+    return ["finance", "ar", "trips"];
+  }
+
+  if (r === "STOREKEEPER") {
+    return ["inventory"];
+  }
+
+  if (r === "FIELD_SUPERVISOR") {
+    return ["finance", "maintenance", "trips"];
+  }
+
+  if (r === "HR") {
+    return ["maintenance", "trips"];
+  }
 
   return ["maintenance", "inventory", "trips"];
 }
 
 function detectLimit(question) {
   const text = normalizeArabicText(question);
-  const m = text.match(/\b(\d+)\b/);
 
-  if (!m) return undefined;
+  const explicitMatch = text.match(
+    /(?:top|اعرض|هات|طلع|اعلي|اعلى|اكثر|اكبر)\s*(\d{1,2})/
+  );
+  if (explicitMatch) {
+    const n = Number(explicitMatch[1]);
+    if (Number.isFinite(n)) {
+      return Math.max(1, Math.min(50, n));
+    }
+  }
 
-  const n = Number(m[1]);
+  const match = text.match(/\b([1-9]|[1-4][0-9]|50)\b/);
+  if (!match) return undefined;
+
+  const n = Number(match[1]);
   if (!Number.isFinite(n)) return undefined;
 
   return Math.max(1, Math.min(50, n));
@@ -52,8 +76,13 @@ function detectLimit(question) {
 function detectQuestionType(question) {
   const text = normalizeArabicText(question);
 
-  if (includesAny(text, ["اعلي", "اعلى", "اكبر", "اكثر", "top"])) return "top";
-  if (includesAny(text, ["كم", "كام", "عدد", "اجمالي", "إجمالي"])) return "summary";
+  if (includesAny(text, ["اعلي", "اعلى", "اكبر", "اكثر", "top"])) {
+    return "top";
+  }
+
+  if (includesAny(text, ["كم", "كام", "عدد", "اجمالي", "إجمالي"])) {
+    return "summary";
+  }
 
   return "general";
 }
@@ -91,7 +120,7 @@ function detectModule(question, context, user) {
   }
 
   const text = normalizeArabicText(question);
-  return scoreModuleFromQuestion(text, allowed) || allowed[0] || null;
+  return scoreModuleFromQuestion(text, allowed);
 }
 
 function buildEntities(question) {
@@ -120,10 +149,10 @@ function buildBaseParsed({ question, context, user, body }) {
 
   return {
     mode: "unknown",
-    module: moduleName || "unknown",
-    domain: moduleName || "unknown",
+    module: moduleName || null,
+    domain: moduleName || null,
     intent: "unknown",
-    confidence: 0,
+    confidence: 0.5,
     raw_question: String(question || "").trim(),
     normalized_question: normalizeArabicText(question),
     entities: buildEntities(question),
@@ -137,12 +166,16 @@ function buildBaseParsed({ question, context, user, body }) {
       focus: null,
     },
     options: {
-      limit: limit || undefined,
+      limit,
       question_type: qType,
       response_type: "summary",
     },
     action_payload: null,
     auto_execute: Boolean(body?.auto_execute),
+    meta: {
+      source: "parser_v2",
+      has_context: Boolean(context),
+    },
   };
 }
 
@@ -208,10 +241,6 @@ function buildActionParsed(base, overrides = {}) {
   };
 }
 
-function matchAny(text, groups = []) {
-  return groups.some((group) => includesAny(text, group || []));
-}
-
 // =======================
 // Action detection
 // =======================
@@ -220,6 +249,8 @@ function detectAction(question, body = {}, base) {
 
   if (includesAny(text, SYNONYMS.actions?.createWorkOrder || [])) {
     return buildActionParsed(base, {
+      module: "maintenance",
+      domain: "maintenance",
       intent: "create_work_order",
       confidence: 0.95,
       action_payload: {
@@ -232,6 +263,8 @@ function detectAction(question, body = {}, base) {
 
   if (includesAny(text, SYNONYMS.actions?.createMaintenanceRequest || [])) {
     return buildActionParsed(base, {
+      module: "maintenance",
+      domain: "maintenance",
       intent: "create_maintenance_request",
       confidence: 0.95,
       action_payload: {
@@ -245,13 +278,13 @@ function detectAction(question, body = {}, base) {
   if (
     includesAny(text, SYNONYMS.actions?.createExpense || []) ||
     (text.includes("مصروف") &&
-      includesAny(text, ["وقود", "صيانه", "صيانة", "زيت", "كاوتش", "شراء", "نثريه", "نثرية"]))
+      (extractAmount(question) || extractExpenseType(question)))
   ) {
     return buildActionParsed(base, {
       module: "finance",
       domain: "finance",
       intent: "create_expense",
-      confidence: 0.94,
+      confidence: 0.93,
       action_payload: {
         amount: extractAmount(question),
         expense_type: extractExpenseType(question),
@@ -300,6 +333,8 @@ function parseFinance(question, base) {
     ])
   ) {
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_summary_compare",
       confidence: 0.95,
       metric: "total_expense",
@@ -334,6 +369,8 @@ function parseFinance(question, base) {
     (text.includes("الصرف") && includesAny(text, ["اجمالي", "كم", "كام"]))
   ) {
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_summary",
       confidence: 0.92,
       metric: "total_expense",
@@ -348,11 +385,14 @@ function parseFinance(question, base) {
   if (
     includesAny(text, SYNONYMS.finance?.byType || []) ||
     (text.includes("مصروفات") && includesAny(text, ["النوع", "بند"])) ||
-    (text.includes("مصروف") && includesAny(text, ["نوع", "بند", "اعلى", "اكثر", "اكبر"]))
+    (text.includes("مصروف") &&
+      includesAny(text, ["نوع", "بند", "اعلى", "اكثر", "اكبر"]))
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_by_type",
       confidence: 0.92,
       metric: "expense_amount",
@@ -367,7 +407,14 @@ function parseFinance(question, base) {
 
   if (
     (
-      includesAny(text, ["مركبه", "مركبات", "العربيه", "العربية", "سياره", "سيارات"]) &&
+      includesAny(text, [
+        "مركبه",
+        "مركبات",
+        "العربيه",
+        "العربية",
+        "سياره",
+        "سيارات",
+      ]) &&
       includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
       includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "انهي", "أي"])
     ) ||
@@ -388,6 +435,8 @@ function parseFinance(question, base) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_by_vehicle",
       confidence: 0.93,
       metric: "expense_amount",
@@ -417,6 +466,8 @@ function parseFinance(question, base) {
     ])
   ) {
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_by_payment_source",
       confidence: 0.92,
       metric: "expense_amount",
@@ -430,7 +481,14 @@ function parseFinance(question, base) {
 
   if (
     (
-      includesAny(text, ["مورد", "المورد", "موردين", "الموردين", "vendor", "supplier"]) &&
+      includesAny(text, [
+        "مورد",
+        "المورد",
+        "موردين",
+        "الموردين",
+        "vendor",
+        "supplier",
+      ]) &&
       includesAny(text, ["مصروف", "مصروفات", "صرف"]) &&
       includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "من"])
     ) ||
@@ -446,6 +504,8 @@ function parseFinance(question, base) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "top_vendors",
       confidence: 0.91,
       metric: "expense_amount",
@@ -474,6 +534,8 @@ function parseFinance(question, base) {
     ])
   ) {
     return withQuery(base, {
+      module: "finance",
+      domain: "finance",
       intent: "expense_approval_breakdown",
       confidence: 0.9,
       metric: "expense_amount",
@@ -502,6 +564,8 @@ function parseAr(question, base) {
     (text.includes("مديوني") && includesAny(text, ["العملاء", "عملاء"]))
   ) {
     return withQuery(base, {
+      module: "ar",
+      domain: "ar",
       intent: "outstanding_summary",
       confidence: 0.9,
       metric: "total_outstanding",
@@ -522,6 +586,8 @@ function parseAr(question, base) {
     (text.includes("متاخر") && includesAny(text, ["العملاء", "عملاء", "مستحقات"]))
   ) {
     return withQuery(base, {
+      module: "ar",
+      domain: "ar",
       intent: "outstanding_summary",
       confidence: 0.9,
       metric: "overdue_amount",
@@ -548,6 +614,8 @@ function parseAr(question, base) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "ar",
+      domain: "ar",
       intent: "top_debtors",
       confidence: 0.9,
       metric: "outstanding_amount",
@@ -580,6 +648,8 @@ function parseMaintenance(question, base) {
     )
   ) {
     return withQuery(base, {
+      module: "maintenance",
+      domain: "maintenance",
       intent: "open_work_orders",
       confidence: 0.9,
       metric: "open_work_orders_count",
@@ -595,13 +665,22 @@ function parseMaintenance(question, base) {
     includesAny(text, SYNONYMS.maintenance?.costByVehicle || []) ||
     (
       includesAny(text, ["تكلفه", "تكلفة", "صيانه", "صيانة"]) &&
-      includesAny(text, ["مركبه", "مركبات", "عربيه", "عربيات", "سياره", "سيارات"]) &&
+      includesAny(text, [
+        "مركبه",
+        "مركبات",
+        "عربيه",
+        "عربيات",
+        "سياره",
+        "سيارات",
+      ]) &&
       includesAny(text, ["اعلى", "اعلي", "اكثر", "اكبر", "top", "مين", "ايه", "انهي"])
     )
   ) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "maintenance",
+      domain: "maintenance",
       intent: "maintenance_cost_by_vehicle",
       confidence: 0.9,
       metric: "maintenance_cost",
@@ -636,6 +715,8 @@ function parseInventory(question, base) {
     const finalLimit = limit || (qType === "top" ? 5 : 1);
 
     return withQuery(base, {
+      module: "inventory",
+      domain: "inventory",
       intent: "top_issued_parts",
       confidence: 0.9,
       metric: "issued_qty",
@@ -658,6 +739,8 @@ function parseInventory(question, base) {
     const focus = includesAny(text, ["كم", "كام", "عدد"]) ? "count_only" : "list";
 
     return withQuery(base, {
+      module: "inventory",
+      domain: "inventory",
       intent: "low_stock_items",
       confidence: 0.9,
       metric: "low_stock_count",
@@ -969,7 +1052,16 @@ function parsePossessiveFollowUp(question, base, body = {}) {
     });
   }
 
-  if (includesAny(text, ["ربحه", "ربحها", "أرباحه", "ارباحه", "أرباحها", "ارباحها"])) {
+  if (
+    includesAny(text, [
+      "ربحه",
+      "ربحها",
+      "أرباحه",
+      "ارباحه",
+      "أرباحها",
+      "ارباحها",
+    ])
+  ) {
     return withUnsupported(base, {
       module: "finance",
       domain: "finance",
@@ -1329,13 +1421,25 @@ function parseAiQuestion({ question, context = null, user, body = {} }) {
   const tripsFollowup = parseTripsFollowup(question, base, body);
   if (tripsFollowup) return tripsFollowup;
 
+  if (!base.module) {
+    return {
+      ...base,
+      intent: "unknown",
+      confidence: 0.3,
+    };
+  }
+
   const byModule = parseByModule(base.module, question, base);
   if (byModule) return byModule;
 
   const fallback = parseAcrossModules(question, base);
   if (fallback) return fallback;
 
-  return base;
+  return {
+    ...base,
+    intent: "unknown",
+    confidence: 0.2,
+  };
 }
 
 module.exports = {

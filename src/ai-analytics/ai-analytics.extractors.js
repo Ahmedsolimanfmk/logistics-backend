@@ -2,6 +2,7 @@ function normalizeArabicText(text) {
   return String(text || "")
     .trim()
     .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, "")
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
     .replace(/ى/g, "ي")
@@ -15,11 +16,21 @@ function toRawText(value) {
   return String(value || "").trim();
 }
 
+function cleanExtractedHint(value) {
+  return String(value || "")
+    .trim()
+    .replace(
+      /\s+(خلال|هذا|هاذا|لهذا|في|الى|إلى|عن|بسبب|مع|للشهر|هذا الشهر|الشهر الحالي|هذا الاسبوع|هذا الأسبوع)\b.*$/i,
+      ""
+    )
+    .trim();
+}
+
 function matchFirst(raw, patterns = []) {
   for (const pattern of patterns) {
     const match = raw.match(pattern);
     if (match?.[1]) {
-      const value = String(match[1]).trim();
+      const value = cleanExtractedHint(match[1]);
       if (value) return value;
     }
   }
@@ -27,7 +38,7 @@ function matchFirst(raw, patterns = []) {
 }
 
 function extractAmount(question) {
-  const text = normalizeArabicText(question);
+  const text = normalizeArabicText(question).replace(/,/g, "");
   const match = text.match(/(\d+(?:\.\d+)?)\s*(جنيه|ج|egp)?/i);
 
   if (!match) return null;
@@ -85,14 +96,54 @@ function extractWorkOrderHint(question) {
 function extractExpenseType(question) {
   const text = normalizeArabicText(question);
 
-  if (text.includes("وقود")) return "FUEL";
-  if (text.includes("صيانه") || text.includes("صيانة")) return "MAINTENANCE";
-  if (text.includes("زيت")) return "OIL";
-  if (text.includes("كاوتش")) return "TIRES";
-  if (text.includes("شراء")) return "PURCHASE";
-  if (text.includes("نثريه") || text.includes("نثرية")) return "MISC";
+  if (text.includes("وقود") || text.includes("سولار") || text.includes("بنزين")) {
+    return "FUEL";
+  }
 
-  return null;
+  if (text.includes("صيانه") || text.includes("صيانة")) {
+    return "MAINTENANCE";
+  }
+
+  if (
+    text.includes("رسوم") ||
+    text.includes("بوابه") ||
+    text.includes("بوابة") ||
+    text.includes("toll")
+  ) {
+    return "TOLL";
+  }
+
+  if (text.includes("سائق") || text.includes("بدل سائق")) {
+    return "DRIVER_ALLOWANCE";
+  }
+
+  if (text.includes("تحميل")) {
+    return "LOADING";
+  }
+
+  if (text.includes("تنزيل") || text.includes("تفريغ")) {
+    return "UNLOADING";
+  }
+
+  if (
+    text.includes("قطع غيار") ||
+    text.includes("شراء قطع") ||
+    text.includes("كاوتش") ||
+    text.includes("زيت")
+  ) {
+    return "PARTS_PURCHASE";
+  }
+
+  if (
+    text.includes("طارئ") ||
+    text.includes("طارئه") ||
+    text.includes("طارئة") ||
+    text.includes("emergency")
+  ) {
+    return "EMERGENCY";
+  }
+
+  return "OTHER";
 }
 
 function extractTitle(question) {
@@ -100,22 +151,21 @@ function extractTitle(question) {
 
   const match =
     raw.match(/(?:يوجد|بسبب|بعنوان)\s+([^\n\r]+)/i) ||
-    raw.match(/(?:صيانة|صيانه)\s+([^\n\r]+)/i);
+    raw.match(/(?:عنوانه|اسمها|اسم المشكلة)\s+([^\n\r]+)/i);
 
   if (match?.[1]) {
     const value = String(match[1]).trim();
-    if (value) return value;
+    if (value) return value.slice(0, 160);
   }
 
-  return raw || null;
+  return raw ? raw.slice(0, 160) : null;
 }
 
 function extractVendorName(question) {
   const raw = toRawText(question);
 
   return matchFirst(raw, [
-    /(?:من مورد|من المورد|من)\s+([^\n\r,.]+)/i,
-    /(?:vendor|supplier)\s+([^\n\r,.]+)/i,
+    /(?:من مورد|من المورد|vendor|supplier)\s+([^\n\r,.]+)/i,
   ]);
 }
 
@@ -124,10 +174,17 @@ function extractPaidMethod(question) {
 
   if (text.includes("تحويل") || text.includes("بنكي")) return "BANK_TRANSFER";
   if (text.includes("كاش") || text.includes("نقد")) return "CASH";
-  if (text.includes("فوري")) return "FAWRY";
   if (text.includes("شيك")) return "CHEQUE";
+  if (
+    text.includes("بطاقه") ||
+    text.includes("بطاقة") ||
+    text.includes("فيزا") ||
+    text.includes("ماستر")
+  ) {
+    return "CARD";
+  }
 
-  return null;
+  return "OTHER";
 }
 
 module.exports = {

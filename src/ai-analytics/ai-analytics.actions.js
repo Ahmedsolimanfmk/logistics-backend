@@ -1,4 +1,4 @@
-const prisma = require("../prisma");
+const prisma = require("../maintenance/prisma");
 
 // =======================
 // Generic Helpers
@@ -87,27 +87,67 @@ function isTripFinancialLocked(financial_status) {
   return ["IN_REVIEW", "CLOSED"].includes(status);
 }
 
+function withCompany(where = {}, companyId) {
+  return {
+    ...where,
+    company_id: companyId,
+  };
+}
+
+function buildCompanyConnect(id, companyId) {
+  return id
+    ? {
+        connect: {
+          id,
+          company_id: companyId,
+        },
+      }
+    : undefined;
+}
+
+function requireCompanyId(companyId, payload) {
+  if (!companyId) {
+    return buildError("companyId is required", payload);
+  }
+  return null;
+}
+
 // =======================
 // Permission Helpers
 // =======================
-async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId }) {
+async function assertVehicleInSupervisorPortfolio({
+  companyId,
+  vehicle_id,
+  userId,
+}) {
   const row = await prisma.vehicle_portfolio.findFirst({
-    where: {
-      vehicle_id,
-      field_supervisor_id: userId,
-      is_active: true,
-    },
+    where: withCompany(
+      {
+        vehicle_id,
+        field_supervisor_id: userId,
+        is_active: true,
+      },
+      companyId
+    ),
     select: { id: true },
   });
 
   return !!row;
 }
 
-async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
-  const where = {
-    trip_id,
-    field_supervisor_id: userId,
-  };
+async function assertTripBelongsToSupervisor({
+  companyId,
+  trip_id,
+  userId,
+  vehicle_id,
+}) {
+  const where = withCompany(
+    {
+      trip_id,
+      field_supervisor_id: userId,
+    },
+    companyId
+  );
 
   if (vehicle_id) {
     where.vehicle_id = vehicle_id;
@@ -122,7 +162,12 @@ async function assertTripBelongsToSupervisor({ trip_id, userId, vehicle_id }) {
   return !!row;
 }
 
-async function assertVehicleAccessForUser({ user, vehicleId, payload }) {
+async function assertVehicleAccessForUser({
+  companyId,
+  user,
+  vehicleId,
+  payload,
+}) {
   const userId = getUserId(user);
   const role = user?.role || null;
 
@@ -135,6 +180,7 @@ async function assertVehicleAccessForUser({ user, vehicleId, payload }) {
   }
 
   const allowed = await assertVehicleInSupervisorPortfolio({
+    companyId,
     vehicle_id: vehicleId,
     userId,
   });
@@ -149,19 +195,20 @@ async function assertVehicleAccessForUser({ user, vehicleId, payload }) {
 // =======================
 // Resolvers
 // =======================
-async function resolveVehicleByHint(vehicleHint) {
+async function resolveVehicleByHint({ companyId, vehicleHint }) {
   const hint = cleanText(vehicleHint);
   if (!hint) return null;
 
   if (isUuid(hint)) {
-    const byId = await prisma.vehicles.findUnique({
-      where: { id: hint },
+    const byId = await prisma.vehicles.findFirst({
+      where: withCompany({ id: hint }, companyId),
       select: {
         id: true,
         fleet_no: true,
         plate_no: true,
         display_name: true,
         status: true,
+        company_id: true,
       },
     });
 
@@ -171,6 +218,9 @@ async function resolveVehicleByHint(vehicleHint) {
   const normalizedHint = normalizeText(hint);
 
   const candidates = await prisma.vehicles.findMany({
+    where: {
+      company_id: companyId,
+    },
     take: 50,
     select: {
       id: true,
@@ -178,6 +228,7 @@ async function resolveVehicleByHint(vehicleHint) {
       plate_no: true,
       display_name: true,
       status: true,
+      company_id: true,
     },
   });
 
@@ -197,9 +248,9 @@ async function resolveVehicleByHint(vehicleHint) {
       if (plate && plate.includes(normalizedHint)) score = Math.max(score, 80);
       if (display && display.includes(normalizedHint)) score = Math.max(score, 80);
 
-      if (normalizedHint.includes(fleet) && fleet) score = Math.max(score, 70);
-      if (normalizedHint.includes(plate) && plate) score = Math.max(score, 70);
-      if (normalizedHint.includes(display) && display) score = Math.max(score, 70);
+      if (fleet && normalizedHint.includes(fleet)) score = Math.max(score, 70);
+      if (plate && normalizedHint.includes(plate)) score = Math.max(score, 70);
+      if (display && normalizedHint.includes(display)) score = Math.max(score, 70);
 
       return { vehicle, score };
     })
@@ -209,16 +260,17 @@ async function resolveVehicleByHint(vehicleHint) {
   return scored[0]?.vehicle || null;
 }
 
-async function resolveTripByHint(tripHint) {
+async function resolveTripByHint({ companyId, tripHint }) {
   const hint = cleanText(tripHint);
   if (!hint) return null;
 
   if (isUuid(hint)) {
-    const byId = await prisma.trips.findUnique({
-      where: { id: hint },
+    const byId = await prisma.trips.findFirst({
+      where: withCompany({ id: hint }, companyId),
       select: {
         id: true,
         financial_status: true,
+        company_id: true,
       },
     });
 
@@ -231,18 +283,22 @@ async function resolveTripByHint(tripHint) {
   }
 
   const candidates = await prisma.trips.findMany({
+    where: {
+      company_id: companyId,
+    },
     take: 20,
     orderBy: { created_at: "desc" },
     select: {
       id: true,
       financial_status: true,
+      company_id: true,
     },
   });
 
   return candidates.find((item) => String(item.id).includes(String(hint))) || null;
 }
 
-async function resolveWorkOrderByHint(workOrderHint) {
+async function resolveWorkOrderByHint({ companyId, workOrderHint }) {
   const hint = cleanText(workOrderHint);
   if (!hint) return null;
 
@@ -250,53 +306,60 @@ async function resolveWorkOrderByHint(workOrderHint) {
     return null;
   }
 
-  return prisma.maintenance_work_orders.findUnique({
-    where: { id: hint },
+  return prisma.maintenance_work_orders.findFirst({
+    where: withCompany({ id: hint }, companyId),
     select: {
       id: true,
       vehicle_id: true,
       status: true,
+      company_id: true,
     },
   });
 }
 
-async function resolveOpenAdvanceForSupervisor(userId) {
+async function resolveOpenAdvanceForSupervisor({ companyId, userId }) {
   return prisma.cash_advances.findFirst({
-    where: {
-      field_supervisor_id: userId,
-      status: "OPEN",
-    },
+    where: withCompany(
+      {
+        field_supervisor_id: userId,
+        status: "OPEN",
+      },
+      companyId
+    ),
     orderBy: { created_at: "desc" },
     select: {
       id: true,
       amount: true,
       status: true,
       field_supervisor_id: true,
+      company_id: true,
     },
   });
 }
 
-async function resolveTripById(tripId) {
+async function resolveTripById({ companyId, tripId }) {
   if (!tripId) return null;
 
-  return prisma.trips.findUnique({
-    where: { id: tripId },
+  return prisma.trips.findFirst({
+    where: withCompany({ id: tripId }, companyId),
     select: {
       id: true,
       financial_status: true,
+      company_id: true,
     },
   });
 }
 
-async function resolveAdvanceById(advanceId) {
+async function resolveAdvanceById({ companyId, advanceId }) {
   if (!advanceId) return null;
 
-  return prisma.cash_advances.findUnique({
-    where: { id: advanceId },
+  return prisma.cash_advances.findFirst({
+    where: withCompany({ id: advanceId }, companyId),
     select: {
       id: true,
       status: true,
       field_supervisor_id: true,
+      company_id: true,
     },
   });
 }
@@ -304,18 +367,26 @@ async function resolveAdvanceById(advanceId) {
 // =======================
 // Expense Helpers
 // =======================
-async function resolveExpenseReferences(payload) {
+async function resolveExpenseReferences({ companyId, payload }) {
   const vehicleHint = cleanText(payload?.vehicle_hint || "");
   const tripHint = cleanText(payload?.trip_hint || "");
   const workOrderHint = cleanText(payload?.work_order_hint || "");
 
-  const vehicle = vehicleHint ? await resolveVehicleByHint(vehicleHint) : null;
-  const trip = tripHint ? await resolveTripByHint(tripHint) : null;
+  const vehicle = vehicleHint
+    ? await resolveVehicleByHint({ companyId, vehicleHint })
+    : null;
+
+  const trip = tripHint
+    ? await resolveTripByHint({ companyId, tripHint })
+    : null;
 
   const workOrder = workOrderHint
-    ? await resolveWorkOrderByHint(workOrderHint)
+    ? await resolveWorkOrderByHint({ companyId, workOrderHint })
     : payload?.maintenance_work_order_id
-    ? await resolveWorkOrderByHint(payload.maintenance_work_order_id)
+    ? await resolveWorkOrderByHint({
+        companyId,
+        workOrderHint: payload.maintenance_work_order_id,
+      })
     : null;
 
   const finalTripId =
@@ -341,10 +412,20 @@ async function resolveExpenseReferences(payload) {
   };
 }
 
-async function validateTripForExpense({ trip, finalTripId, payload }) {
+async function validateTripForExpense({
+  companyId,
+  trip,
+  finalTripId,
+  payload,
+}) {
   if (!finalTripId) return null;
 
-  const tripRow = trip || (await resolveTripById(finalTripId));
+  const tripRow =
+    trip ||
+    (await resolveTripById({
+      companyId,
+      tripId: finalTripId,
+    }));
 
   if (!tripRow) {
     return buildError("Invalid trip reference", payload);
@@ -361,6 +442,7 @@ async function validateTripForExpense({ trip, finalTripId, payload }) {
 }
 
 function buildCompanyExpenseCreateData({
+  companyId,
   userId,
   payload,
   expenseType,
@@ -371,13 +453,12 @@ function buildCompanyExpenseCreateData({
   finalWorkOrderId,
 }) {
   return {
+    company_id: companyId,
     payment_source: "COMPANY",
 
-    trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
-    vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
-    maintenance_work_orders: finalWorkOrderId
-      ? { connect: { id: finalWorkOrderId } }
-      : undefined,
+    trips: buildCompanyConnect(finalTripId, companyId),
+    vehicles: buildCompanyConnect(finalVehicleId, companyId),
+    maintenance_work_orders: buildCompanyConnect(finalWorkOrderId, companyId),
 
     expense_type: expenseType,
     amount,
@@ -408,6 +489,7 @@ function buildCompanyExpenseCreateData({
 }
 
 function buildAdvanceExpenseCreateData({
+  companyId,
   userId,
   payload,
   cashAdvanceId,
@@ -419,14 +501,13 @@ function buildAdvanceExpenseCreateData({
   finalWorkOrderId,
 }) {
   return {
+    company_id: companyId,
     payment_source: "ADVANCE",
-    cash_advances: { connect: { id: cashAdvanceId } },
+    cash_advances: buildCompanyConnect(cashAdvanceId, companyId),
 
-    trips: finalTripId ? { connect: { id: finalTripId } } : undefined,
-    vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
-    maintenance_work_orders: finalWorkOrderId
-      ? { connect: { id: finalWorkOrderId } }
-      : undefined,
+    trips: buildCompanyConnect(finalTripId, companyId),
+    vehicles: buildCompanyConnect(finalVehicleId, companyId),
+    maintenance_work_orders: buildCompanyConnect(finalWorkOrderId, companyId),
 
     expense_type: expenseType,
     amount,
@@ -457,6 +538,7 @@ function buildExpenseResponseData({
 }
 
 async function validateAdvanceExpensePermissions({
+  companyId,
   userId,
   advance,
   finalTripId,
@@ -476,6 +558,7 @@ async function validateAdvanceExpensePermissions({
 
   if (finalTripId) {
     const allowedTrip = await assertTripBelongsToSupervisor({
+      companyId,
       trip_id: finalTripId,
       userId,
       vehicle_id: finalVehicleId || null,
@@ -488,6 +571,7 @@ async function validateAdvanceExpensePermissions({
 
   if (!finalTripId && finalVehicleId) {
     const allowedVehicle = await assertVehicleInSupervisorPortfolio({
+      companyId,
       vehicle_id: finalVehicleId,
       userId,
     });
@@ -506,7 +590,10 @@ async function validateAdvanceExpensePermissions({
 // =======================
 // REAL Executor: Create Maintenance Request
 // =======================
-async function createMaintenanceRequestExecutor({ user, payload }) {
+async function createMaintenanceRequestExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
   const userId = getUserId(user);
   if (!userId) {
     return buildError("Unauthorized", payload);
@@ -518,12 +605,17 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
     payload?.title || payload?.problem_title || payload?.description
   );
 
-  const vehicle = await resolveVehicleByHint(vehicleHint);
+  const vehicle = await resolveVehicleByHint({
+    companyId,
+    vehicleHint,
+  });
+
   if (!vehicle) {
     return buildError("Vehicle not found from provided hint", payload);
   }
 
   const accessError = await assertVehicleAccessForUser({
+    companyId,
     user,
     vehicleId: vehicle.id,
     payload,
@@ -537,6 +629,7 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
 
   const request = await prisma.maintenance_requests.create({
     data: {
+      company_id: companyId,
       vehicle_id: vehicle.id,
       problem_title: problemTitle || "طلب صيانة",
       problem_description: description || null,
@@ -567,7 +660,10 @@ async function createMaintenanceRequestExecutor({ user, payload }) {
 // =======================
 // REAL Executor: Create Work Order
 // =======================
-async function createWorkOrderExecutor({ user, payload }) {
+async function createWorkOrderExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
   const userId = getUserId(user);
   if (!userId) {
     return buildError("Unauthorized", payload);
@@ -577,12 +673,17 @@ async function createWorkOrderExecutor({ user, payload }) {
   const title = cleanText(payload?.title || "أعمال صيانة");
   const notes = cleanText(payload?.notes || title);
 
-  const vehicle = await resolveVehicleByHint(vehicleHint);
+  const vehicle = await resolveVehicleByHint({
+    companyId,
+    vehicleHint,
+  });
+
   if (!vehicle) {
     return buildError("Vehicle not found from provided hint", payload);
   }
 
   const accessError = await assertVehicleAccessForUser({
+    companyId,
     user,
     vehicleId: vehicle.id,
     payload,
@@ -597,6 +698,7 @@ async function createWorkOrderExecutor({ user, payload }) {
   const workOrder = await prisma.$transaction(async (tx) => {
     const createdWorkOrder = await tx.maintenance_work_orders.create({
       data: {
+        company_id: companyId,
         vehicle_id: vehicle.id,
         status: "OPEN",
         type: "CORRECTIVE",
@@ -619,8 +721,8 @@ async function createWorkOrderExecutor({ user, payload }) {
       },
     });
 
-    await tx.vehicles.update({
-      where: { id: vehicle.id },
+    await tx.vehicles.updateMany({
+      where: withCompany({ id: vehicle.id }, companyId),
       data: {
         status: "MAINTENANCE",
         updated_at: now,
@@ -630,6 +732,7 @@ async function createWorkOrderExecutor({ user, payload }) {
     if (tx.maintenance_work_order_events?.create) {
       await tx.maintenance_work_order_events.create({
         data: {
+          company_id: companyId,
           work_order_id: createdWorkOrder.id,
           event_type: "CREATE",
           actor_id: userId,
@@ -652,7 +755,10 @@ async function createWorkOrderExecutor({ user, payload }) {
 // =======================
 // REAL Executor: Create Expense
 // =======================
-async function createExpenseExecutor({ user, payload }) {
+async function createExpenseExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
   const userId = getUserId(user);
   if (!userId) {
     return buildError("Unauthorized", payload);
@@ -683,9 +789,13 @@ async function createExpenseExecutor({ user, payload }) {
     finalTripId,
     finalWorkOrderId,
     finalVehicleId,
-  } = await resolveExpenseReferences(payload);
+  } = await resolveExpenseReferences({
+    companyId,
+    payload,
+  });
 
   const tripValidationError = await validateTripForExpense({
+    companyId,
     trip,
     finalTripId,
     payload,
@@ -705,6 +815,7 @@ async function createExpenseExecutor({ user, payload }) {
 
     const created = await prisma.cash_expenses.create({
       data: buildCompanyExpenseCreateData({
+        companyId,
         userId,
         payload,
         expenseType,
@@ -716,6 +827,7 @@ async function createExpenseExecutor({ user, payload }) {
       }),
       select: {
         id: true,
+        company_id: true,
         payment_source: true,
         expense_type: true,
         amount: true,
@@ -741,7 +853,10 @@ async function createExpenseExecutor({ user, payload }) {
   let cashAdvanceId = payload?.cash_advance_id || null;
 
   if (!cashAdvanceId) {
-    const openAdvance = await resolveOpenAdvanceForSupervisor(userId);
+    const openAdvance = await resolveOpenAdvanceForSupervisor({
+      companyId,
+      userId,
+    });
 
     if (!openAdvance) {
       return buildError(
@@ -757,9 +872,13 @@ async function createExpenseExecutor({ user, payload }) {
     return buildError("Invalid cash_advance_id", payload);
   }
 
-  const advance = await resolveAdvanceById(cashAdvanceId);
+  const advance = await resolveAdvanceById({
+    companyId,
+    advanceId: cashAdvanceId,
+  });
 
   const advancePermissionError = await validateAdvanceExpensePermissions({
+    companyId,
     userId,
     advance,
     finalTripId,
@@ -773,6 +892,7 @@ async function createExpenseExecutor({ user, payload }) {
 
   const created = await prisma.cash_expenses.create({
     data: buildAdvanceExpenseCreateData({
+      companyId,
       userId,
       payload,
       cashAdvanceId,
@@ -785,6 +905,7 @@ async function createExpenseExecutor({ user, payload }) {
     }),
     select: {
       id: true,
+      company_id: true,
       payment_source: true,
       cash_advance_id: true,
       expense_type: true,
@@ -798,19 +919,22 @@ async function createExpenseExecutor({ user, payload }) {
     },
   });
 
-  return buildSuccess("createExpenseExecutor", buildExpenseResponseData({
-    expense: created,
-    vehicle,
-    advance,
-    finalTripId,
-    finalWorkOrderId,
-  }));
+  return buildSuccess(
+    "createExpenseExecutor",
+    buildExpenseResponseData({
+      expense: created,
+      vehicle,
+      advance,
+      finalTripId,
+      finalWorkOrderId,
+    })
+  );
 }
 
 // =======================
 // Dispatcher
 // =======================
-async function runAiExecutor({ action, user, payload }) {
+async function runAiExecutor({ action, companyId, user, payload }) {
   const executors = {
     create_maintenance_request: createMaintenanceRequestExecutor,
     create_work_order: createWorkOrderExecutor,
@@ -823,12 +947,17 @@ async function runAiExecutor({ action, user, payload }) {
     return buildError(`Unsupported executor action: ${action}`, payload);
   }
 
-  return executor({ user, payload });
+  return executor({
+    companyId,
+    user,
+    payload,
+  });
 }
 
-async function executeAiAction({ interpreted, user }) {
+async function executeAiAction({ interpreted, companyId, user }) {
   return runAiExecutor({
     action: interpreted?.action,
+    companyId,
     user,
     payload: interpreted?.payload || {},
   });

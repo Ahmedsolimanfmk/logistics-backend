@@ -91,11 +91,11 @@ function paymentSourceLabel(v) {
 function approvalStatusLabel(v) {
   const s = String(v || "").toUpperCase();
 
-  if (s === "APPROVED") return "معتمد";
   if (s === "PENDING") return "معلق";
+  if (s === "APPROVED") return "معتمد";
   if (s === "REJECTED") return "مرفوض";
-  if (s === "REAPPROVED") return "معاد اعتماده";
-  if (s === "APPEALED") return "تم التظلم عليه";
+  if (s === "APPEALED") return "تم التظلم";
+  if (s === "RESOLVED") return "تمت المعالجة";
 
   return v || "غير محدد";
 }
@@ -345,9 +345,7 @@ function buildProfitAnswer(parsed, result) {
     ]) || [];
 
   const reasoning =
-    pickValue(result, [
-      ["reasoning"],
-    ]) || null;
+    pickValue(result, [["reasoning"]]) || null;
 
   const clientLabel =
     parsed?.entities?.client_hint ||
