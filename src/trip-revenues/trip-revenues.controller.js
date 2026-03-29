@@ -1,85 +1,140 @@
-const express = require("express");
-const { authRequired } = require("../auth/jwt.middleware");
-const { requireCompany } = require("../auth/company.middleware");
-const controller = require("./trip-revenues.controller");
-
-const router = express.Router();
+const service = require("./trip-revenues.service");
 
 // =======================
-// Guard helper
+// Helpers
 // =======================
-function mustBeFn(name, fn) {
-  if (typeof fn !== "function") {
-    throw new TypeError(
-      `[trip-revenues.routes] Handler "${name}" is not a function. Check exports.`
-    );
-  }
-  return fn;
+function getUserId(req) {
+return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
 }
 
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
-
-function requireUuidParam(paramName = "tripId") {
-  return (req, res, next) => {
-    const v = req.params?.[paramName];
-    if (!isUuid(v)) {
-      return res.status(404).json({ message: "Not found" });
-    }
-    return next();
-  };
+function handleError(res, err) {
+const status = err?.statusCode || 500;
+return res.status(status).json({
+message: err?.message || "Internal server error",
+});
 }
 
 // =======================
-// Bind handlers safely
+// GET current revenue
 // =======================
-const getByTripId = mustBeFn("getByTripId", controller.getByTripId);
-const getRevenueHistoryByTripId = mustBeFn(
-  "getRevenueHistoryByTripId",
-  controller.getRevenueHistoryByTripId
-);
-const createOrUpdateRevenue = mustBeFn(
-  "createOrUpdateRevenue",
-  controller.createOrUpdateRevenue
-);
-const approveCurrentRevenue = mustBeFn(
-  "approveCurrentRevenue",
-  controller.approveCurrentRevenue
-);
-const getTripProfitability = mustBeFn(
-  "getTripProfitability",
-  controller.getTripProfitability
-);
+async function getByTripId(req, res) {
+try {
+const companyId = req.companyId;
+const tripId = req.params.tripId;
+
+```
+const data = await service.getByTripId(tripId, companyId);
+
+return res.json(data);
+```
+
+} catch (err) {
+return handleError(res, err);
+}
+}
 
 // =======================
-// Routes
+// GET history
 // =======================
-router.use(authRequired);
-router.use(requireCompany);
+async function getRevenueHistoryByTripId(req, res) {
+try {
+const companyId = req.companyId;
+const tripId = req.params.tripId;
 
-// Revenue by trip
-router.get("/:tripId/revenue", requireUuidParam("tripId"), getByTripId);
-router.get(
-  "/:tripId/revenue/history",
-  requireUuidParam("tripId"),
-  getRevenueHistoryByTripId
-);
-router.put("/:tripId/revenue", requireUuidParam("tripId"), createOrUpdateRevenue);
-router.post(
-  "/:tripId/revenue/approve",
-  requireUuidParam("tripId"),
-  approveCurrentRevenue
+```
+const data = await service.getRevenueHistoryByTripId(
+  tripId,
+  companyId
 );
 
-// Profitability by trip
-router.get(
-  "/:tripId/profitability",
-  requireUuidParam("tripId"),
-  getTripProfitability
+return res.json({ items: data });
+```
+
+} catch (err) {
+return handleError(res, err);
+}
+}
+
+// =======================
+// CREATE / UPDATE
+// =======================
+async function createOrUpdateRevenue(req, res) {
+try {
+const companyId = req.companyId;
+const tripId = req.params.tripId;
+
+```
+const result = await service.createOrUpdateRevenue({
+  companyId,
+  trip_id: tripId,
+  amount: req.body?.amount,
+  currency: req.body?.currency,
+  source: req.body?.source,
+  contract_id: req.body?.contract_id,
+  invoice_id: req.body?.invoice_id,
+  pricing_rule_id: req.body?.pricing_rule_id,
+  notes: req.body?.notes,
+  entered_by: getUserId(req),
+});
+
+return res.json(result);
+```
+
+} catch (err) {
+return handleError(res, err);
+}
+}
+
+// =======================
+// APPROVE
+// =======================
+async function approveCurrentRevenue(req, res) {
+try {
+const companyId = req.companyId;
+const tripId = req.params.tripId;
+
+```
+const result = await service.approveCurrentRevenue({
+  companyId,
+  trip_id: tripId,
+  approved_by: getUserId(req),
+  approval_notes: req.body?.approval_notes,
+});
+
+return res.json(result);
+```
+
+} catch (err) {
+return handleError(res, err);
+}
+}
+
+// =======================
+// PROFITABILITY
+// =======================
+async function getTripProfitability(req, res) {
+try {
+const companyId = req.companyId;
+const tripId = req.params.tripId;
+
+```
+const data = await service.getTripProfitability(
+  tripId,
+  companyId
 );
 
-module.exports = router;
+return res.json(data);
+```
+
+} catch (err) {
+return handleError(res, err);
+}
+}
+
+module.exports = {
+getByTripId,
+getRevenueHistoryByTripId,
+createOrUpdateRevenue,
+approveCurrentRevenue,
+getTripProfitability,
+};
