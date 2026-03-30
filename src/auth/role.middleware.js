@@ -1,5 +1,3 @@
-// src/auth/role.middleware.js
-
 const { getUserRole } = require("./access");
 
 function requireRole(...allowedRoles) {
@@ -8,7 +6,12 @@ function requireRole(...allowedRoles) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const current = getUserRole(req);
+    const current = String(getUserRole(req)).toUpperCase();
+
+    // ✅ SUPER ADMIN BYPASS
+    if (current === "SUPER_ADMIN") {
+      return next();
+    }
 
     if (!allowedRoles.map((x) => String(x).toUpperCase()).includes(current)) {
       return res.status(403).json({

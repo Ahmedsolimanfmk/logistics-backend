@@ -34,6 +34,29 @@ function getEffectiveSessionSnapshot({ body, persistedSnapshot }) {
   return body?.session_snapshot || persistedSnapshot || null;
 }
 
+async function persistAssistantResponse({
+  companyId,
+  conversationId,
+  parsed,
+  response,
+}) {
+  await aiPersistenceService.createAssistantMessage({
+    companyId,
+    conversationId,
+    content: buildPersistableAssistantText(response),
+    parsed: response?.parsed || parsed || null,
+    responseJson: {
+      ...response,
+      conversation_id: conversationId,
+    },
+  });
+
+  return {
+    ...response,
+    conversation_id: conversationId,
+  };
+}
+
 async function queryAiAnalytics({ companyId, user, body }) {
   if (!companyId) {
     const err = new Error("companyId is required");
@@ -103,21 +126,12 @@ async function queryAiAnalytics({ companyId, user, body }) {
       },
     });
 
-    await aiPersistenceService.createAssistantMessage({
+    return persistAssistantResponse({
       companyId,
       conversationId: conversation.id,
-      content: buildPersistableAssistantText(response),
       parsed,
-      responseJson: {
-        ...response,
-        conversation_id: conversation.id,
-      },
+      response,
     });
-
-    return {
-      ...response,
-      conversation_id: conversation.id,
-    };
   }
 
   if (!parsed || parsed.mode === "unknown" || parsed.intent === "unknown") {
@@ -129,21 +143,12 @@ async function queryAiAnalytics({ companyId, user, body }) {
 
     const response = entityFollowUpResponse || buildUnknownResponse(parsed);
 
-    await aiPersistenceService.createAssistantMessage({
+    return persistAssistantResponse({
       companyId,
       conversationId: conversation.id,
-      content: buildPersistableAssistantText(response),
       parsed,
-      responseJson: {
-        ...response,
-        conversation_id: conversation.id,
-      },
+      response,
     });
-
-    return {
-      ...response,
-      conversation_id: conversation.id,
-    };
   }
 
   if (parsed.mode === "reference_followup") {
@@ -153,23 +158,35 @@ async function queryAiAnalytics({ companyId, user, body }) {
         snapshot: effectiveSnapshot,
       });
 
-      await aiPersistenceService.createAssistantMessage({
+      return persistAssistantResponse({
         companyId,
         conversationId: conversation.id,
-        content: buildPersistableAssistantText(response),
         parsed,
-        responseJson: {
-          ...response,
-          conversation_id: conversation.id,
-        },
+        response,
       });
-
-      return {
-        ...response,
-        conversation_id: conversation.id,
-      };
     }
 
+    // أولوية أولى: entity layer
+    // ده بيغطي:
+    // - الأول / الثاني من last_entities
+    // - هو / هي / هذا / هذه / نفس العميل ...
+    // - تحديث primary_entity وentity_context بشكل أفضل
+    const entityFollowUpResponse = tryEntityFollowUp({
+      parsed,
+      question,
+      snapshot: effectiveSnapshot,
+    });
+
+    if (entityFollowUpResponse) {
+      return persistAssistantResponse({
+        companyId,
+        conversationId: conversation.id,
+        parsed: entityFollowUpResponse?.parsed || parsed,
+        response: entityFollowUpResponse,
+      });
+    }
+
+    // fallback backward-compatible للمسار القديم
     const referenceResult = resolveReferenceFollowUp({
       parsed,
       body: {
@@ -183,41 +200,23 @@ async function queryAiAnalytics({ companyId, user, body }) {
       referenceResult,
     });
 
-    await aiPersistenceService.createAssistantMessage({
+    return persistAssistantResponse({
       companyId,
       conversationId: conversation.id,
-      content: buildPersistableAssistantText(response),
       parsed,
-      responseJson: {
-        ...response,
-        conversation_id: conversation.id,
-      },
+      response,
     });
-
-    return {
-      ...response,
-      conversation_id: conversation.id,
-    };
   }
 
   if (parsed.mode === "action" && !body?.auto_execute) {
     const response = buildActionPreviewResponse({ parsed });
 
-    await aiPersistenceService.createAssistantMessage({
+    return persistAssistantResponse({
       companyId,
       conversationId: conversation.id,
-      content: buildPersistableAssistantText(response),
       parsed,
-      responseJson: {
-        ...response,
-        conversation_id: conversation.id,
-      },
+      response,
     });
-
-    return {
-      ...response,
-      conversation_id: conversation.id,
-    };
   }
 
   if (parsed.mode === "action") {
