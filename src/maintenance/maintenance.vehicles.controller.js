@@ -45,7 +45,6 @@ async function listVehicleOptions(req, res) {
           plate_no: true,
           display_name: true,
           status: true,
-          is_active: true,
         },
       });
 

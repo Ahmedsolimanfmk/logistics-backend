@@ -117,7 +117,6 @@ async function getSupervisorVehicles(req, res) {
         plate_no: true,
         display_name: true,
         status: true,
-        is_active: true,
         supervisor_id: true,
         created_at: true,
       },
