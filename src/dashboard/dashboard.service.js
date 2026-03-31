@@ -494,7 +494,7 @@ exports.getSummary = async (user, filters = {}) => {
         ON e.cash_advance_id = a.id
        AND e.company_id = ${companyId}::uuid
       WHERE a.company_id = ${companyId}::uuid
-        AND a.status IN ('OPEN', 'IN_REVIEW')
+        AND a.status = 'OPEN'
         AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
       GROUP BY a.id, a.amount, a.created_at, a.field_supervisor_id;
     `;
@@ -524,7 +524,7 @@ exports.getSummary = async (user, filters = {}) => {
     const advancesOpenTooLong = await prisma.cash_advances.count({
       where: {
         company_id: companyId,
-        status: { in: ["OPEN", "IN_REVIEW"] },
+        status: "OPEN",
         created_at: { lt: advance7d },
         ...(isSupervisor ? { field_supervisor_id: userId } : {}),
       },
@@ -588,7 +588,7 @@ exports.getSummary = async (user, filters = {}) => {
         ON e.cash_advance_id = a.id
        AND e.company_id = ${companyId}::uuid
       WHERE a.company_id = ${companyId}::uuid
-        AND a.status IN ('OPEN', 'IN_REVIEW')
+        ANDAND a.status = 'OPEN'
         AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
       GROUP BY a.id, a.created_at, a.amount, a.status, a.field_supervisor_id
       ORDER BY a.created_at ASC
