@@ -240,7 +240,7 @@ async function getActiveTrips({ companyId, range, scope, limit = 10, query = {} 
       scheduled_at: true,
       created_at: true,
       financial_status: true,
-      clients: {
+      client: {
         select: {
           id: true,
           name: true,
@@ -279,7 +279,7 @@ async function getActiveTrips({ companyId, range, scope, limit = 10, query = {} 
         financial_status: row.financial_status,
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
-        client_name: row.clients?.name || "عميل غير معروف",
+        client_name: row.client?.name || "عميل غير معروف",
         site_name: getSiteDisplayName(row),
       })),
     },
@@ -320,7 +320,7 @@ async function getTripsNeedingFinancialClosure({
       financial_status: true,
       scheduled_at: true,
       created_at: true,
-      clients: {
+      client: {
         select: {
           id: true,
           name: true,
@@ -361,7 +361,7 @@ async function getTripsNeedingFinancialClosure({
         financial_status: row.financial_status,
         scheduled_at: row.scheduled_at,
         created_at: row.created_at,
-        client_name: row.clients?.name || "عميل غير معروف",
+        client_name: row.client?.name || "عميل غير معروف",
         site_name: getSiteDisplayName(row),
       })),
       total_need_financial_closure: rows.length,

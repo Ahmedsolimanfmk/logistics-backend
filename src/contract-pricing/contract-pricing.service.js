@@ -1449,7 +1449,7 @@ async function resolveTripPrice({ tripId, contractId = null, company_id }) {
     trip: {
       id: trip.id,
       client_id: trip.client_id,
-      client_name: trip.clients?.name || null,
+      client_name: trip.client?.name|| null,
       contract_id: contract.id,
       contract_no: contract.contract_no || null,
       route_id: trip.route_id || null,
