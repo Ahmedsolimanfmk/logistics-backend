@@ -112,7 +112,6 @@ async function getComplianceAlerts(req, res, next) {
           plate_no: true,
           display_name: true,
           status: true,
-          is_active: true,
           supervisor_id: true,
           license_no: true,
           license_issue_date: true,

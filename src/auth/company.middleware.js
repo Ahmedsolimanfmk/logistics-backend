@@ -1,15 +1,15 @@
 const prisma = require("../prisma");
+const { getUserRole } = require("./access");
 
 async function requireCompany(req, res, next) {
   try {
     const userId = req.user?.sub || req.user?.id || null;
-    const userRole = String(req.user?.role || "").toUpperCase();
+    const userRole = String(getUserRole(req) || "").toUpperCase();
 
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // ✅ SUPER ADMIN BYPASS
     if (userRole === "SUPER_ADMIN") {
       const defaultCompany = await prisma.companies.findFirst({
         where: { code: "COMP-DEFAULT" },
@@ -28,7 +28,6 @@ async function requireCompany(req, res, next) {
       return next();
     }
 
-    // 👇 السلوك الطبيعي
     const membership = await prisma.company_users.findFirst({
       where: {
         user_id: userId,

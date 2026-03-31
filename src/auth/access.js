@@ -1,4 +1,4 @@
-const { ROLES } = require("./roles");
+const { ROLES, PLATFORM_ROLES } = require("./roles");
 
 function roleUpper(role) {
   return String(role || "").trim().toUpperCase();
@@ -11,6 +11,15 @@ function getUserId(reqOrUser) {
 
 function getUserRole(reqOrUser) {
   const src = reqOrUser?.user ? reqOrUser.user : reqOrUser;
+
+  const effectiveRole = roleUpper(src?.effective_role);
+  if (effectiveRole) return effectiveRole;
+
+  const platformRole = roleUpper(src?.platform_role);
+  if (platformRole === PLATFORM_ROLES.SUPER_ADMIN) {
+    return PLATFORM_ROLES.SUPER_ADMIN;
+  }
+
   return roleUpper(src?.role);
 }
 
@@ -19,48 +28,86 @@ function hasRole(userOrReq, ...allowedRoles) {
   return allowedRoles.map(roleUpper).includes(role);
 }
 
+function isSuperAdmin(userOrReq) {
+  return hasRole(userOrReq, PLATFORM_ROLES.SUPER_ADMIN);
+}
+
 function isAdmin(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN);
+  return hasRole(userOrReq, ROLES.ADMIN, PLATFORM_ROLES.SUPER_ADMIN);
 }
 
 function isAdminOrHR(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.HR);
+  return hasRole(userOrReq, ROLES.ADMIN, ROLES.HR, PLATFORM_ROLES.SUPER_ADMIN);
 }
 
 function isAdminOrAccountant(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.ACCOUNTANT);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.ACCOUNTANT,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function isAdminOrStorekeeper(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.STOREKEEPER);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.STOREKEEPER,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function isFieldSupervisor(userOrReq) {
-  return hasRole(userOrReq, ROLES.FIELD_SUPERVISOR);
+  return hasRole(userOrReq, ROLES.FIELD_SUPERVISOR, PLATFORM_ROLES.SUPER_ADMIN);
 }
 
 function isOperations(userOrReq) {
-  return hasRole(userOrReq, ROLES.OPERATIONS);
+  return hasRole(userOrReq, ROLES.OPERATIONS, PLATFORM_ROLES.SUPER_ADMIN);
 }
 
 function isMaintenanceManager(userOrReq) {
-  return hasRole(userOrReq, ROLES.MAINTENANCE_MANAGER);
+  return hasRole(
+    userOrReq,
+    ROLES.MAINTENANCE_MANAGER,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function isAdminOrContractManager(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.CONTRACT_MANAGER,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function canManageTripRevenue(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.CONTRACT_MANAGER,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function canViewTripProfitability(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.ACCOUNTANT);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.ACCOUNTANT,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function canManageContractPricing(userOrReq) {
-  return hasRole(userOrReq, ROLES.ADMIN, ROLES.CONTRACT_MANAGER);
+  return hasRole(
+    userOrReq,
+    ROLES.ADMIN,
+    ROLES.CONTRACT_MANAGER,
+    PLATFORM_ROLES.SUPER_ADMIN
+  );
 }
 
 function canManageMasterData(userOrReq) {
@@ -68,7 +115,8 @@ function canManageMasterData(userOrReq) {
     userOrReq,
     ROLES.ADMIN,
     ROLES.CONTRACT_MANAGER,
-    ROLES.MAINTENANCE_MANAGER
+    ROLES.MAINTENANCE_MANAGER,
+    PLATFORM_ROLES.SUPER_ADMIN
   );
 }
 
@@ -77,7 +125,8 @@ function canManageRoutesAndZones(userOrReq) {
     userOrReq,
     ROLES.ADMIN,
     ROLES.CONTRACT_MANAGER,
-    ROLES.OPERATIONS
+    ROLES.OPERATIONS,
+    PLATFORM_ROLES.SUPER_ADMIN
   );
 }
 
@@ -100,6 +149,7 @@ module.exports = {
   getUserId,
   getUserRole,
   hasRole,
+  isSuperAdmin,
   isAdmin,
   isAdminOrHR,
   isAdminOrAccountant,

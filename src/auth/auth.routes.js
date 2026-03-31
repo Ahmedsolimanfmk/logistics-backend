@@ -7,6 +7,20 @@ const prisma = require("../prisma");
 
 const router = express.Router();
 
+function normalizePlatformRole(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function resolveEffectiveRole(user) {
+  const platformRole = normalizePlatformRole(user?.platform_role);
+
+  if (platformRole === "SUPER_ADMIN") {
+    return "SUPER_ADMIN";
+  }
+
+  return String(user?.role || "").trim().toUpperCase();
+}
+
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -26,6 +40,7 @@ router.post("/login", async (req, res) => {
         full_name: true,
         email: true,
         role: true,
+        platform_role: true,
         is_active: true,
         password_hash: true,
       },
@@ -51,10 +66,15 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    const effectiveRole = resolveEffectiveRole(user);
+    const platformRole = normalizePlatformRole(user.platform_role) || "USER";
+
     const token = jwt.sign(
       {
         sub: user.id,
-        role: user.role,
+        role: effectiveRole,
+        effective_role: effectiveRole,
+        platform_role: platformRole,
         email: user.email || undefined,
       },
       process.env.JWT_SECRET,
@@ -62,13 +82,15 @@ router.post("/login", async (req, res) => {
     );
 
     return res.json({
-      _build: "AUTH_LOGIN_V3_2026-02-15",
+      _build: "AUTH_LOGIN_V4_PLATFORM_ROLE_2026-03-31",
       token,
       user: {
         id: user.id,
         full_name: user.full_name,
         email: user.email,
-        role: user.role,
+        role: effectiveRole,
+        effective_role: effectiveRole,
+        platform_role: platformRole,
       },
     });
   } catch (e) {

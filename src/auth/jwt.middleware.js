@@ -24,6 +24,8 @@ function authRequired(req, res, next) {
     req.user = {
       sub: decoded.sub,
       role: decoded.role,
+      effective_role: decoded.effective_role || decoded.role,
+      platform_role: decoded.platform_role || "USER",
       email: decoded.email || null,
       iat: decoded.iat,
       exp: decoded.exp,
