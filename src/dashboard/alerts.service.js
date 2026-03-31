@@ -570,102 +570,229 @@ async function getMaintenanceAlerts(companyId) {
   return alerts;
 }
 
-async function getComplianceAlerts(companyId) {
-  const alerts = [];
-  const now = new Date();
+async function getComplianceSnapshot(companyId, options = {}) {
+  const daysWindow = Math.min(
+    365,
+    Math.max(1, Number(options.daysWindow || 30))
+  );
+  const limit = Math.min(200, Math.max(1, Number(options.limit || 50)));
 
-  const daysWindow = 30;
+  const now = new Date();
   const until = new Date(now);
   until.setDate(until.getDate() + daysWindow);
 
-  const [vehiclesExpiring, vehiclesExpired, driversExpiring, driversExpired] =
-    await Promise.all([
-      prisma.vehicles.findMany({
-        where: {
-          company_id: companyId,
-          license_expiry_date: {
-            not: null,
-            gte: now,
-            lte: until,
-          },
+  const [
+    vehiclesExpiring,
+    vehiclesExpired,
+    vehiclesExpiringCount,
+    vehiclesExpiredCount,
+    driversExpiring,
+    driversExpired,
+    driversExpiringCount,
+    driversExpiredCount,
+  ] = await Promise.all([
+    prisma.vehicles.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          gte: now,
+          lte: until,
         },
-        orderBy: { license_expiry_date: "asc" },
-        take: 50,
-        select: {
-          id: true,
-          fleet_no: true,
-          plate_no: true,
-          display_name: true,
-          license_no: true,
-          license_expiry_date: true,
-          supervisor_id: true,
+      },
+      orderBy: { license_expiry_date: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        company_id: true,
+        fleet_no: true,
+        plate_no: true,
+        display_name: true,
+        status: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        disable_reason: true,
+        updated_at: true,
+      },
+    }),
+    prisma.vehicles.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          lt: now,
         },
-      }),
-      prisma.vehicles.findMany({
-        where: {
-          company_id: companyId,
-          license_expiry_date: {
-            not: null,
-            lt: now,
-          },
+      },
+      orderBy: { license_expiry_date: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        company_id: true,
+        fleet_no: true,
+        plate_no: true,
+        display_name: true,
+        status: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        disable_reason: true,
+        updated_at: true,
+      },
+    }),
+    prisma.vehicles.count({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          gte: now,
+          lte: until,
         },
-        orderBy: { license_expiry_date: "asc" },
-        take: 50,
-        select: {
-          id: true,
-          fleet_no: true,
-          plate_no: true,
-          display_name: true,
-          license_no: true,
-          license_expiry_date: true,
-          supervisor_id: true,
+      },
+    }),
+    prisma.vehicles.count({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          lt: now,
         },
-      }),
-      prisma.drivers.findMany({
-        where: {
-          company_id: companyId,
-          license_expiry_date: {
-            not: null,
-            gte: now,
-            lte: until,
-          },
+      },
+    }),
+    prisma.drivers.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          gte: now,
+          lte: until,
         },
-        orderBy: { license_expiry_date: "asc" },
-        take: 50,
-        select: {
-          id: true,
-          full_name: true,
-          phone: true,
-          phone2: true,
-          national_id: true,
-          license_no: true,
-          license_expiry_date: true,
+      },
+      orderBy: { license_expiry_date: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        company_id: true,
+        full_name: true,
+        phone: true,
+        phone2: true,
+        national_id: true,
+        hire_date: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        status: true,
+        disable_reason: true,
+        updated_at: true,
+      },
+    }),
+    prisma.drivers.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          lt: now,
         },
-      }),
-      prisma.drivers.findMany({
-        where: {
-          company_id: companyId,
-          license_expiry_date: {
-            not: null,
-            lt: now,
-          },
+      },
+      orderBy: { license_expiry_date: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        company_id: true,
+        full_name: true,
+        phone: true,
+        phone2: true,
+        national_id: true,
+        hire_date: true,
+        license_no: true,
+        license_issue_date: true,
+        license_expiry_date: true,
+        status: true,
+        disable_reason: true,
+        updated_at: true,
+      },
+    }),
+    prisma.drivers.count({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          gte: now,
+          lte: until,
         },
-        orderBy: { license_expiry_date: "asc" },
-        take: 50,
-        select: {
-          id: true,
-          full_name: true,
-          phone: true,
-          phone2: true,
-          national_id: true,
-          license_no: true,
-          license_expiry_date: true,
+      },
+    }),
+    prisma.drivers.count({
+      where: {
+        company_id: companyId,
+        license_expiry_date: {
+          not: null,
+          lt: now,
         },
-      }),
-    ]);
+      },
+    }),
+  ]);
 
-  for (const v of vehiclesExpired || []) {
-    const daysOverdue = daysBetweenCairo(v.license_expiry_date, now);
+  const mapVehicleExpiring = vehiclesExpiring.map((v) => ({
+    ...v,
+    days_left: v.license_expiry_date
+      ? daysBetweenCairo(now, v.license_expiry_date)
+      : null,
+  }));
+
+  const mapVehicleExpired = vehiclesExpired.map((v) => ({
+    ...v,
+    days_overdue: v.license_expiry_date
+      ? daysBetweenCairo(v.license_expiry_date, now)
+      : null,
+  }));
+
+  const mapDriverExpiring = driversExpiring.map((d) => ({
+    ...d,
+    days_left: d.license_expiry_date
+      ? daysBetweenCairo(now, d.license_expiry_date)
+      : null,
+  }));
+
+  const mapDriverExpired = driversExpired.map((d) => ({
+    ...d,
+    days_overdue: d.license_expiry_date
+      ? daysBetweenCairo(d.license_expiry_date, now)
+      : null,
+  }));
+
+  return {
+    range: { days: daysWindow, limit, now, until },
+    counts: {
+      vehicles: {
+        expiring: vehiclesExpiringCount,
+        expired: vehiclesExpiredCount,
+      },
+      drivers: {
+        expiring: driversExpiringCount,
+        expired: driversExpiredCount,
+      },
+    },
+    items: {
+      vehicles_expiring: mapVehicleExpiring,
+      vehicles_expired: mapVehicleExpired,
+      drivers_expiring: mapDriverExpiring,
+      drivers_expired: mapDriverExpired,
+    },
+  };
+}
+
+async function getComplianceAlerts(companyId, options = {}) {
+  const snapshot = await getComplianceSnapshot(companyId, {
+    daysWindow: options.daysWindow || 30,
+    limit: options.limit || 50,
+  });
+
+  const alerts = [];
+  const now = new Date();
+
+  for (const v of snapshot.items.vehicles_expired || []) {
+    const daysOverdue = Number(v.days_overdue || 0);
     const label =
       [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
       v.display_name ||
@@ -682,14 +809,13 @@ async function getComplianceAlerts(companyId) {
         entity_type: "vehicle",
         entity_id: v.id,
         href: `/vehicles/${v.id}`,
-        created_at: v.license_expiry_date,
+        created_at: v.license_expiry_date || now,
         meta: {
           fleet_no: v.fleet_no,
           plate_no: v.plate_no,
           display_name: v.display_name,
           license_no: v.license_no,
           license_expiry_date: v.license_expiry_date,
-          supervisor_id: v.supervisor_id,
           days_overdue: daysOverdue,
         },
         sort_order: daysOverdue,
@@ -697,8 +823,8 @@ async function getComplianceAlerts(companyId) {
     );
   }
 
-  for (const v of vehiclesExpiring || []) {
-    const daysToDue = daysBetweenCairo(now, v.license_expiry_date);
+  for (const v of snapshot.items.vehicles_expiring || []) {
+    const daysToDue = Number(v.days_left || 0);
     const label =
       [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
       v.display_name ||
@@ -715,14 +841,13 @@ async function getComplianceAlerts(companyId) {
         entity_type: "vehicle",
         entity_id: v.id,
         href: `/vehicles/${v.id}`,
-        created_at: v.license_expiry_date,
+        created_at: v.license_expiry_date || now,
         meta: {
           fleet_no: v.fleet_no,
           plate_no: v.plate_no,
           display_name: v.display_name,
           license_no: v.license_no,
           license_expiry_date: v.license_expiry_date,
-          supervisor_id: v.supervisor_id,
           days_to_due: daysToDue,
         },
         sort_order: 1000 - daysToDue,
@@ -730,8 +855,8 @@ async function getComplianceAlerts(companyId) {
     );
   }
 
-  for (const d of driversExpired || []) {
-    const daysOverdue = daysBetweenCairo(d.license_expiry_date, now);
+  for (const d of snapshot.items.drivers_expired || []) {
+    const daysOverdue = Number(d.days_overdue || 0);
 
     alerts.push(
       buildAlert({
@@ -744,7 +869,7 @@ async function getComplianceAlerts(companyId) {
         entity_type: "driver",
         entity_id: d.id,
         href: `/drivers/${d.id}`,
-        created_at: d.license_expiry_date,
+        created_at: d.license_expiry_date || now,
         meta: {
           full_name: d.full_name,
           phone: d.phone,
@@ -759,8 +884,8 @@ async function getComplianceAlerts(companyId) {
     );
   }
 
-  for (const d of driversExpiring || []) {
-    const daysToDue = daysBetweenCairo(now, d.license_expiry_date);
+  for (const d of snapshot.items.drivers_expiring || []) {
+    const daysToDue = Number(d.days_left || 0);
 
     alerts.push(
       buildAlert({
@@ -773,7 +898,7 @@ async function getComplianceAlerts(companyId) {
         entity_type: "driver",
         entity_id: d.id,
         href: `/drivers/${d.id}`,
-        created_at: d.license_expiry_date,
+        created_at: d.license_expiry_date || now,
         meta: {
           full_name: d.full_name,
           phone: d.phone,
@@ -858,7 +983,10 @@ async function getBaseAlerts(user, filters = {}) {
       ? getMaintenanceAlerts(companyId)
       : Promise.resolve([]),
     areas.includes("compliance")
-      ? getComplianceAlerts(companyId)
+      ? getComplianceAlerts(companyId, {
+          daysWindow: filters.days || filters.daysWindow || 30,
+          limit: filters.limit || 50,
+        })
       : Promise.resolve([]),
   ]);
 
@@ -1011,3 +1139,5 @@ exports.markAllAlertsRead = async (user, filters = {}) => {
     updated: unreadItems.length,
   };
 };
+
+exports.getComplianceSnapshot = getComplianceSnapshot;
