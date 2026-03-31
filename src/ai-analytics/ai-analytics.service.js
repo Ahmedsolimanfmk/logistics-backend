@@ -26,8 +26,21 @@ function extractConversationMeta({ body }) {
   };
 }
 
+function normalizeUser(user) {
+  if (!user) return null;
+
+  const id = user.id || user.sub || user.userId || null;
+
+  return {
+    ...user,
+    id,
+    userId: id,
+    sub: user.sub || id,
+  };
+}
+
 function getUserId(user) {
-  return user?.id || null;
+  return user?.id || user?.sub || user?.userId || null;
 }
 
 function getEffectiveSessionSnapshot({ body, persistedSnapshot }) {
@@ -71,7 +84,8 @@ async function queryAiAnalytics({ companyId, user, body }) {
     throw err;
   }
 
-  const userId = getUserId(user);
+  const normalizedUser = normalizeUser(user);
+  const userId = normalizedUser?.id;
   if (!userId) {
     const err = new Error("user.id is required");
     err.status = 400;
