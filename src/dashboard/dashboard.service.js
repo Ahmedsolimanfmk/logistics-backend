@@ -571,29 +571,29 @@ exports.getSummary = async (user, filters = {}) => {
     }));
 
     const openAdvancesList = await prisma.$queryRaw`
-      SELECT
-        a.id,
-        a.created_at,
-        a.amount::numeric AS advance_amount,
-        a.status,
-        a.field_supervisor_id,
-        COALESCE(
-          SUM(
-            CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END
-          ),
-          0
-        )::numeric AS approved_expenses
-      FROM cash_advances a
-      LEFT JOIN cash_expenses e
-        ON e.cash_advance_id = a.id
-       AND e.company_id = ${companyId}::uuid
-      WHERE a.company_id = ${companyId}::uuid
-        ANDAND a.status = 'OPEN'
-        AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
-      GROUP BY a.id, a.created_at, a.amount, a.status, a.field_supervisor_id
-      ORDER BY a.created_at ASC
-      LIMIT 10;
-    `;
+  SELECT
+    a.id,
+    a.created_at,
+    a.amount::numeric AS advance_amount,
+    a.status,
+    a.field_supervisor_id,
+    COALESCE(
+      SUM(
+        CASE WHEN e.approval_status = 'APPROVED' THEN e.amount ELSE 0 END
+      ),
+      0
+    )::numeric AS approved_expenses
+  FROM cash_advances a
+  LEFT JOIN cash_expenses e
+    ON e.cash_advance_id = a.id
+   AND e.company_id = ${companyId}::uuid
+  WHERE a.company_id = ${companyId}::uuid
+    AND a.status = 'OPEN'
+    AND (${isSupervisor}::boolean = false OR a.field_supervisor_id = ${userId}::uuid)
+  GROUP BY a.id, a.created_at, a.amount, a.status, a.field_supervisor_id
+  ORDER BY a.created_at ASC
+  LIMIT 10;
+`;
 
     out.tables.advances_open_top10 = (openAdvancesList || []).map((r) => {
       const adv = Number(r.advance_amount ?? 0);
