@@ -65,10 +65,10 @@ model users {
   vendor_transactions_created_by       vendor_transactions[]
   warehouses_managed                   warehouses[]                    @relation("warehouses_manager")
   alert_reads                          alert_reads[]
-    ai_conversations ai_conversations[]
-  ai_messages      ai_messages[]
-  ai_query_runs    ai_query_runs[]
-  ai_action_runs   ai_action_runs[]
+  ai_conversations                     ai_conversations[]
+  ai_messages                          ai_messages[]
+  ai_query_runs                        ai_query_runs[]
+  ai_action_runs                       ai_action_runs[]
 
   @@map("users")
 }
@@ -1435,10 +1435,13 @@ model companies {
   ar_payments                    ar_payments[]
   ar_payment_allocations         ar_payment_allocations[]
   ar_invoice_trip_lines          ar_invoice_trip_lines[]
-  ai_conversations ai_conversations[]
-  ai_messages      ai_messages[]
-  ai_query_runs    ai_query_runs[]
-  ai_action_runs   ai_action_runs[]
+  ai_conversations               ai_conversations[]
+  ai_messages                    ai_messages[]
+  ai_query_runs                  ai_query_runs[]
+  ai_action_runs                 ai_action_runs[]
+  vehicle_classes                vehicle_classes[]
+  cargo_types                    cargo_types[]
+  zones                          zones[]
 }
 
 model company_users {
@@ -1813,6 +1816,7 @@ enum work_order_installation_type {
   REPLACEMENT
   REINSTALL
 }
+
 enum ai_conversation_status {
   ACTIVE
   ARCHIVED
@@ -1831,6 +1835,7 @@ enum ai_run_status {
   FAILED
   CANCELLED
 }
+
 model ai_conversations {
   id              String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   company_id      String                 @db.Uuid
@@ -1842,11 +1847,11 @@ model ai_conversations {
   created_at      DateTime               @default(now()) @db.Timestamptz(6)
   updated_at      DateTime               @default(now()) @updatedAt @db.Timestamptz(6)
 
-  company         companies              @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  user            users                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  messages        ai_messages[]
-  query_runs      ai_query_runs[]
-  action_runs     ai_action_runs[]
+  company     companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  user        users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  messages    ai_messages[]
+  query_runs  ai_query_runs[]
+  action_runs ai_action_runs[]
 
   @@index([company_id], map: "idx_ai_conversations_company_id")
   @@index([user_id], map: "idx_ai_conversations_user_id")
@@ -1856,24 +1861,24 @@ model ai_conversations {
 }
 
 model ai_messages {
-  id                String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  company_id        String          @db.Uuid
-  conversation_id   String          @db.Uuid
-  user_id           String?         @db.Uuid
-  role              ai_message_role
-  content           String
-  parsed_mode       String?
-  parsed_intent     String?
-  parsed_json       Json?
-  response_json     Json?
-  created_at        DateTime        @default(now()) @db.Timestamptz(6)
+  id              String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id      String          @db.Uuid
+  conversation_id String          @db.Uuid
+  user_id         String?         @db.Uuid
+  role            ai_message_role
+  content         String
+  parsed_mode     String?
+  parsed_intent   String?
+  parsed_json     Json?
+  response_json   Json?
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
 
-  company           companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  conversation      ai_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
-  user              users?           @relation(fields: [user_id], references: [id])
+  company      companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation ai_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  user         users?           @relation(fields: [user_id], references: [id])
 
-  query_runs        ai_query_runs[]
-  action_runs       ai_action_runs[]
+  query_runs  ai_query_runs[]
+  action_runs ai_action_runs[]
 
   @@index([company_id], map: "idx_ai_messages_company_id")
   @@index([conversation_id], map: "idx_ai_messages_conversation_id")
@@ -1899,10 +1904,10 @@ model ai_query_runs {
   created_at       DateTime      @default(now()) @db.Timestamptz(6)
   finished_at      DateTime?     @db.Timestamptz(6)
 
-  company          companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  conversation     ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
-  message          ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
-  user             users?            @relation(fields: [user_id], references: [id])
+  company      companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  message      ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  user         users?            @relation(fields: [user_id], references: [id])
 
   @@index([company_id], map: "idx_ai_query_runs_company_id")
   @@index([conversation_id], map: "idx_ai_query_runs_conversation_id")
@@ -1927,10 +1932,10 @@ model ai_action_runs {
   executed_at     DateTime?     @db.Timestamptz(6)
   created_at      DateTime      @default(now()) @db.Timestamptz(6)
 
-  company         companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  conversation    ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
-  message         ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
-  user            users?            @relation(fields: [user_id], references: [id])
+  company      companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversation ai_conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  message      ai_messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  user         users?            @relation(fields: [user_id], references: [id])
 
   @@index([company_id], map: "idx_ai_action_runs_company_id")
   @@index([conversation_id], map: "idx_ai_action_runs_conversation_id")
@@ -1939,4 +1944,52 @@ model ai_action_runs {
   @@index([status], map: "idx_ai_action_runs_status")
   @@index([created_at], map: "idx_ai_action_runs_created_at")
   @@map("ai_action_runs")
+}
+
+model vehicle_classes {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id  String   @db.Uuid
+  code        String
+  name        String
+  description String?
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @updatedAt @db.Timestamptz(6)
+
+  company companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@unique([company_id, code])
+  @@index([company_id])
+  @@map("vehicle_classes")
+}
+
+model cargo_types {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id  String   @db.Uuid
+  code        String
+  name        String
+  description String?
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @updatedAt @db.Timestamptz(6)
+
+  company companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@unique([company_id, code])
+  @@index([company_id])
+  @@map("cargo_types")
+}
+
+model zones {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id String   @db.Uuid
+  code       String
+  name       String
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  company companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@unique([company_id, code])
+  @@index([company_id])
 }
