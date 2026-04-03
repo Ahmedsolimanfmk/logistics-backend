@@ -497,6 +497,7 @@ model sites {
   id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   company_id String   @db.Uuid
   client_id  String   @db.Uuid
+  zone_id    String?  @db.Uuid
   code       String?
   name       String
   address    String?
@@ -507,6 +508,7 @@ model sites {
   company                companies                @relation(fields: [company_id], references: [id], onDelete: Cascade)
   client                 clients                  @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   site_trips             trips[]                  @relation("trips_site")
+  zone                   zones?                   @relation(fields: [zone_id], references: [id], onDelete: SetNull)
   fleet_site_assignments fleet_site_assignments[]
   supervisor_assignments supervisor_assignments[]
   pickup_routes          routes[]                 @relation("route_pickup_site")
@@ -2002,6 +2004,7 @@ model zones {
   company            companies                @relation(fields: [company_id], references: [id], onDelete: Cascade)
   pricing_rules_from contract_pricing_rules[] @relation("pricing_from_zone")
   pricing_rules_to   contract_pricing_rules[] @relation("pricing_to_zone")
+  sites              sites[]
 
   @@unique([company_id, code])
   @@index([company_id])
