@@ -49,6 +49,7 @@ async function ensureClientExists(companyId, clientId) {
     select: {
       id: true,
       name: true,
+      code: true,
       is_active: true,
     },
   });
@@ -104,7 +105,7 @@ function buildListWhere(companyId, query = {}) {
       { address: { contains: search, mode: "insensitive" } },
       { code: { contains: search, mode: "insensitive" } },
       {
-        clients: {
+        client: {
           name: { contains: search, mode: "insensitive" },
         },
       },
@@ -150,28 +151,12 @@ exports.listSites = async (req, res) => {
         skip,
         take: limit,
         include: {
-          clients: {
+          client: {
             select: {
               id: true,
               name: true,
               code: true,
               is_active: true,
-            },
-          },
-          site_trips: {
-            where: {
-              company_id: companyId,
-            },
-            orderBy: {
-              created_at: "desc",
-            },
-            select: {
-              id: true,
-              trip_code: true,
-              status: true,
-              financial_status: true,
-              created_at: true,
-              scheduled_at: true,
             },
           },
         },
@@ -219,30 +204,12 @@ exports.getSiteById = async (req, res) => {
         company_id: companyId,
       },
       include: {
-        clients: {
+        client: {
           select: {
             id: true,
             name: true,
             code: true,
             is_active: true,
-          },
-        },
-        site_trips: {
-          where: {
-            company_id: companyId,
-          },
-          orderBy: { created_at: "desc" },
-          select: {
-            id: true,
-            trip_code: true,
-            status: true,
-            financial_status: true,
-            created_at: true,
-            scheduled_at: true,
-            origin: true,
-            destination: true,
-            agreed_revenue: true,
-            revenue_currency: true,
           },
         },
       },
@@ -302,7 +269,7 @@ exports.createSite = async (req, res) => {
         is_active,
       },
       include: {
-        clients: {
+        client: {
           select: {
             id: true,
             name: true,
@@ -380,7 +347,7 @@ exports.updateSite = async (req, res) => {
       where: { id: existing.id },
       data,
       include: {
-        clients: {
+        client: {
           select: {
             id: true,
             name: true,
@@ -443,7 +410,7 @@ exports.toggleSite = async (req, res) => {
       where: { id: existing.id },
       data: { is_active: !existing.is_active },
       include: {
-        clients: {
+        client: {
           select: {
             id: true,
             name: true,
