@@ -11,7 +11,7 @@ function s(v) {
 }
 
 function parseDate(v) {
-  if (!v) return null;
+  if (v === undefined || v === null || v === "") return null;
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   return d;
@@ -40,15 +40,35 @@ function requireCompanyId(company_id) {
 
 function normalizeStatus(status) {
   if (status === undefined) return undefined;
+
   const value = s(status);
   if (!value) return null;
 
-  const normalized = String(value).trim().toUpperCase();
-  const allowed = ["ACTIVE", "INACTIVE", "EXPIRED", "DRAFT", "CANCELLED"];
+  const normalized = value.toUpperCase();
+  const allowed = ["ACTIVE", "EXPIRED", "TERMINATED"];
 
   if (!allowed.includes(normalized)) {
     throw buildError(
       `Invalid status. Allowed values: ${allowed.join(", ")}`,
+      400
+    );
+  }
+
+  return normalized;
+}
+
+function normalizeBillingCycle(billing_cycle) {
+  if (billing_cycle === undefined) return undefined;
+
+  const value = s(billing_cycle);
+  if (!value) return null;
+
+  const normalized = value.toUpperCase();
+  const allowed = ["MONTHLY", "QUARTERLY", "YEARLY", "ONE_OFF"];
+
+  if (!allowed.includes(normalized)) {
+    throw buildError(
+      `Invalid billing_cycle. Allowed values: ${allowed.join(", ")}`,
       400
     );
   }
@@ -85,6 +105,17 @@ async function ensureClientExists(client_id, company_id) {
   return client;
 }
 
+function contractInclude() {
+  return {
+    client: {
+      select: {
+        id: true,
+        name: true,
+      },
+    },
+  };
+}
+
 async function getContractOrThrow(id, company_id) {
   if (!isUuid(id)) {
     throw buildError("Invalid contract id", 400);
@@ -93,12 +124,11 @@ async function getContractOrThrow(id, company_id) {
   const contract = await prisma.client_contracts.findFirst({
     where: {
       id,
-      company_id,
+      client: {
+        company_id,
+      },
     },
-    include: {
-      clients: true,
-      contract_pricing_rules: true,
-    },
+    include: contractInclude(),
   });
 
   if (!contract) {
@@ -119,6 +149,10 @@ async function createContract(data) {
     contract_no,
     start_date,
     end_date,
+    signed_at,
+    terminated_at,
+    termination_reason,
+    document_url,
     billing_cycle,
     contract_value,
     currency,
@@ -136,6 +170,8 @@ async function createContract(data) {
 
   const startDate = parseDate(start_date);
   const endDate = parseDate(end_date);
+  const signedAt = parseDate(signed_at);
+  const terminatedAt = parseDate(terminated_at);
 
   if (!startDate) {
     throw buildError("Invalid start_date", 400);
@@ -143,6 +179,14 @@ async function createContract(data) {
 
   if (end_date && !endDate) {
     throw buildError("Invalid end_date", 400);
+  }
+
+  if (signed_at && !signedAt) {
+    throw buildError("Invalid signed_at", 400);
+  }
+
+  if (terminated_at && !terminatedAt) {
+    throw buildError("Invalid terminated_at", 400);
   }
 
   if (startDate && endDate && startDate > endDate) {
@@ -153,22 +197,21 @@ async function createContract(data) {
 
   const created = await prisma.client_contracts.create({
     data: {
-      company_id,
       client_id: client.id,
       contract_no: s(contract_no),
       start_date: startDate,
       end_date: endDate,
-      billing_cycle: billing_cycle || "MONTHLY",
+      signed_at: signedAt,
+      terminated_at: terminatedAt,
+      termination_reason: s(termination_reason),
+      document_url: s(document_url),
+      billing_cycle: normalizeBillingCycle(billing_cycle) || "MONTHLY",
       contract_value: contract_value ?? null,
-      currency: currency || "EGP",
-      notes: s(notes),
+      currency: s(currency) || "EGP",
       status: normalizeStatus(status) || "ACTIVE",
+      notes: s(notes),
     },
-    include: {
-      clients: {
-        select: { id: true, name: true },
-      },
-    },
+    include: contractInclude(),
   });
 
   return created;
@@ -184,7 +227,11 @@ async function listContracts({ company_id, client_id, page = 1, limit = 20 }) {
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   const skip = (safePage - 1) * safeLimit;
 
-  const where = { company_id };
+  const where = {
+    client: {
+      company_id,
+    },
+  };
 
   if (client_id !== undefined && client_id !== null && client_id !== "") {
     if (!isUuid(client_id)) {
@@ -201,11 +248,7 @@ async function listContracts({ company_id, client_id, page = 1, limit = 20 }) {
       orderBy: { created_at: "desc" },
       skip,
       take: safeLimit,
-      include: {
-        clients: {
-          select: { id: true, name: true },
-        },
-      },
+      include: contractInclude(),
     }),
     prisma.client_contracts.count({ where }),
   ]);
@@ -267,12 +310,40 @@ async function updateContract(id, data, company_id) {
     }
   }
 
+  let nextSignedAt;
+  if (data.signed_at !== undefined) {
+    if (data.signed_at === null || data.signed_at === "") {
+      nextSignedAt = null;
+    } else {
+      nextSignedAt = parseDate(data.signed_at);
+      if (!nextSignedAt) {
+        throw buildError("Invalid signed_at", 400);
+      }
+    }
+  }
+
+  let nextTerminatedAt;
+  if (data.terminated_at !== undefined) {
+    if (data.terminated_at === null || data.terminated_at === "") {
+      nextTerminatedAt = null;
+    } else {
+      nextTerminatedAt = parseDate(data.terminated_at);
+      if (!nextTerminatedAt) {
+        throw buildError("Invalid terminated_at", 400);
+      }
+    }
+  }
+
   const effectiveStartDate =
     data.start_date !== undefined ? nextStartDate : exists.start_date;
   const effectiveEndDate =
     data.end_date !== undefined ? nextEndDate : exists.end_date;
 
-  if (effectiveStartDate && effectiveEndDate && effectiveStartDate > effectiveEndDate) {
+  if (
+    effectiveStartDate &&
+    effectiveEndDate &&
+    effectiveStartDate > effectiveEndDate
+  ) {
     throw buildError("start_date cannot be after end_date", 400);
   }
 
@@ -280,22 +351,31 @@ async function updateContract(id, data, company_id) {
     where: { id: exists.id },
     data: {
       client_id: nextClientId,
-      contract_no: data.contract_no !== undefined ? s(data.contract_no) : undefined,
+      contract_no:
+        data.contract_no !== undefined ? s(data.contract_no) : undefined,
       start_date: data.start_date !== undefined ? nextStartDate : undefined,
       end_date: data.end_date !== undefined ? nextEndDate : undefined,
-      billing_cycle: data.billing_cycle !== undefined ? data.billing_cycle : undefined,
+      signed_at: data.signed_at !== undefined ? nextSignedAt : undefined,
+      terminated_at:
+        data.terminated_at !== undefined ? nextTerminatedAt : undefined,
+      termination_reason:
+        data.termination_reason !== undefined
+          ? s(data.termination_reason)
+          : undefined,
+      document_url:
+        data.document_url !== undefined ? s(data.document_url) : undefined,
+      billing_cycle:
+        data.billing_cycle !== undefined
+          ? normalizeBillingCycle(data.billing_cycle)
+          : undefined,
       contract_value:
         data.contract_value !== undefined ? data.contract_value : undefined,
-      currency: data.currency !== undefined ? data.currency : undefined,
-      status: data.status !== undefined ? normalizeStatus(data.status) : undefined,
+      currency: data.currency !== undefined ? s(data.currency) : undefined,
+      status:
+        data.status !== undefined ? normalizeStatus(data.status) : undefined,
       notes: data.notes !== undefined ? s(data.notes) : undefined,
     },
-    include: {
-      clients: {
-        select: { id: true, name: true },
-      },
-      contract_pricing_rules: true,
-    },
+    include: contractInclude(),
   });
 
   return updated;
@@ -317,12 +397,7 @@ async function setContractStatus(id, status, company_id) {
   const updated = await prisma.client_contracts.update({
     where: { id: exists.id },
     data: { status: normalizedStatus },
-    include: {
-      clients: {
-        select: { id: true, name: true },
-      },
-      contract_pricing_rules: true,
-    },
+    include: contractInclude(),
   });
 
   return updated;
