@@ -67,20 +67,92 @@ function parseMonthRange(month) {
   };
 }
 
-async function getClientOrThrow(id) {
+function getCompanyId(req) {
+  return (
+    req.company?.id ||
+    req.company_id ||
+    req.user?.company_id ||
+    req.auth?.company_id ||
+    null
+  );
+}
+
+function withCompanyScope(where = {}, companyId) {
+  if (!companyId) return { ...where };
+  return { ...where, company_id: companyId };
+}
+
+function mapClient(client) {
+  if (!client) return null;
+
+  return {
+    id: client.id,
+    company_id: client.company_id,
+    code: client.code || null,
+    name: client.name,
+    phone: client.phone || null,
+    email: client.billing_email || null, // legacy-friendly alias for frontend
+    billing_email: client.billing_email || null,
+    hq_address: client.hq_address || null,
+    contact_name: client.primary_contact_name || null, // legacy-friendly alias
+    contact_phone: client.primary_contact_phone || null, // legacy-friendly alias
+    contact_email: client.primary_contact_email || null, // legacy-friendly alias
+    primary_contact_name: client.primary_contact_name || null,
+    primary_contact_phone: client.primary_contact_phone || null,
+    primary_contact_email: client.primary_contact_email || null,
+    tax_no: client.tax_no || null,
+    notes: client.notes || null,
+    is_active: client.is_active,
+    created_at: client.created_at,
+    updated_at: client.updated_at,
+    _count: client._count || undefined,
+  };
+}
+
+function mapSite(site, tripsCount = 0) {
+  if (!site) return null;
+
+  return {
+    id: site.id,
+    company_id: site.company_id,
+    client_id: site.client_id,
+    code: site.code || null,
+    name: site.name,
+    address: site.address || null,
+    is_active: site.is_active,
+    created_at: site.created_at,
+    updated_at: site.updated_at,
+    trips_this_month: Number(tripsCount || 0),
+
+    // legacy-friendly nullable fields for frontend compatibility
+    city: null,
+    site_type: null,
+    zone: null,
+    zone_id: null,
+    zone_name: null,
+  };
+}
+
+async function getClientOrThrow(id, companyId = null) {
   if (!isUuid(id)) throw buildError("Invalid client id");
 
-  const client = await prisma.clients.findUnique({
-    where: { id },
+  const where = companyId
+    ? { id_company_id: undefined }
+    : { id };
+
+  const client = await prisma.clients.findFirst({
+    where: companyId ? { id, company_id: companyId } : { id },
     select: {
       id: true,
+      company_id: true,
+      code: true,
       name: true,
       phone: true,
-      email: true,
+      billing_email: true,
       hq_address: true,
-      contact_name: true,
-      contact_phone: true,
-      contact_email: true,
+      primary_contact_name: true,
+      primary_contact_phone: true,
+      primary_contact_email: true,
       tax_no: true,
       notes: true,
       is_active: true,
@@ -93,8 +165,10 @@ async function getClientOrThrow(id) {
   return client;
 }
 
-function buildClientUpdateData(body = {}, { requireName = false } = {}) {
+function buildClientUpdateData(body = {}, { requireName = false, companyId = null } = {}) {
   const data = {};
+
+  if (companyId) data.company_id = companyId;
 
   if (requireName || body.name !== undefined) {
     const name = s(body.name);
@@ -102,12 +176,37 @@ function buildClientUpdateData(body = {}, { requireName = false } = {}) {
     data.name = name;
   }
 
+  if (body.code !== undefined) data.code = s(body.code);
   if (body.phone !== undefined) data.phone = s(body.phone);
-  if (body.email !== undefined) data.email = s(body.email);
+
+  // نحافظ على التوافق مع الفرونت القديم: email -> billing_email
+  if (body.email !== undefined) data.billing_email = s(body.email);
+  if (body.billing_email !== undefined) data.billing_email = s(body.billing_email);
+
   if (body.hq_address !== undefined) data.hq_address = s(body.hq_address);
-  if (body.contact_name !== undefined) data.contact_name = s(body.contact_name);
-  if (body.contact_phone !== undefined) data.contact_phone = s(body.contact_phone);
-  if (body.contact_email !== undefined) data.contact_email = s(body.contact_email);
+
+  // legacy fields from frontend -> prisma schema fields
+  if (body.contact_name !== undefined) {
+    data.primary_contact_name = s(body.contact_name);
+  }
+  if (body.primary_contact_name !== undefined) {
+    data.primary_contact_name = s(body.primary_contact_name);
+  }
+
+  if (body.contact_phone !== undefined) {
+    data.primary_contact_phone = s(body.contact_phone);
+  }
+  if (body.primary_contact_phone !== undefined) {
+    data.primary_contact_phone = s(body.primary_contact_phone);
+  }
+
+  if (body.contact_email !== undefined) {
+    data.primary_contact_email = s(body.contact_email);
+  }
+  if (body.primary_contact_email !== undefined) {
+    data.primary_contact_email = s(body.primary_contact_email);
+  }
+
   if (body.tax_no !== undefined) data.tax_no = s(body.tax_no);
   if (body.notes !== undefined) data.notes = s(body.notes);
   if (typeof body.is_active === "boolean") data.is_active = body.is_active;
@@ -125,21 +224,24 @@ function buildClientUpdateData(body = {}, { requireName = false } = {}) {
 // =======================
 exports.listClients = async (req, res) => {
   try {
+    const companyId = getCompanyId(req);
     const search = String(req.query.search || "").trim();
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
     const limit = Math.min(100, Math.max(1, parseIntSafe(req.query.limit, 50)));
     const skip = (page - 1) * limit;
     const is_active = toBool(req.query.is_active, null);
 
-    const where = {};
+    const where = withCompanyScope({}, companyId);
 
     if (search) {
       where.OR = [
         { name: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
+        { code: { contains: search, mode: "insensitive" } },
+        { billing_email: { contains: search, mode: "insensitive" } },
         { phone: { contains: search, mode: "insensitive" } },
-        { contact_name: { contains: search, mode: "insensitive" } },
-        { contact_phone: { contains: search, mode: "insensitive" } },
+        { primary_contact_name: { contains: search, mode: "insensitive" } },
+        { primary_contact_phone: { contains: search, mode: "insensitive" } },
+        { primary_contact_email: { contains: search, mode: "insensitive" } },
         { tax_no: { contains: search, mode: "insensitive" } },
       ];
     }
@@ -162,6 +264,7 @@ exports.listClients = async (req, res) => {
               contracts: true,
               ar_invoices: true,
               ar_payments: true,
+              trip_revenues: true,
             },
           },
         },
@@ -171,7 +274,7 @@ exports.listClients = async (req, res) => {
 
     return res.json({
       success: true,
-      items,
+      items: items.map(mapClient),
       total,
       meta: {
         page,
@@ -184,6 +287,7 @@ exports.listClients = async (req, res) => {
     return res.status(e.statusCode || 500).json({
       success: false,
       message: e?.message || "Failed to load clients",
+      error: e?.message || String(e),
     });
   }
 };
@@ -194,9 +298,17 @@ exports.listClients = async (req, res) => {
 exports.getClientById = async (req, res) => {
   try {
     const { id } = req.params;
+    const companyId = getCompanyId(req);
 
-    const client = await prisma.clients.findUnique({
-      where: { id },
+    if (!isUuid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid client id",
+      });
+    }
+
+    const client = await prisma.clients.findFirst({
+      where: companyId ? { id, company_id: companyId } : { id },
       include: {
         _count: {
           select: {
@@ -220,13 +332,14 @@ exports.getClientById = async (req, res) => {
 
     return res.json({
       success: true,
-      data: client,
+      data: mapClient(client),
     });
   } catch (e) {
     console.error("getClientById error:", e);
     return res.status(500).json({
       success: false,
       message: "Failed to load client",
+      error: e?.message || String(e),
     });
   }
 };
@@ -236,7 +349,13 @@ exports.getClientById = async (req, res) => {
 // =======================
 exports.createClient = async (req, res) => {
   try {
-    const data = buildClientUpdateData(req.body, { requireName: true });
+    const companyId = getCompanyId(req);
+    if (!companyId) throw buildError("companyId is required", 400);
+
+    const data = buildClientUpdateData(req.body, {
+      requireName: true,
+      companyId,
+    });
 
     const created = await prisma.clients.create({
       data,
@@ -245,13 +364,14 @@ exports.createClient = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Client created successfully",
-      data: created,
+      data: mapClient(created),
     });
   } catch (e) {
     console.error("createClient error:", e);
     return res.status(e.statusCode || 500).json({
       success: false,
       message: e?.message || "Failed to create client",
+      error: e?.message || String(e),
     });
   }
 };
@@ -262,7 +382,9 @@ exports.createClient = async (req, res) => {
 exports.updateClient = async (req, res) => {
   try {
     const { id } = req.params;
-    await getClientOrThrow(id);
+    const companyId = getCompanyId(req);
+
+    await getClientOrThrow(id, companyId);
 
     const data = buildClientUpdateData(req.body, { requireName: true });
 
@@ -274,13 +396,14 @@ exports.updateClient = async (req, res) => {
     return res.json({
       success: true,
       message: "Client updated successfully",
-      data: updated,
+      data: mapClient(updated),
     });
   } catch (e) {
     console.error("updateClient error:", e);
     return res.status(e.statusCode || 500).json({
       success: false,
       message: e?.message || "Failed to update client",
+      error: e?.message || String(e),
     });
   }
 };
@@ -291,7 +414,9 @@ exports.updateClient = async (req, res) => {
 exports.updateClientProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    await getClientOrThrow(id);
+    const companyId = getCompanyId(req);
+
+    await getClientOrThrow(id, companyId);
 
     const data = buildClientUpdateData(req.body, { requireName: false });
 
@@ -303,13 +428,14 @@ exports.updateClientProfile = async (req, res) => {
     return res.json({
       success: true,
       message: "Client profile updated successfully",
-      data: updated,
+      data: mapClient(updated),
     });
   } catch (e) {
     console.error("updateClientProfile error:", e);
     return res.status(e.statusCode || 500).json({
       success: false,
       message: e?.message || "Failed to update client profile",
+      error: e?.message || String(e),
     });
   }
 };
@@ -320,9 +446,10 @@ exports.updateClientProfile = async (req, res) => {
 exports.toggleClient = async (req, res) => {
   try {
     const { id } = req.params;
+    const companyId = getCompanyId(req);
 
-    const exists = await prisma.clients.findUnique({
-      where: { id },
+    const exists = await prisma.clients.findFirst({
+      where: companyId ? { id, company_id: companyId } : { id },
       select: { id: true, is_active: true },
     });
 
@@ -341,13 +468,14 @@ exports.toggleClient = async (req, res) => {
     return res.json({
       success: true,
       message: "Client status updated successfully",
-      data: updated,
+      data: mapClient(updated),
     });
   } catch (e) {
     console.error("toggleClient error:", e);
     return res.status(500).json({
       success: false,
       message: "Failed to toggle client",
+      error: e?.message || String(e),
     });
   }
 };
@@ -366,6 +494,7 @@ exports.toggleClient = async (req, res) => {
 exports.getClientDetails = async (req, res) => {
   try {
     const { id } = req.params;
+    const companyId = getCompanyId(req);
 
     if (!isUuid(id)) {
       return res.status(400).json({
@@ -384,14 +513,11 @@ exports.getClientDetails = async (req, res) => {
 
     const { monthKey, start, end } = monthRange;
 
-    const client = await prisma.clients.findUnique({
-      where: { id },
+    const client = await prisma.clients.findFirst({
+      where: companyId ? { id, company_id: companyId } : { id },
       include: {
         sites: {
           orderBy: { created_at: "desc" },
-          include: {
-            zones: { select: { id: true, name: true, code: true } },
-          },
         },
       },
     });
@@ -402,6 +528,22 @@ exports.getClientDetails = async (req, res) => {
         message: "Client not found",
       });
     }
+
+    const invoiceWhere = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const paymentWhere = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const tripWhereBase = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const contractWhere = companyId
+      ? { client_id: id, client: { company_id: companyId } }
+      : { client_id: id };
 
     const [
       invAgg,
@@ -414,14 +556,14 @@ exports.getClientDetails = async (req, res) => {
     ] = await Promise.all([
       prisma.ar_invoices.aggregate({
         where: {
-          client_id: id,
+          ...invoiceWhere,
           status: { not: "CANCELLED" },
         },
         _sum: { total_amount: true },
       }),
       prisma.ar_payments.aggregate({
         where: {
-          client_id: id,
+          ...paymentWhere,
           status: { not: "CANCELLED" },
         },
         _sum: { amount: true },
@@ -429,13 +571,13 @@ exports.getClientDetails = async (req, res) => {
       prisma.trips.groupBy({
         by: ["site_id"],
         where: {
-          client_id: id,
+          ...tripWhereBase,
           created_at: { gte: start, lt: end },
         },
         _count: { _all: true },
       }),
       prisma.ar_invoices.findMany({
-        where: { client_id: id },
+        where: invoiceWhere,
         orderBy: { created_at: "desc" },
         take: 10,
         select: {
@@ -449,7 +591,7 @@ exports.getClientDetails = async (req, res) => {
         },
       }),
       prisma.ar_payments.findMany({
-        where: { client_id: id },
+        where: paymentWhere,
         orderBy: { created_at: "desc" },
         take: 10,
         select: {
@@ -463,11 +605,11 @@ exports.getClientDetails = async (req, res) => {
       }),
       prisma.client_contracts.groupBy({
         by: ["status"],
-        where: { client_id: id },
+        where: contractWhere,
         _count: { _all: true },
       }),
       prisma.client_contracts.findMany({
-        where: { client_id: id },
+        where: contractWhere,
         orderBy: [{ created_at: "desc" }],
         take: 10,
         select: {
@@ -492,7 +634,9 @@ exports.getClientDetails = async (req, res) => {
 
     const sitesLookup = siteIds.length
       ? await prisma.sites.findMany({
-          where: { id: { in: siteIds } },
+          where: companyId
+            ? { id: { in: siteIds }, company_id: companyId }
+            : { id: { in: siteIds } },
           select: { id: true, name: true },
         })
       : [];
@@ -517,33 +661,8 @@ exports.getClientDetails = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        client: {
-          id: client.id,
-          name: client.name,
-          email: client.email,
-          phone: client.phone,
-          hq_address: client.hq_address,
-          contact_name: client.contact_name,
-          contact_phone: client.contact_phone,
-          contact_email: client.contact_email,
-          tax_no: client.tax_no,
-          notes: client.notes,
-          is_active: client.is_active,
-          created_at: client.created_at,
-          updated_at: client.updated_at,
-        },
-        sites: (client.sites || []).map((site) => ({
-          id: site.id,
-          name: site.name,
-          address: site.address,
-          city: site.city,
-          site_type: site.site_type,
-          zone: site.zone,
-          zone_id: site.zone_id,
-          zone_name: site.zones?.name || null,
-          is_active: site.is_active,
-          created_at: site.created_at,
-        })),
+        client: mapClient(client),
+        sites: (client.sites || []).map((site) => mapSite(site)),
         contracts_summary,
         recent_contracts: recentContracts.map((x) => ({
           ...x,
@@ -570,6 +689,7 @@ exports.getClientDetails = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to load client details",
+      error: e?.message || String(e),
     });
   }
 };
@@ -580,6 +700,7 @@ exports.getClientDetails = async (req, res) => {
 exports.getClientDashboard = async (req, res) => {
   try {
     const { id } = req.params;
+    const companyId = getCompanyId(req);
 
     if (!isUuid(id)) {
       return res.status(400).json({
@@ -598,14 +719,11 @@ exports.getClientDashboard = async (req, res) => {
 
     const { monthKey, start, end } = monthRange;
 
-    const client = await prisma.clients.findUnique({
-      where: { id },
+    const client = await prisma.clients.findFirst({
+      where: companyId ? { id, company_id: companyId } : { id },
       include: {
         sites: {
           orderBy: { created_at: "desc" },
-          include: {
-            zones: { select: { id: true, name: true, code: true } },
-          },
         },
       },
     });
@@ -617,45 +735,71 @@ exports.getClientDashboard = async (req, res) => {
       });
     }
 
-    const [invAgg, payAgg, tripGroups, tripRevenueAgg, contractsAgg] = await Promise.all([
-      prisma.ar_invoices.aggregate({
-        where: {
+    const invoiceWhere = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const paymentWhere = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const tripWhereBase = companyId
+      ? { company_id: companyId, client_id: id }
+      : { client_id: id };
+
+    const contractWhere = companyId
+      ? { client_id: id, client: { company_id: companyId } }
+      : { client_id: id };
+
+    const tripRevenueWhere = companyId
+      ? {
+          company_id: companyId,
           client_id: id,
-          status: { not: "CANCELLED" },
-        },
-        _sum: { total_amount: true },
-      }),
-      prisma.ar_payments.aggregate({
-        where: {
-          client_id: id,
-          status: { not: "CANCELLED" },
-        },
-        _sum: { amount: true },
-      }),
-      prisma.trips.groupBy({
-        by: ["site_id"],
-        where: {
-          client_id: id,
-          created_at: { gte: start, lt: end },
-        },
-        _count: { _all: true },
-      }),
-      prisma.trip_revenues.aggregate({
-        where: {
-          client_id: id,
-          is_current: true,
-          trips: {
+          trip: {
             created_at: { gte: start, lt: end },
           },
-        },
-        _sum: { amount: true },
-      }),
-      prisma.client_contracts.groupBy({
-        by: ["status"],
-        where: { client_id: id },
-        _count: { _all: true },
-      }),
-    ]);
+        }
+      : {
+          client_id: id,
+          trip: {
+            created_at: { gte: start, lt: end },
+          },
+        };
+
+    const [invAgg, payAgg, tripGroups, tripRevenueAgg, contractsAgg] =
+      await Promise.all([
+        prisma.ar_invoices.aggregate({
+          where: {
+            ...invoiceWhere,
+            status: { not: "CANCELLED" },
+          },
+          _sum: { total_amount: true },
+        }),
+        prisma.ar_payments.aggregate({
+          where: {
+            ...paymentWhere,
+            status: { not: "CANCELLED" },
+          },
+          _sum: { amount: true },
+        }),
+        prisma.trips.groupBy({
+          by: ["site_id"],
+          where: {
+            ...tripWhereBase,
+            created_at: { gte: start, lt: end },
+          },
+          _count: { _all: true },
+        }),
+        prisma.trip_revenues.aggregate({
+          where: tripRevenueWhere,
+          _sum: { amount: true },
+        }),
+        prisma.client_contracts.groupBy({
+          by: ["status"],
+          where: contractWhere,
+          _count: { _all: true },
+        }),
+      ]);
 
     const totalInvoiced = Number(invAgg?._sum?.total_amount || 0);
     const totalPaid = Number(payAgg?._sum?.amount || 0);
@@ -666,16 +810,9 @@ exports.getClientDashboard = async (req, res) => {
       tripGroups.map((g) => [g.site_id, g._count._all])
     );
 
-    const sites = (client.sites || []).map((site) => ({
-      id: site.id,
-      name: site.name,
-      address: site.address,
-      city: site.city,
-      zone_id: site.zone_id,
-      zone_name: site.zones?.name || null,
-      is_active: site.is_active,
-      trips_this_month: tripCountBySite.get(site.id) || 0,
-    }));
+    const sites = (client.sites || []).map((site) =>
+      mapSite(site, tripCountBySite.get(site.id) || 0)
+    );
 
     const totalTripsThisMonth = sites.reduce(
       (sum, site) => sum + Number(site.trips_this_month || 0),
@@ -718,6 +855,7 @@ exports.getClientDashboard = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to load client dashboard",
+      error: e?.message || String(e),
     });
   }
 };
