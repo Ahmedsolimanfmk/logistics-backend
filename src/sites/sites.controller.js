@@ -59,6 +59,48 @@ async function ensureClientExists(companyId, clientId) {
   return client;
 }
 
+async function ensureZoneExists(companyId, zoneId) {
+  if (!zoneId) return null;
+  if (!isUuid(zoneId)) throw buildError("Invalid zone_id");
+
+  const zone = await prisma.zones.findFirst({
+    where: {
+      id: zoneId,
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      is_active: true,
+    },
+  });
+
+  if (!zone) throw buildError("Zone not found", 404);
+  return zone;
+}
+
+function siteInclude() {
+  return {
+    client: {
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        is_active: true,
+      },
+    },
+    zone: {
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        is_active: true,
+      },
+    },
+  };
+}
+
 async function getSiteOrThrow(companyId, siteId) {
   if (!isUuid(siteId)) {
     throw buildError("Invalid site id");
@@ -73,6 +115,7 @@ async function getSiteOrThrow(companyId, siteId) {
       id: true,
       company_id: true,
       client_id: true,
+      zone_id: true,
       code: true,
       name: true,
       address: true,
@@ -96,6 +139,7 @@ function buildListWhere(companyId, query = {}) {
 
   const search = s(query.search || query.q);
   const client_id = s(query.client_id);
+  const zone_id = s(query.zone_id);
   const code = s(query.code);
   const is_active = toBool(query.is_active, null);
 
@@ -109,12 +153,27 @@ function buildListWhere(companyId, query = {}) {
           name: { contains: search, mode: "insensitive" },
         },
       },
+      {
+        zone: {
+          name: { contains: search, mode: "insensitive" },
+        },
+      },
+      {
+        zone: {
+          code: { contains: search, mode: "insensitive" },
+        },
+      },
     ];
   }
 
   if (client_id) {
     if (!isUuid(client_id)) throw buildError("Invalid client_id");
     where.client_id = client_id;
+  }
+
+  if (zone_id) {
+    if (!isUuid(zone_id)) throw buildError("Invalid zone_id");
+    where.zone_id = zone_id;
   }
 
   if (code) {
@@ -150,16 +209,7 @@ exports.listSites = async (req, res) => {
         orderBy: [{ created_at: "desc" }, { name: "asc" }],
         skip,
         take: limit,
-        include: {
-          client: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              is_active: true,
-            },
-          },
-        },
+        include: siteInclude(),
       }),
       prisma.sites.count({ where }),
     ]);
@@ -203,16 +253,7 @@ exports.getSiteById = async (req, res) => {
         id,
         company_id: companyId,
       },
-      include: {
-        client: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            is_active: true,
-          },
-        },
-      },
+      include: siteInclude(),
     });
 
     if (!site) {
@@ -237,7 +278,7 @@ exports.getSiteById = async (req, res) => {
 
 // =======================
 // POST /sites
-// body: { client_id, code?, name, address?, is_active? }
+// body: { client_id, zone_id?, code?, name, address?, is_active? }
 // =======================
 exports.createSite = async (req, res) => {
   try {
@@ -247,6 +288,7 @@ exports.createSite = async (req, res) => {
     const address = s(req.body?.address);
     const code = normalizeCode(req.body?.code);
     const client_id = s(req.body?.client_id);
+    const zone_id = s(req.body?.zone_id);
     const is_active =
       typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
 
@@ -258,26 +300,19 @@ exports.createSite = async (req, res) => {
     }
 
     await ensureClientExists(companyId, client_id);
+    await ensureZoneExists(companyId, zone_id);
 
     const site = await prisma.sites.create({
       data: {
         company_id: companyId,
         client_id,
+        zone_id,
         code,
         name,
         address,
         is_active,
       },
-      include: {
-        client: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            is_active: true,
-          },
-        },
-      },
+      include: siteInclude(),
     });
 
     return res.status(201).json({
@@ -343,19 +378,16 @@ exports.updateSite = async (req, res) => {
       data.client_id = nextClientId;
     }
 
+    if (req.body.zone_id !== undefined) {
+      const nextZoneId = s(req.body.zone_id);
+      await ensureZoneExists(companyId, nextZoneId);
+      data.zone_id = nextZoneId;
+    }
+
     const site = await prisma.sites.update({
       where: { id: existing.id },
       data,
-      include: {
-        client: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            is_active: true,
-          },
-        },
-      },
+      include: siteInclude(),
     });
 
     return res.json({
@@ -409,16 +441,7 @@ exports.toggleSite = async (req, res) => {
     const updated = await prisma.sites.update({
       where: { id: existing.id },
       data: { is_active: !existing.is_active },
-      include: {
-        client: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            is_active: true,
-          },
-        },
-      },
+      include: siteInclude(),
     });
 
     return res.json({
