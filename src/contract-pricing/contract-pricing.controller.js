@@ -9,7 +9,7 @@ function roleUpper(role) {
 
 function isManager(req) {
   const role = roleUpper(req.user?.role);
-  return ["ADMIN", "CONTRACT_MANAGER"].includes(role);
+  return ["ADMIN", "ACCOUNTANT", "CONTRACT_MANAGER"].includes(role);
 }
 
 function handleError(res, error) {
@@ -27,9 +27,7 @@ function forbid(res) {
   });
 }
 
-// =======================
 // Vehicle Classes
-// =======================
 async function listVehicleClasses(req, res) {
   try {
     const data = await service.listVehicleClasses({
@@ -44,10 +42,7 @@ async function listVehicleClasses(req, res) {
 
 async function getVehicleClassById(req, res) {
   try {
-    const data = await service.getVehicleClassById(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.getVehicleClassById(req.params.id, req.companyId);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -97,10 +92,7 @@ async function toggleVehicleClass(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleVehicleClass(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.toggleVehicleClass(req.params.id, req.companyId);
 
     return res.json({
       success: true,
@@ -112,9 +104,7 @@ async function toggleVehicleClass(req, res) {
   }
 }
 
-// =======================
 // Cargo Types
-// =======================
 async function listCargoTypes(req, res) {
   try {
     const data = await service.listCargoTypes({
@@ -129,10 +119,7 @@ async function listCargoTypes(req, res) {
 
 async function getCargoTypeById(req, res) {
   try {
-    const data = await service.getCargoTypeById(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.getCargoTypeById(req.params.id, req.companyId);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -182,10 +169,7 @@ async function toggleCargoType(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleCargoType(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.toggleCargoType(req.params.id, req.companyId);
 
     return res.json({
       success: true,
@@ -197,9 +181,7 @@ async function toggleCargoType(req, res) {
   }
 }
 
-// =======================
 // Zones
-// =======================
 async function listZones(req, res) {
   try {
     const data = await service.listZones({
@@ -214,10 +196,7 @@ async function listZones(req, res) {
 
 async function getZoneById(req, res) {
   try {
-    const data = await service.getZoneById(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.getZoneById(req.params.id, req.companyId);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -267,10 +246,7 @@ async function toggleZone(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleZone(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.toggleZone(req.params.id, req.companyId);
 
     return res.json({
       success: true,
@@ -282,9 +258,7 @@ async function toggleZone(req, res) {
   }
 }
 
-// =======================
-// Routes Master
-// =======================
+// Routes
 async function listRoutes(req, res) {
   try {
     const data = await service.listRoutes({
@@ -299,10 +273,7 @@ async function listRoutes(req, res) {
 
 async function getRouteById(req, res) {
   try {
-    const data = await service.getRouteById(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.getRouteById(req.params.id, req.companyId);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -352,10 +323,7 @@ async function toggleRoute(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.toggleRoute(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.toggleRoute(req.params.id, req.companyId);
 
     return res.json({
       success: true,
@@ -367,9 +335,7 @@ async function toggleRoute(req, res) {
   }
 }
 
-// =======================
 // Pricing Rules
-// =======================
 async function listPricingRules(req, res) {
   try {
     const data = await service.listPricingRules({
@@ -384,10 +350,7 @@ async function listPricingRules(req, res) {
 
 async function getPricingRuleById(req, res) {
   try {
-    const data = await service.getPricingRuleById(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.getPricingRuleById(req.params.id, req.companyId);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -437,10 +400,7 @@ async function togglePricingRule(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
 
-    const data = await service.togglePricingRule(
-      req.params.id,
-      req.companyId
-    );
+    const data = await service.togglePricingRule(req.params.id, req.companyId);
 
     return res.json({
       success: true,
@@ -452,9 +412,7 @@ async function togglePricingRule(req, res) {
   }
 }
 
-// =======================
 // Resolver
-// =======================
 async function resolveTripPrice(req, res) {
   try {
     if (!isManager(req)) return forbid(res);
@@ -478,41 +436,35 @@ async function resolveTripPrice(req, res) {
 }
 
 module.exports = {
-  // vehicle classes
   listVehicleClasses,
   getVehicleClassById,
   createVehicleClass,
   updateVehicleClass,
   toggleVehicleClass,
 
-  // cargo types
   listCargoTypes,
   getCargoTypeById,
   createCargoType,
   updateCargoType,
   toggleCargoType,
 
-  // zones
   listZones,
   getZoneById,
   createZone,
   updateZone,
   toggleZone,
 
-  // routes master
   listRoutes,
   getRouteById,
   createRoute,
   updateRoute,
   toggleRoute,
 
-  // pricing rules
   listPricingRules,
   getPricingRuleById,
   createPricingRule,
   updatePricingRule,
   togglePricingRule,
 
-  // resolver
   resolveTripPrice,
 };

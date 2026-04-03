@@ -78,7 +78,7 @@ function requireCompanyId(company_id) {
 }
 
 // =======================
-// Generic Master Data Helpers
+// Generic Helpers
 // =======================
 async function ensureClientExists(clientId, company_id) {
   if (!clientId) return null;
@@ -90,7 +90,7 @@ async function ensureClientExists(clientId, company_id) {
       id: clientId,
       company_id,
     },
-    select: { id: true, company_id: true, name: true },
+    select: { id: true, company_id: true, name: true, is_active: true },
   });
 
   if (!row) throw buildError("Client not found", 404);
@@ -105,11 +105,12 @@ async function ensureContractExists(contractId, company_id) {
   const row = await prisma.client_contracts.findFirst({
     where: {
       id: contractId,
-      company_id,
+      client: {
+        company_id,
+      },
     },
     select: {
       id: true,
-      company_id: true,
       client_id: true,
       contract_no: true,
       status: true,
@@ -164,9 +165,9 @@ async function ensureSiteExists(siteId, company_id, label = "site_id") {
       id: true,
       company_id: true,
       client_id: true,
-      zone_id: true,
       name: true,
       is_active: true,
+      zone_id: true,
     },
   });
 
@@ -262,9 +263,7 @@ async function listVehicleClasses(query = {}) {
     ];
   }
 
-  if (typeof is_active === "boolean") {
-    where.is_active = is_active;
-  }
+  if (typeof is_active === "boolean") where.is_active = is_active;
 
   const [items, total] = await Promise.all([
     prisma.vehicle_classes.findMany({
@@ -276,7 +275,13 @@ async function listVehicleClasses(query = {}) {
     prisma.vehicle_classes.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }
 
 async function getVehicleClassById(id, company_id) {
@@ -284,10 +289,7 @@ async function getVehicleClassById(id, company_id) {
   if (!isUuid(id)) throw buildError("Invalid vehicle class id");
 
   const row = await prisma.vehicle_classes.findFirst({
-    where: {
-      id,
-      company_id,
-    },
+    where: { id, company_id },
   });
 
   if (!row) throw buildError("Vehicle class not found", 404);
@@ -371,9 +373,7 @@ async function listCargoTypes(query = {}) {
     ];
   }
 
-  if (typeof is_active === "boolean") {
-    where.is_active = is_active;
-  }
+  if (typeof is_active === "boolean") where.is_active = is_active;
 
   const [items, total] = await Promise.all([
     prisma.cargo_types.findMany({
@@ -385,7 +385,13 @@ async function listCargoTypes(query = {}) {
     prisma.cargo_types.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }
 
 async function getCargoTypeById(id, company_id) {
@@ -393,10 +399,7 @@ async function getCargoTypeById(id, company_id) {
   if (!isUuid(id)) throw buildError("Invalid cargo type id");
 
   const row = await prisma.cargo_types.findFirst({
-    where: {
-      id,
-      company_id,
-    },
+    where: { id, company_id },
   });
 
   if (!row) throw buildError("Cargo type not found", 404);
@@ -492,7 +495,13 @@ async function listZones(query = {}) {
     prisma.zones.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }
 
 async function getZoneById(id, company_id) {
@@ -500,10 +509,7 @@ async function getZoneById(id, company_id) {
   if (!isUuid(id)) throw buildError("Invalid zone id");
 
   const row = await prisma.zones.findFirst({
-    where: {
-      id,
-      company_id,
-    },
+    where: { id, company_id },
   });
 
   if (!row) throw buildError("Zone not found", 404);
@@ -575,10 +581,6 @@ async function listRoutes(query = {}) {
   const dropoff_site_id = s(query.dropoff_site_id);
   const is_active = toBool(query.is_active, null);
 
-  if (client_id && !isUuid(client_id)) throw buildError("Invalid client_id");
-  if (pickup_site_id && !isUuid(pickup_site_id)) throw buildError("Invalid pickup_site_id");
-  if (dropoff_site_id && !isUuid(dropoff_site_id)) throw buildError("Invalid dropoff_site_id");
-
   const where = { company_id };
 
   if (client_id) where.client_id = client_id;
@@ -611,7 +613,13 @@ async function listRoutes(query = {}) {
     prisma.routes.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }
 
 async function getRouteById(id, company_id) {
@@ -619,10 +627,7 @@ async function getRouteById(id, company_id) {
   if (!isUuid(id)) throw buildError("Invalid route id");
 
   const row = await prisma.routes.findFirst({
-    where: {
-      id,
-      company_id,
-    },
+    where: { id, company_id },
     include: {
       clients: { select: { id: true, name: true } },
       pickup_site: { select: { id: true, name: true } },
@@ -766,6 +771,20 @@ async function toggleRoute(id, company_id) {
 // =======================
 // Pricing Rules
 // =======================
+function buildPricingRuleInclude() {
+  return {
+    clients: { select: { id: true, name: true } },
+    client_contracts: { select: { id: true, contract_no: true, status: true } },
+    routes: { select: { id: true, code: true, name: true } },
+    pickup_site: { select: { id: true, name: true } },
+    dropoff_site: { select: { id: true, name: true } },
+    from_zone: { select: { id: true, name: true, code: true } },
+    to_zone: { select: { id: true, name: true, code: true } },
+    vehicle_classes: { select: { id: true, code: true, name: true } },
+    cargo_types: { select: { id: true, code: true, name: true } },
+  };
+}
+
 function buildPricingRuleWhere(query = {}) {
   const company_id = requireCompanyId(query.company_id);
   const where = { company_id };
@@ -781,41 +800,13 @@ function buildPricingRuleWhere(query = {}) {
   const is_active = toBool(query.is_active, null);
   const q = s(query.q);
 
-  if (contract_id) {
-    if (!isUuid(contract_id)) throw buildError("Invalid contract_id");
-    where.contract_id = contract_id;
-  }
-
-  if (client_id) {
-    if (!isUuid(client_id)) throw buildError("Invalid client_id");
-    where.client_id = client_id;
-  }
-
-  if (route_id) {
-    if (!isUuid(route_id)) throw buildError("Invalid route_id");
-    where.route_id = route_id;
-  }
-
-  if (pickup_site_id) {
-    if (!isUuid(pickup_site_id)) throw buildError("Invalid pickup_site_id");
-    where.pickup_site_id = pickup_site_id;
-  }
-
-  if (dropoff_site_id) {
-    if (!isUuid(dropoff_site_id)) throw buildError("Invalid dropoff_site_id");
-    where.dropoff_site_id = dropoff_site_id;
-  }
-
-  if (vehicle_class_id) {
-    if (!isUuid(vehicle_class_id)) throw buildError("Invalid vehicle_class_id");
-    where.vehicle_class_id = vehicle_class_id;
-  }
-
-  if (cargo_type_id) {
-    if (!isUuid(cargo_type_id)) throw buildError("Invalid cargo_type_id");
-    where.cargo_type_id = cargo_type_id;
-  }
-
+  if (contract_id) where.contract_id = contract_id;
+  if (client_id) where.client_id = client_id;
+  if (route_id) where.route_id = route_id;
+  if (pickup_site_id) where.pickup_site_id = pickup_site_id;
+  if (dropoff_site_id) where.dropoff_site_id = dropoff_site_id;
+  if (vehicle_class_id) where.vehicle_class_id = vehicle_class_id;
+  if (cargo_type_id) where.cargo_type_id = cargo_type_id;
   if (trip_type) where.trip_type = buildTripTypeValue(trip_type);
   if (typeof is_active === "boolean") where.is_active = is_active;
 
@@ -840,22 +831,18 @@ async function listPricingRules(query = {}) {
       orderBy: [{ priority: "asc" }, { created_at: "desc" }],
       skip,
       take: pageSize,
-      include: {
-        clients: { select: { id: true, name: true } },
-        client_contracts: { select: { id: true, contract_no: true, status: true } },
-        routes: { select: { id: true, code: true, name: true } },
-        pickup_site: { select: { id: true, name: true } },
-        dropoff_site: { select: { id: true, name: true } },
-        from_zone: { select: { id: true, name: true, code: true } },
-        to_zone: { select: { id: true, name: true, code: true } },
-        vehicle_classes: { select: { id: true, code: true, name: true } },
-        cargo_types: { select: { id: true, code: true, name: true } },
-      },
+      include: buildPricingRuleInclude(),
     }),
     prisma.contract_pricing_rules.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }
 
 async function getPricingRuleById(id, company_id) {
@@ -867,17 +854,7 @@ async function getPricingRuleById(id, company_id) {
       id,
       company_id,
     },
-    include: {
-      clients: { select: { id: true, name: true } },
-      client_contracts: { select: { id: true, contract_no: true, status: true } },
-      routes: { select: { id: true, code: true, name: true, distance_km: true } },
-      pickup_site: { select: { id: true, name: true } },
-      dropoff_site: { select: { id: true, name: true } },
-      from_zone: { select: { id: true, name: true, code: true } },
-      to_zone: { select: { id: true, name: true, code: true } },
-      vehicle_classes: { select: { id: true, code: true, name: true } },
-      cargo_types: { select: { id: true, code: true, name: true } },
-    },
+    include: buildPricingRuleInclude(),
   });
 
   if (!row) throw buildError("Pricing rule not found", 404);
@@ -1096,17 +1073,7 @@ async function createPricingRule(payload = {}) {
       is_active: normalized.values.is_active,
       notes: normalized.values.notes,
     },
-    include: {
-      clients: { select: { id: true, name: true } },
-      client_contracts: { select: { id: true, contract_no: true, status: true } },
-      routes: { select: { id: true, code: true, name: true } },
-      pickup_site: { select: { id: true, name: true } },
-      dropoff_site: { select: { id: true, name: true } },
-      from_zone: { select: { id: true, name: true, code: true } },
-      to_zone: { select: { id: true, name: true, code: true } },
-      vehicle_classes: { select: { id: true, code: true, name: true } },
-      cargo_types: { select: { id: true, code: true, name: true } },
-    },
+    include: buildPricingRuleInclude(),
   });
 }
 
@@ -1141,17 +1108,7 @@ async function updatePricingRule(id, payload = {}, company_id) {
       is_active: normalized.values.is_active,
       notes: normalized.values.notes,
     },
-    include: {
-      clients: { select: { id: true, name: true } },
-      client_contracts: { select: { id: true, contract_no: true, status: true } },
-      routes: { select: { id: true, code: true, name: true } },
-      pickup_site: { select: { id: true, name: true } },
-      dropoff_site: { select: { id: true, name: true } },
-      from_zone: { select: { id: true, name: true, code: true } },
-      to_zone: { select: { id: true, name: true, code: true } },
-      vehicle_classes: { select: { id: true, code: true, name: true } },
-      cargo_types: { select: { id: true, code: true, name: true } },
-    },
+    include: buildPricingRuleInclude(),
   });
 }
 
@@ -1162,22 +1119,12 @@ async function togglePricingRule(id, company_id) {
   return prisma.contract_pricing_rules.update({
     where: { id: row.id },
     data: { is_active: !row.is_active },
-    include: {
-      clients: { select: { id: true, name: true } },
-      client_contracts: { select: { id: true, contract_no: true, status: true } },
-      routes: { select: { id: true, code: true, name: true } },
-      pickup_site: { select: { id: true, name: true } },
-      dropoff_site: { select: { id: true, name: true } },
-      from_zone: { select: { id: true, name: true, code: true } },
-      to_zone: { select: { id: true, name: true, code: true } },
-      vehicle_classes: { select: { id: true, code: true, name: true } },
-      cargo_types: { select: { id: true, code: true, name: true } },
-    },
+    include: buildPricingRuleInclude(),
   });
 }
 
 // =======================
-// Price Resolver
+// Simplified Resolver
 // =======================
 function isRuleEffectiveNow(rule, now = new Date()) {
   if (!rule) return false;
@@ -1187,187 +1134,33 @@ function isRuleEffectiveNow(rule, now = new Date()) {
   return true;
 }
 
-function scoreRule(rule, trip) {
-  let score = 0;
-
-  if (rule.route_id && trip.route_id && rule.route_id === trip.route_id) score += 100;
-  if (rule.pickup_site_id && trip.pickup_site_id && rule.pickup_site_id === trip.pickup_site_id)
-    score += 40;
-  if (
-    rule.dropoff_site_id &&
-    trip.dropoff_site_id &&
-    rule.dropoff_site_id === trip.dropoff_site_id
-  )
-    score += 40;
-
-  if (rule.from_zone_id && trip.pickup_zone_id && rule.from_zone_id === trip.pickup_zone_id)
-    score += 30;
-  if (rule.to_zone_id && trip.dropoff_zone_id && rule.to_zone_id === trip.dropoff_zone_id)
-    score += 30;
-
-  if (
-    rule.cargo_type_id &&
-    trip.cargo_type_id &&
-    rule.cargo_type_id === trip.cargo_type_id
-  )
-    score += 25;
-
-  if (rule.trip_type && trip.trip_type && upper(rule.trip_type) === upper(trip.trip_type))
-    score += 20;
-
-  if (
-    rule.vehicle_class_id &&
-    trip.vehicle_class_id &&
-    rule.vehicle_class_id === trip.vehicle_class_id
-  )
-    score += 20;
-
-  if (rule.min_weight != null || rule.max_weight != null) score += 10;
-
-  return score;
-}
-
-function ruleMatchesTrip(rule, trip) {
-  if (!isRuleEffectiveNow(rule)) return false;
-
-  if (rule.client_id !== trip.client_id) return false;
-  if (!trip.contract_id) return false;
-  if (rule.contract_id !== trip.contract_id) return false;
-
-  if (rule.route_id && rule.route_id !== trip.route_id) return false;
-  if (rule.pickup_site_id && rule.pickup_site_id !== trip.pickup_site_id) return false;
-  if (rule.dropoff_site_id && rule.dropoff_site_id !== trip.dropoff_site_id) return false;
-  if (rule.from_zone_id && rule.from_zone_id !== trip.pickup_zone_id) return false;
-  if (rule.to_zone_id && rule.to_zone_id !== trip.dropoff_zone_id) return false;
-  if (rule.cargo_type_id && rule.cargo_type_id !== trip.cargo_type_id) return false;
-  if (rule.trip_type && upper(rule.trip_type) !== upper(trip.trip_type)) return false;
-
-  const weight = toNum(trip.cargo_weight);
-  const minWeight = rule.min_weight != null ? Number(rule.min_weight) : null;
-  const maxWeight = rule.max_weight != null ? Number(rule.max_weight) : null;
-
-  if (minWeight != null) {
-    if (weight == null) return false;
-    if (weight < minWeight) return false;
-  }
-
-  if (maxWeight != null) {
-    if (weight == null) return false;
-    if (weight > maxWeight) return false;
-  }
-
-  if (rule.vehicle_class_id) {
-    if (!trip.vehicle_class_id) return false;
-    if (rule.vehicle_class_id !== trip.vehicle_class_id) return false;
-  }
-
-  return true;
-}
-
-function computeResolvedAmount(rule, trip) {
-  const base = Number(rule.base_price || 0);
-  const weight = toNum(trip.cargo_weight) || 0;
-  const distanceKm =
-    toNum(trip.route_distance_km) ||
-    toNum(trip.route_distance_from_route) ||
-    0;
-
-  let amount = base;
-
-  if (rule.price_per_ton != null) {
-    amount += Number(rule.price_per_ton || 0) * weight;
-  }
-
-  if (rule.price_per_km != null) {
-    amount += Number(rule.price_per_km || 0) * distanceKm;
-  }
-
-  return Math.round(amount * 100) / 100;
-}
-
 async function resolveTripPrice({ tripId, contractId = null, company_id }) {
   requireCompanyId(company_id);
 
   if (!isUuid(tripId)) throw buildError("Invalid tripId");
-  if (contractId && !isUuid(contractId)) {
-    throw buildError("Invalid contractId");
-  }
+  if (contractId && !isUuid(contractId)) throw buildError("Invalid contractId");
 
   const trip = await prisma.trips.findFirst({
-    where: {
-      id: tripId,
-      company_id,
-    },
+    where: { id: tripId, company_id },
     select: {
       id: true,
       company_id: true,
       client_id: true,
       contract_id: true,
-      route_id: true,
-      pickup_site_id: true,
-      dropoff_site_id: true,
-      cargo_type_id: true,
+      site_id: true,
       trip_type: true,
       cargo_weight: true,
-      clients: { select: { id: true, name: true } },
-      client_contracts: {
-        select: {
-          id: true,
-          contract_no: true,
-          status: true,
-          currency: true,
-          end_date: true,
-        },
-      },
-      routes: {
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          distance_km: true,
-        },
-      },
-      pickup_site: {
-        select: {
-          id: true,
-          zone_id: true,
-          name: true,
-        },
-      },
-      dropoff_site: {
-        select: {
-          id: true,
-          zone_id: true,
-          name: true,
-        },
-      },
-      trip_assignments: {
-        where: {
-          company_id,
-          is_active: true,
-        },
-        take: 1,
-        select: {
-          vehicles: {
-            select: {
-              id: true,
-              company_id: true,
-              vehicle_class_id: true,
-            },
-          },
-        },
-      },
+      agreed_revenue: true,
+      revenue_currency: true,
+      client: { select: { id: true, name: true } },
+      contract: { select: { id: true, contract_no: true, status: true, currency: true, end_date: true } },
+      site: { select: { id: true, name: true } },
     },
   });
 
   if (!trip) throw buildError("Trip not found", 404);
 
-  if (contractId && trip.contract_id && contractId !== trip.contract_id) {
-    throw buildError("Provided contractId does not match trip contract_id");
-  }
-
   const selectedContractId = contractId || trip.contract_id || null;
-
   if (!selectedContractId) {
     throw buildError("Trip has no contract_id. Please assign contract to trip first", 400);
   }
@@ -1386,27 +1179,6 @@ async function resolveTripPrice({ tripId, contractId = null, company_id }) {
     throw buildError("Contract is expired");
   }
 
-  const activeAssignment = trip.trip_assignments?.[0] || null;
-  const vehicle_class_id = activeAssignment?.vehicles?.vehicle_class_id || null;
-
-  const tripShape = {
-    id: trip.id,
-    company_id: trip.company_id,
-    client_id: trip.client_id,
-    contract_id: contract.id,
-    route_id: trip.route_id || null,
-    pickup_site_id: trip.pickup_site_id || null,
-    dropoff_site_id: trip.dropoff_site_id || null,
-    pickup_zone_id: trip.pickup_site?.zone_id || null,
-    dropoff_zone_id: trip.dropoff_site?.zone_id || null,
-    cargo_type_id: trip.cargo_type_id || null,
-    trip_type: trip.trip_type || null,
-    cargo_weight: trip.cargo_weight || null,
-    vehicle_class_id,
-    route_distance_km: trip.routes?.distance_km || null,
-    route_distance_from_route: trip.routes?.distance_km || null,
-  };
-
   const rules = await prisma.contract_pricing_rules.findMany({
     where: {
       company_id,
@@ -1415,123 +1187,99 @@ async function resolveTripPrice({ tripId, contractId = null, company_id }) {
       is_active: true,
     },
     orderBy: [{ priority: "asc" }, { created_at: "desc" }],
-    include: {
-      clients: { select: { id: true, name: true } },
-      client_contracts: { select: { id: true, contract_no: true, status: true } },
-      routes: { select: { id: true, code: true, name: true, distance_km: true } },
-      pickup_site: { select: { id: true, name: true } },
-      dropoff_site: { select: { id: true, name: true } },
-      from_zone: { select: { id: true, name: true, code: true } },
-      to_zone: { select: { id: true, name: true, code: true } },
-      vehicle_classes: { select: { id: true, code: true, name: true } },
-      cargo_types: { select: { id: true, code: true, name: true } },
-    },
+    include: buildPricingRuleInclude(),
   });
 
-  const matches = rules
-    .filter((rule) => ruleMatchesTrip(rule, tripShape))
-    .map((rule) => ({
-      rule,
-      score: scoreRule(rule, tripShape),
-      resolved_amount: computeResolvedAmount(rule, tripShape),
-    }))
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if ((a.rule.priority || 100) !== (b.rule.priority || 100)) {
-        return (a.rule.priority || 100) - (b.rule.priority || 100);
-      }
-      return new Date(b.rule.created_at).getTime() - new Date(a.rule.created_at).getTime();
-    });
+  const activeRules = rules.filter(isRuleEffectiveNow);
 
-  const winner = matches[0] || null;
+  if (!activeRules.length) {
+    return {
+      matched: false,
+      matched_rules_count: 0,
+      resolved_rule: null,
+      candidates: [],
+      trip: {
+        id: trip.id,
+        client_id: trip.client_id,
+        client_name: trip.client?.name || null,
+        contract_id: contract.id,
+        contract_no: contract.contract_no || null,
+        site_id: trip.site_id || null,
+        site_name: trip.site?.name || null,
+        trip_type: trip.trip_type || null,
+        cargo_weight: trip.cargo_weight || null,
+      },
+    };
+  }
+
+  const winner = activeRules[0];
+  const resolved_amount = Number(winner.base_price || 0);
 
   return {
+    matched: true,
+    matched_rules_count: activeRules.length,
+    resolved_rule: {
+      ...winner,
+      match_score: 1,
+      resolved_amount,
+      resolved_currency: winner.currency || contract.currency || "EGP",
+    },
+    candidates: activeRules.map((x) => ({
+      id: x.id,
+      priority: x.priority,
+      resolved_amount: Number(x.base_price || 0),
+      currency: x.currency || contract.currency || "EGP",
+      trip_type: x.trip_type,
+      base_price: x.base_price,
+      min_weight: x.min_weight,
+      max_weight: x.max_weight,
+      price_per_ton: x.price_per_ton,
+      price_per_km: x.price_per_km,
+    })),
     trip: {
       id: trip.id,
       client_id: trip.client_id,
-      client_name: trip.client?.name|| null,
+      client_name: trip.client?.name || null,
       contract_id: contract.id,
       contract_no: contract.contract_no || null,
-      route_id: trip.route_id || null,
-      route_name: trip.routes?.name || null,
-      pickup_site_id: trip.pickup_site_id || null,
-      dropoff_site_id: trip.dropoff_site_id || null,
-      pickup_zone_id: trip.pickup_site?.zone_id || null,
-      dropoff_zone_id: trip.dropoff_site?.zone_id || null,
-      cargo_type_id: trip.cargo_type_id || null,
+      site_id: trip.site_id || null,
+      site_name: trip.site?.name || null,
       trip_type: trip.trip_type || null,
       cargo_weight: trip.cargo_weight || null,
-      vehicle_class_id,
     },
-    matched: !!winner,
-    matched_rules_count: matches.length,
-    resolved_rule: winner
-      ? {
-          ...winner.rule,
-          match_score: winner.score,
-          resolved_amount: winner.resolved_amount,
-          resolved_currency: winner.rule.currency || contract.currency || "EGP",
-        }
-      : null,
-    candidates: matches.map((x) => ({
-      id: x.rule.id,
-      priority: x.rule.priority,
-      match_score: x.score,
-      resolved_amount: x.resolved_amount,
-      currency: x.rule.currency || contract.currency || "EGP",
-      route_id: x.rule.route_id,
-      pickup_site_id: x.rule.pickup_site_id,
-      dropoff_site_id: x.rule.dropoff_site_id,
-      from_zone_id: x.rule.from_zone_id,
-      to_zone_id: x.rule.to_zone_id,
-      cargo_type_id: x.rule.cargo_type_id,
-      vehicle_class_id: x.rule.vehicle_class_id,
-      trip_type: x.rule.trip_type,
-      min_weight: x.rule.min_weight,
-      max_weight: x.rule.max_weight,
-      base_price: x.rule.base_price,
-      price_per_ton: x.rule.price_per_ton,
-      price_per_km: x.rule.price_per_km,
-    })),
   };
 }
 
 module.exports = {
-  // vehicle classes
   listVehicleClasses,
   getVehicleClassById,
   createVehicleClass,
   updateVehicleClass,
   toggleVehicleClass,
 
-  // cargo types
   listCargoTypes,
   getCargoTypeById,
   createCargoType,
   updateCargoType,
   toggleCargoType,
 
-  // zones
   listZones,
   getZoneById,
   createZone,
   updateZone,
   toggleZone,
 
-  // routes
   listRoutes,
   getRouteById,
   createRoute,
   updateRoute,
   toggleRoute,
 
-  // pricing rules
   listPricingRules,
   getPricingRuleById,
   createPricingRule,
   updatePricingRule,
   togglePricingRule,
 
-  // resolver
   resolveTripPrice,
 };
