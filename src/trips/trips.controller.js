@@ -1,5 +1,5 @@
 const prisma = require("../prisma");
-const { ROLES } = require("../auth/roles");
+const { ROLES, PLATFORM_ROLES } = require("../auth/roles");
 const tripFinanceService = require("./trip-finance.service");
 const tripRevenuesService = require("../trip-revenues/trip-revenues.service");
 
@@ -22,6 +22,7 @@ function canViewAllTrips(role) {
     ROLES.DEPT_MANAGER,
     ROLES.GENERAL_MANAGER,
     ROLES.GENERAL_RESPONSIBLE,
+    PLATFORM_ROLES.SUPER_ADMIN,
   ].includes(role);
 }
 

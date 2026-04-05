@@ -1,5 +1,5 @@
 const prisma = require("../prisma");
-const { ROLES } = require("../auth/roles");
+const { ROLES, PLATFORM_ROLES } = require("../auth/roles");
 
 function getAuthUserId(req) {
   return req.user?.sub || req.user?.id || null;
@@ -24,6 +24,7 @@ function canManageAllTrips(role) {
     ROLES.DEPT_MANAGER,
     ROLES.GENERAL_MANAGER,
     ROLES.GENERAL_RESPONSIBLE,
+    PLATFORM_ROLES.SUPER_ADMIN,
   ].includes(role);
 }
 
