@@ -1,42 +1,25 @@
-// src/middleware/jwt.middleware.js
+const ROLES = {
+  ADMIN: "ADMIN",
+  ACCOUNTANT: "ACCOUNTANT",
+  FIELD_SUPERVISOR: "FIELD_SUPERVISOR",
+  GENERAL_SUPERVISOR: "GENERAL_SUPERVISOR",
+  DEPT_MANAGER: "DEPT_MANAGER",
+  GENERAL_MANAGER: "GENERAL_MANAGER",
+  GENERAL_RESPONSIBLE: "GENERAL_RESPONSIBLE",
+  CONTRACT_MANAGER: "CONTRACT_MANAGER",
+  STOREKEEPER: "STOREKEEPER",
+  HR: "HR",
+  DISPATCHER: "DISPATCHER",
+  OPERATIONS: "OPERATIONS",
+  MAINTENANCE_MANAGER: "MAINTENANCE_MANAGER",
+};
 
-const jwt = require("jsonwebtoken");
+const PLATFORM_ROLES = {
+  SUPER_ADMIN: "SUPER_ADMIN",
+  USER: "USER",
+};
 
-function authRequired(req, res, next) {
-  try {
-    const header = req.headers.authorization || "";
-    const [type, token] = header.split(" ");
-
-    if (type !== "Bearer" || !token) {
-      return res.status(401).json({
-        message: "Missing Authorization: Bearer <token>",
-      });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({
-        message: "Server misconfigured: JWT_SECRET missing",
-      });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    req.user = {
-      sub: decoded.sub,
-      role: decoded.role,
-      effective_role: decoded.effective_role || decoded.role,
-      platform_role: decoded.platform_role || "USER",
-      email: decoded.email || null,
-      iat: decoded.iat,
-      exp: decoded.exp,
-    };
-
-    next();
-  } catch (err) {
-    return res.status(401).json({
-      message: "Invalid or expired token",
-    });
-  }
-}
-
-module.exports = { authRequired };
+module.exports = {
+  ROLES,
+  PLATFORM_ROLES,
+};
