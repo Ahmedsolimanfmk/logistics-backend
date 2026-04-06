@@ -1,6 +1,7 @@
 // =======================
 // src/vehicles/vehicles.controller.js
 // tenant-safe version
+// schema-aligned (without supervisor_id)
 // =======================
 
 const prisma = require("../prisma");
@@ -40,21 +41,6 @@ function parseDateOrNull(value) {
   return d;
 }
 
-function getAuthRole(req) {
-  return String(req.user?.role || "").trim().toUpperCase();
-}
-
-function getAuthUserId(req) {
-  return req.user?.sub || req.user?.id || null;
-}
-
-function isUuid(value) {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  );
-}
-
 function isExpiredDate(dateValue) {
   if (!dateValue) return false;
 
@@ -81,30 +67,12 @@ function asVehicleOption(vehicle) {
   };
 }
 
-function buildVehicleWhere(companyId, query, req) {
-  const { q, status, is_active, unassigned, supervisor_id } = query || {};
+function buildVehicleWhere(companyId, query) {
+  const { q, status, is_active } = query || {};
 
   const where = {
     company_id: companyId,
   };
-
-  const role = getAuthRole(req);
-  const userId = getAuthUserId(req);
-
-  if (String(unassigned || "").toLowerCase() === "true") {
-    if (role !== "ADMIN" && role !== "HR") {
-      const err = new Error("Forbidden");
-      err.statusCode = 403;
-      throw err;
-    }
-    where.supervisor_id = null;
-  }
-
-  if (role === "FIELD_SUPERVISOR") {
-    where.supervisor_id = userId;
-  } else if (supervisor_id) {
-    where.supervisor_id = String(supervisor_id).trim();
-  }
 
   if (status) {
     where.status = upper(status);
@@ -146,37 +114,6 @@ async function getVehicleOrThrow(companyId, id, select) {
   }
 
   return vehicle;
-}
-
-async function ensureSupervisorBelongsToCompany(companyId, supervisorId) {
-  if (supervisorId === null) return null;
-
-  const sid = String(supervisorId || "").trim();
-  if (!isUuid(sid)) {
-    const err = new Error("Invalid supervisor_id");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const membership = await prisma.company_users.findFirst({
-    where: {
-      company_id: companyId,
-      user_id: sid,
-      is_active: true,
-      status: "ACTIVE",
-    },
-    select: {
-      user_id: true,
-    },
-  });
-
-  if (!membership) {
-    const err = new Error("Supervisor does not belong to this company");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  return sid;
 }
 
 function handleKnownError(res, error, fallbackMessage) {
@@ -228,7 +165,6 @@ async function getActiveVehicles(req, res) {
         status: true,
         license_expiry_date: true,
         disable_reason: true,
-        supervisor_id: true,
       },
     });
 
@@ -248,8 +184,6 @@ async function getActiveVehicles(req, res) {
  *  - q
  *  - status
  *  - is_active=true|false
- *  - unassigned=true
- *  - supervisor_id
  *  - page
  *  - limit
  *  - pageSize
@@ -257,7 +191,7 @@ async function getActiveVehicles(req, res) {
 async function getVehicles(req, res) {
   try {
     const query = req.query || {};
-    const where = buildVehicleWhere(req.companyId, query, req);
+    const where = buildVehicleWhere(req.companyId, query);
 
     const limitInput = query.limit ?? query.pageSize;
     const pageNum = Math.max(1, parseIntQuery(query.page, 1));
@@ -277,7 +211,7 @@ async function getVehicles(req, res) {
           plate_no: true,
           display_name: true,
           status: true,
-          supervisor_id: true,
+          is_active: true,
           current_odometer: true,
           gps_device_id: true,
           model: true,
@@ -339,7 +273,6 @@ async function createVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
-      supervisor_id,
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -389,14 +322,6 @@ async function createVehicle(req, res) {
       return res.status(400).json({ message: "Invalid license_expiry_date" });
     }
 
-    let supervisorIdValue = null;
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, "supervisor_id")) {
-      supervisorIdValue = await ensureSupervisorBelongsToCompany(
-        req.companyId,
-        supervisor_id
-      );
-    }
-
     const now = new Date();
 
     const vehicle = await prisma.vehicles.create({
@@ -411,7 +336,6 @@ async function createVehicle(req, res) {
         current_odometer: odometerValue,
         gps_device_id: gps_device_id ? String(gps_device_id).trim() : null,
         is_active: typeof is_active === "boolean" ? is_active : true,
-        supervisor_id: supervisorIdValue,
         license_no: license_no ? String(license_no).trim() : null,
         license_issue_date: licIssue === undefined ? null : licIssue,
         license_expiry_date: licExpiry === undefined ? null : licExpiry,
@@ -436,7 +360,6 @@ async function updateVehicle(req, res) {
 
     await getVehicleOrThrow(req.companyId, id);
 
-    const role = getAuthRole(req);
     const body = req.body || {};
 
     const {
@@ -449,7 +372,6 @@ async function updateVehicle(req, res) {
       current_odometer,
       gps_device_id,
       is_active,
-      supervisor_id,
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -542,19 +464,6 @@ async function updateVehicle(req, res) {
       data.disable_reason = disable_reason ? upper(disable_reason) : null;
     }
 
-    if (Object.prototype.hasOwnProperty.call(body, "supervisor_id")) {
-      if (role !== "ADMIN" && role !== "HR") {
-        return res.status(403).json({
-          message: "Forbidden (supervisor assignment is ADMIN/HR only)",
-        });
-      }
-
-      data.supervisor_id = await ensureSupervisorBelongsToCompany(
-        req.companyId,
-        supervisor_id
-      );
-    }
-
     data.updated_at = new Date();
 
     const updated = await prisma.vehicles.update({
@@ -638,7 +547,6 @@ async function getVehicleSummary(req, res) {
       is_active: true,
       disable_reason: true,
       current_odometer: true,
-      supervisor_id: true,
       created_at: true,
       updated_at: true,
     });
