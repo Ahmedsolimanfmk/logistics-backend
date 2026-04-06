@@ -140,7 +140,6 @@ async function getActiveVehicles(req, res) {
 
     const where = {
       company_id: req.companyId,
-      is_active: true,
       status: "AVAILABLE",
       ...(q
         ? {
@@ -211,7 +210,6 @@ async function getVehicles(req, res) {
           plate_no: true,
           display_name: true,
           status: true,
-          is_active: true,
           current_odometer: true,
           gps_device_id: true,
           model: true,
