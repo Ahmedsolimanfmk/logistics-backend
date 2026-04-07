@@ -36,6 +36,12 @@ function dedupeCheck(list) {
   return null;
 }
 
+function buildError(message, statusCode = 400) {
+  const e = new Error(message);
+  e.statusCode = statusCode;
+  return e;
+}
+
 function isPrismaModelMissingByName(err, modelName) {
   const msg = String(err?.message || "");
   return (
@@ -57,20 +63,144 @@ function isPrismaMissingAnyBulkModel(err) {
   );
 }
 
+function normalizeReceiptStatus(v) {
+  const s = String(v || "").trim().toUpperCase();
+  if (!s) return "";
+  if (s === "ALL") return "ALL";
+  if (["DRAFT", "SUBMITTED", "POSTED", "CANCELLED"].includes(s)) return s;
+  return null;
+}
+
+async function assertWarehouseBelongsToCompany(tx, companyId, warehouseId) {
+  const row = await tx.warehouses.findFirst({
+    where: {
+      id: warehouseId,
+      company_id: companyId,
+    },
+    select: { id: true, company_id: true, is_active: true },
+  });
+
+  if (!row) {
+    throw buildError("Warehouse not found", 404);
+  }
+
+  return row;
+}
+
+async function assertVendorBelongsToCompany(tx, companyId, vendorId) {
+  if (!vendorId) return null;
+
+  const row = await tx.vendors.findFirst({
+    where: {
+      id: vendorId,
+      company_id: companyId,
+    },
+    select: { id: true, company_id: true, name: true },
+  });
+
+  if (!row) {
+    throw buildError("Vendor not found", 404);
+  }
+
+  return row;
+}
+
+async function assertPartsBelongToCompany(tx, companyId, partIds) {
+  if (!Array.isArray(partIds) || partIds.length === 0) return;
+
+  const uniqueIds = Array.from(new Set(partIds.filter(Boolean)));
+  if (!uniqueIds.length) return;
+
+  const rows = await tx.parts.findMany({
+    where: {
+      company_id: companyId,
+      id: { in: uniqueIds },
+    },
+    select: { id: true },
+  });
+
+  if (rows.length !== uniqueIds.length) {
+    throw buildError("One or more parts not found", 404);
+  }
+}
+
+function receiptIncludeWithBulk() {
+  return {
+    warehouse: true,
+    vendor: true,
+    items: {
+      include: {
+        part: true,
+      },
+    },
+    bulk_lines: {
+      include: {
+        part: true,
+      },
+    },
+    cash_expenses: true,
+    created_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+    submitted_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+    approved_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+  };
+}
+
+function receiptIncludeWithoutBulk() {
+  return {
+    warehouse: true,
+    vendor: true,
+    items: {
+      include: {
+        part: true,
+      },
+    },
+    cash_expenses: true,
+    created_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+    submitted_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+    approved_by_user: {
+      select: { id: true, full_name: true, email: true, role: true },
+    },
+  };
+}
+
 // -----------------------
 // Controllers
 // -----------------------
 async function listReceipts(req, res) {
   try {
-    const status = String(req.query.status || "").trim();
+    const companyId = req.companyId;
+    const statusRaw = String(req.query.status || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
-    
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
 
     if (warehouse_id && !isUuid(warehouse_id)) {
       return res.status(400).json({ message: "warehouse_id is invalid" });
     }
 
-    const companyId = req.companyId;
+    const status = normalizeReceiptStatus(statusRaw);
+    if (status === null) {
+      return res.status(400).json({
+        message: "Invalid status. Allowed: DRAFT | SUBMITTED | POSTED | CANCELLED",
+      });
+    }
+    if (status === "ALL") {
+      return res.status(400).json({
+        message: "status=ALL is not allowed. Omit status to fetch all receipts.",
+      });
+    }
 
     const where = {
       company_id: companyId,
@@ -82,22 +212,10 @@ async function listReceipts(req, res) {
     let rows;
     try {
       rows = await prisma.inventory_receipts.findMany({
-        where: Object.keys(where).length ? where : undefined,
+        where,
         orderBy: [{ created_at: "desc" }],
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: {
-            include: {
-              parts: true,
-            },
-          },
-          bulk_lines: {
-            include: {
-              parts: true,
-            },
-          },
-        },
+        include: receiptIncludeWithBulk(),
+        take: 200,
       });
     } catch (e) {
       if (
@@ -108,17 +226,10 @@ async function listReceipts(req, res) {
       }
 
       rows = await prisma.inventory_receipts.findMany({
-        where: Object.keys(where).length ? where : undefined,
+        where,
         orderBy: [{ created_at: "desc" }],
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: {
-            include: {
-              parts: true,
-            },
-          },
-        },
+        include: receiptIncludeWithoutBulk(),
+        take: 200,
       });
     }
 
@@ -131,20 +242,25 @@ async function listReceipts(req, res) {
 
 async function getReceipt(req, res) {
   try {
+    const companyId = req.companyId;
     const id = String(req.params.id || "").trim();
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
+
+    if (!isUuid(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
 
     let row;
     try {
-      row = await prisma.inventory_receipts.findUnique({
-        where: { id },
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: { include: { parts: true } },
-          bulk_lines: { include: { parts: true } },
-          cash_expenses: true,
+      row = await prisma.inventory_receipts.findFirst({
+        where: {
+          id,
+          company_id: companyId,
         },
+        include: receiptIncludeWithBulk(),
       });
     } catch (e) {
       if (
@@ -154,18 +270,19 @@ async function getReceipt(req, res) {
         throw e;
       }
 
-      row = await prisma.inventory_receipts.findUnique({
-        where: { id },
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: { include: { parts: true } },
-          cash_expenses: true,
+      row = await prisma.inventory_receipts.findFirst({
+        where: {
+          id,
+          company_id: companyId,
         },
+        include: receiptIncludeWithoutBulk(),
       });
     }
 
-    if (!row) return res.status(404).json({ message: "Receipt not found" });
+    if (!row) {
+      return res.status(404).json({ message: "Receipt not found" });
+    }
+
     return res.json(row);
   } catch (err) {
     console.error("getReceipt error:", err);
@@ -175,13 +292,20 @@ async function getReceipt(req, res) {
 
 async function createReceipt(req, res) {
   try {
+    const companyId = req.companyId;
     const created_by = getUserId(req);
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
 
     const warehouse_id = String(req.body?.warehouse_id || "").trim();
     const vendor_id =
       req.body?.vendor_id != null ? String(req.body.vendor_id).trim() : null;
     const invoice_no =
       req.body?.invoice_no != null ? String(req.body.invoice_no).trim() : null;
+    const reference_no =
+      req.body?.reference_no != null ? String(req.body.reference_no).trim() : null;
 
     const invoice_date =
       req.body?.invoice_date != null && String(req.body.invoice_date).trim()
@@ -214,7 +338,10 @@ async function createReceipt(req, res) {
     for (const [i, it] of items.entries()) {
       const part_id = String(it?.part_id || "").trim();
       const internal_serial = String(it?.internal_serial || "").trim();
-      const manufacturer_serial = String(it?.manufacturer_serial || "").trim();
+      const manufacturer_serial =
+        it?.manufacturer_serial != null
+          ? String(it.manufacturer_serial).trim()
+          : "";
 
       if (!isUuid(part_id)) {
         return res.status(400).json({ message: `items[${i}].part_id is invalid` });
@@ -224,17 +351,16 @@ async function createReceipt(req, res) {
           message: `items[${i}].internal_serial is required`,
         });
       }
-      if (!manufacturer_serial) {
-        return res.status(400).json({
-          message: `items[${i}].manufacturer_serial is required`,
-        });
-      }
 
       const uc = toMoney(it?.unit_cost);
       if (it?.unit_cost != null && it?.unit_cost !== "" && uc == null) {
         return res
           .status(400)
           .json({ message: `items[${i}].unit_cost is invalid` });
+      }
+
+      if (manufacturer_serial === "") {
+        // manufacturer_serial optional in Prisma schema
       }
     }
 
@@ -245,7 +371,11 @@ async function createReceipt(req, res) {
         .json({ message: `Duplicate internal_serial in payload: ${dup1}` });
     }
 
-    const dup2 = dedupeCheck(items.map((x) => x?.manufacturer_serial));
+    const manufacturerSerials = items
+      .map((x) => (x?.manufacturer_serial != null ? String(x.manufacturer_serial).trim() : ""))
+      .filter(Boolean);
+
+    const dup2 = dedupeCheck(manufacturerSerials);
     if (dup2) {
       return res.status(400).json({
         message: `Duplicate manufacturer_serial in payload: ${dup2}`,
@@ -277,87 +407,146 @@ async function createReceipt(req, res) {
     }
 
     let created;
+
     try {
-      created = await prisma.inventory_receipts.create({
-        data: {
-          warehouse_id,
-          vendor_id,
-          invoice_no,
-          invoice_date,
-          status: "DRAFT",
-          created_by: created_by || null,
-          items: {
-            create: items.map((it) => ({
-              part_id: String(it.part_id).trim(),
-              internal_serial: String(it.internal_serial).trim(),
-              manufacturer_serial: String(it.manufacturer_serial).trim(),
-              unit_cost: toMoney(it.unit_cost),
-              notes: it?.notes != null ? String(it.notes).trim() : null,
-            })),
-          },
-          bulk_lines: {
-            create: bulk_lines.map((bl) => {
-              const qty = Number(bl.qty);
-              const unit_cost = toMoney(bl.unit_cost);
-              const total_cost =
-                unit_cost == null ? null : toMoney(unit_cost * qty);
+      created = await prisma.$transaction(async (tx) => {
+        await assertWarehouseBelongsToCompany(tx, companyId, warehouse_id);
+        await assertVendorBelongsToCompany(tx, companyId, vendor_id);
 
-              return {
-                part_id: String(bl.part_id).trim(),
-                qty,
-                unit_cost,
-                total_cost,
-                notes: bl?.notes != null ? String(bl.notes).trim() : null,
-              };
-            }),
-          },
-        },
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: { include: { parts: true } },
-          bulk_lines: { include: { parts: true } },
-        },
-      });
-    } catch (e) {
-      if (
-        !isPrismaMissingAnyBulkModel(e) &&
-        !isPrismaModelMissingByName(e, "bulk_lines")
-      ) {
-        throw e;
-      }
+        await assertPartsBelongToCompany(
+          tx,
+          companyId,
+          [
+            ...items.map((x) => String(x?.part_id || "").trim()),
+            ...bulk_lines.map((x) => String(x?.part_id || "").trim()),
+          ]
+        );
 
-      created = await prisma.inventory_receipts.create({
-        data: {
-          warehouse_id,
-          vendor_id,
-          invoice_no,
-          invoice_date,
-          status: "DRAFT",
-          created_by: created_by || null,
-          items: {
-            create: items.map((it) => ({
-              part_id: String(it.part_id).trim(),
-              internal_serial: String(it.internal_serial).trim(),
-              manufacturer_serial: String(it.manufacturer_serial).trim(),
-              unit_cost: toMoney(it.unit_cost),
-              notes: it?.notes != null ? String(it.notes).trim() : null,
-            })),
+        const existingSerial = await tx.part_items.findFirst({
+          where: {
+            company_id: companyId,
+            OR: [
+              {
+                internal_serial: {
+                  in: items.map((x) => String(x.internal_serial || "").trim()).filter(Boolean),
+                },
+              },
+              {
+                manufacturer_serial: {
+                  in: manufacturerSerials,
+                },
+              },
+            ],
           },
-        },
-        include: {
-          warehouses: true,
-          vendors: true,
-          items: { include: { parts: true } },
-        },
-      });
-
-      if (bulk_lines.length) {
-        return res.status(400).json({
-          message:
-            "bulk_lines provided but Prisma schema/models for bulk are not available. Apply migration for warehouse_parts & inventory_receipt_bulk_lines first.",
+          select: {
+            internal_serial: true,
+            manufacturer_serial: true,
+          },
         });
+
+        if (existingSerial) {
+          throw buildError(
+            `Serial already exists: ${existingSerial.internal_serial || existingSerial.manufacturer_serial}`,
+            409
+          );
+        }
+
+        let createdReceipt;
+
+        try {
+          createdReceipt = await tx.inventory_receipts.create({
+            data: {
+              company_id: companyId,
+              warehouse_id,
+              vendor_id,
+              invoice_no,
+              reference_no,
+              invoice_date,
+              status: "DRAFT",
+              created_by: created_by || null,
+              items: {
+                create: items.map((it) => ({
+                  company_id: companyId,
+                  part_id: String(it.part_id).trim(),
+                  internal_serial: String(it.internal_serial).trim(),
+                  manufacturer_serial:
+                    it?.manufacturer_serial != null && String(it.manufacturer_serial).trim()
+                      ? String(it.manufacturer_serial).trim()
+                      : null,
+                  unit_cost: toMoney(it.unit_cost),
+                  notes: it?.notes != null ? String(it.notes).trim() : null,
+                })),
+              },
+              bulk_lines: {
+                create: bulk_lines.map((bl) => {
+                  const qty = Number(bl.qty);
+                  const unit_cost = toMoney(bl.unit_cost);
+                  const total_cost =
+                    unit_cost == null ? null : toMoney(unit_cost * qty);
+
+                  return {
+                    company_id: companyId,
+                    part_id: String(bl.part_id).trim(),
+                    qty,
+                    unit_cost,
+                    total_cost,
+                    notes: bl?.notes != null ? String(bl.notes).trim() : null,
+                  };
+                }),
+              },
+            },
+            include: receiptIncludeWithBulk(),
+          });
+        } catch (e) {
+          if (
+            !isPrismaMissingAnyBulkModel(e) &&
+            !isPrismaModelMissingByName(e, "bulk_lines")
+          ) {
+            throw e;
+          }
+
+          createdReceipt = await tx.inventory_receipts.create({
+            data: {
+              company_id: companyId,
+              warehouse_id,
+              vendor_id,
+              invoice_no,
+              reference_no,
+              invoice_date,
+              status: "DRAFT",
+              created_by: created_by || null,
+              items: {
+                create: items.map((it) => ({
+                  company_id: companyId,
+                  part_id: String(it.part_id).trim(),
+                  internal_serial: String(it.internal_serial).trim(),
+                  manufacturer_serial:
+                    it?.manufacturer_serial != null && String(it.manufacturer_serial).trim()
+                      ? String(it.manufacturer_serial).trim()
+                      : null,
+                  unit_cost: toMoney(it.unit_cost),
+                  notes: it?.notes != null ? String(it.notes).trim() : null,
+                })),
+              },
+            },
+            include: receiptIncludeWithoutBulk(),
+          });
+
+          if (bulk_lines.length) {
+            throw buildError(
+              "bulk_lines provided but Prisma schema/models for bulk are not available. Apply migration for warehouse_parts & inventory_receipt_bulk_lines first.",
+              400
+            );
+          }
+        }
+
+        return createdReceipt;
+      });
+    } catch (err) {
+      if (err?.statusCode) {
+        return res.status(err.statusCode).json({ message: err.message });
       }
+      throw err;
     }
 
     return res.status(201).json(created);
@@ -381,17 +570,27 @@ async function submitReceipt(req, res) {
       });
     }
 
+    const companyId = req.companyId;
     const id = String(req.params.id || "").trim();
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
-
     const userId = getUserId(req);
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
+
+    if (!isUuid(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       let receipt;
 
       try {
-        receipt = await tx.inventory_receipts.findUnique({
-          where: { id },
+        receipt = await tx.inventory_receipts.findFirst({
+          where: {
+            id,
+            company_id: companyId,
+          },
           include: { items: true, bulk_lines: true },
         });
       } catch (e) {
@@ -402,39 +601,32 @@ async function submitReceipt(req, res) {
           throw e;
         }
 
-        receipt = await tx.inventory_receipts.findUnique({
-          where: { id },
+        receipt = await tx.inventory_receipts.findFirst({
+          where: {
+            id,
+            company_id: companyId,
+          },
           include: { items: true },
         });
       }
 
       if (!receipt) {
-        const e = new Error("Receipt not found");
-        e.statusCode = 404;
-        throw e;
+        throw buildError("Receipt not found", 404);
       }
 
       if (receipt.status !== "DRAFT") {
-        const e = new Error("Only DRAFT receipts can be submitted");
-        e.statusCode = 400;
-        throw e;
+        throw buildError("Only DRAFT receipts can be submitted", 400);
       }
 
-      const safeBulkLines = Array.isArray(receipt.bulk_lines)
-        ? receipt.bulk_lines
-        : [];
+      const safeItems = Array.isArray(receipt.items) ? receipt.items : [];
+      const safeBulkLines = Array.isArray(receipt.bulk_lines) ? receipt.bulk_lines : [];
 
-      const hasSerialItems = Array.isArray(receipt.items) && receipt.items.length > 0;
-      const hasBulkLines = safeBulkLines.length > 0;
-
-      if (!hasSerialItems && !hasBulkLines) {
-        const e = new Error("Receipt has no items");
-        e.statusCode = 400;
-        throw e;
+      if (!safeItems.length && !safeBulkLines.length) {
+        throw buildError("Receipt has no items", 400);
       }
 
       return tx.inventory_receipts.update({
-        where: { id },
+        where: { id: receipt.id },
         data: {
           status: "SUBMITTED",
           submitted_at: new Date(),
@@ -463,21 +655,35 @@ async function postReceipt(req, res) {
       });
     }
 
+    const companyId = req.companyId;
     const userId = getUserId(req);
-
     const id = String(req.params.id || "").trim();
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!isUuid(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       let receipt;
 
       try {
-        receipt = await tx.inventory_receipts.findUnique({
-          where: { id },
+        receipt = await tx.inventory_receipts.findFirst({
+          where: {
+            id,
+            company_id: companyId,
+          },
           include: {
             items: true,
             bulk_lines: true,
-            vendors: true,
+            vendor: true,
           },
         });
       } catch (e) {
@@ -488,69 +694,71 @@ async function postReceipt(req, res) {
           throw e;
         }
 
-        receipt = await tx.inventory_receipts.findUnique({
-          where: { id },
+        receipt = await tx.inventory_receipts.findFirst({
+          where: {
+            id,
+            company_id: companyId,
+          },
           include: {
             items: true,
-            vendors: true,
+            vendor: true,
           },
         });
       }
 
       if (!receipt) {
-        const e = new Error("Receipt not found");
-        e.statusCode = 404;
-        throw e;
+        throw buildError("Receipt not found", 404);
       }
 
       if (receipt.status !== "SUBMITTED") {
-        const e = new Error("Only SUBMITTED receipts can be posted");
-        e.statusCode = 400;
-        throw e;
+        throw buildError("Only SUBMITTED receipts can be posted", 400);
       }
 
       const safeItems = Array.isArray(receipt.items) ? receipt.items : [];
-      const safeBulkLines = Array.isArray(receipt.bulk_lines)
-        ? receipt.bulk_lines
-        : [];
+      const safeBulkLines = Array.isArray(receipt.bulk_lines) ? receipt.bulk_lines : [];
 
-      const hasSerialItems = safeItems.length > 0;
-      const hasBulkLines = safeBulkLines.length > 0;
-
-      if (!hasSerialItems && !hasBulkLines) {
-        const e = new Error("Receipt has no items");
-        e.statusCode = 400;
-        throw e;
+      if (!safeItems.length && !safeBulkLines.length) {
+        throw buildError("Receipt has no items", 400);
       }
 
-      if (hasSerialItems) {
-        const internalSerials = safeItems.map((x) => x.internal_serial);
-        const manufacturerSerials = safeItems.map((x) => x.manufacturer_serial);
+      if (safeItems.length) {
+        const internalSerials = safeItems
+          .map((x) => x.internal_serial)
+          .filter(Boolean);
+
+        const manufacturerSerials = safeItems
+          .map((x) => x.manufacturer_serial)
+          .filter(Boolean);
 
         const existing = await tx.part_items.findFirst({
           where: {
+            company_id: companyId,
             OR: [
-              { internal_serial: { in: internalSerials } },
-              { manufacturer_serial: { in: manufacturerSerials } },
-            ],
+              internalSerials.length
+                ? { internal_serial: { in: internalSerials } }
+                : undefined,
+              manufacturerSerials.length
+                ? { manufacturer_serial: { in: manufacturerSerials } }
+                : undefined,
+            ].filter(Boolean),
           },
           select: { internal_serial: true, manufacturer_serial: true },
         });
 
         if (existing) {
-          const e = new Error(
-            `Serial already exists: ${existing.internal_serial || existing.manufacturer_serial}`
+          throw buildError(
+            `Serial already exists: ${existing.internal_serial || existing.manufacturer_serial}`,
+            409
           );
-          e.statusCode = 409;
-          throw e;
         }
 
         await tx.part_items.createMany({
           data: safeItems.map((it) => ({
+            company_id: companyId,
             part_id: it.part_id,
             warehouse_id: receipt.warehouse_id,
             internal_serial: it.internal_serial,
-            manufacturer_serial: it.manufacturer_serial,
+            manufacturer_serial: it.manufacturer_serial || null,
             status: "IN_STOCK",
             received_receipt_id: receipt.id,
             received_at: new Date(),
@@ -561,7 +769,7 @@ async function postReceipt(req, res) {
 
       let bulkTotal = 0;
 
-      if (hasBulkLines) {
+      if (safeBulkLines.length) {
         const agg = new Map();
 
         for (const bl of safeBulkLines) {
@@ -588,6 +796,7 @@ async function postReceipt(req, res) {
                 },
               },
               create: {
+                company_id: companyId,
                 warehouse_id: receipt.warehouse_id,
                 part_id,
                 qty_on_hand: obj.qty,
@@ -598,23 +807,20 @@ async function postReceipt(req, res) {
             });
           } catch (e) {
             if (isPrismaMissingAnyBulkModel(e)) {
-              const er = new Error(
-                "Bulk posting requires Prisma migration for warehouse_parts & inventory_receipt_bulk_lines."
+              throw buildError(
+                "Bulk posting requires Prisma migration for warehouse_parts & inventory_receipt_bulk_lines.",
+                400
               );
-              er.statusCode = 400;
-              throw er;
             }
             throw e;
           }
         }
       }
 
-      const serialTotal = hasSerialItems
-        ? safeItems.reduce((sum, it) => {
-            const n = it.unit_cost == null ? 0 : Number(it.unit_cost);
-            return sum + (Number.isFinite(n) ? n : 0);
-          }, 0)
-        : 0;
+      const serialTotal = safeItems.reduce((sum, it) => {
+        const n = it.unit_cost == null ? 0 : Number(it.unit_cost);
+        return sum + (Number.isFinite(n) ? n : 0);
+      }, 0);
 
       const total = toMoney(serialTotal + bulkTotal) || 0;
 
@@ -623,13 +829,17 @@ async function postReceipt(req, res) {
         data: {
           status: "POSTED",
           posted_at: new Date(),
+          approved_at: new Date(),
+          approved_by: userId,
           total_amount: receipt.total_amount == null ? total : receipt.total_amount,
         },
       });
 
       const cashExpense = await tx.cash_expenses.create({
         data: {
+          company_id: companyId,
           payment_source: "COMPANY",
+          module_source: "INVENTORY",
           expense_type: "SPARE_PARTS_PURCHASE",
           amount: total,
           vendor_id: receipt.vendor_id || null,
@@ -639,8 +849,8 @@ async function postReceipt(req, res) {
           created_by: userId,
           inventory_receipt_id: receipt.id,
           approval_status: "PENDING",
-          notes: receipt.vendors?.name
-            ? `Inventory receipt posted for vendor: ${receipt.vendors.name}`
+          notes: receipt.vendor?.name
+            ? `Inventory receipt posted for vendor: ${receipt.vendor.name}`
             : "Inventory receipt posted",
         },
       });
