@@ -88,7 +88,7 @@ function mapExpenseVendorFields(expense) {
   if (!expense) return expense;
   return {
     ...expense,
-    vendor_name: expense.vendors?.name || null,
+    vendor_name: expense.vendor?.name || expense.vendors?.name || null,
   };
 }
 
@@ -99,7 +99,7 @@ async function getExpenseOr404(id, companyId, res) {
       company_id: companyId,
     },
     include: {
-      vendors: {
+      vendor: {
         select: {
           id: true,
           name: true,
@@ -127,15 +127,16 @@ async function getExpenseFullOr404(id, companyId, res) {
       company_id: companyId,
     },
     include: {
-      cash_advances: true,
-      trips: true,
-      vehicles: true,
-      maintenance_work_orders: true,
-      vendors: true,
-      users_cash_expenses_created_byTousers: true,
-      users_cash_expenses_approved_byTousers: true,
-      users_cash_expenses_rejected_byTousers: true,
-      users_cash_expenses_resolved_byTousers: true,
+      cash_advance: true,
+      trip: true,
+      vehicle: true,
+      maintenance_work_order: true,
+      vendor: true,
+      created_by_user: true,
+      approved_by_user: true,
+      rejected_by_user: true,
+      resolved_by_user: true,
+      appealed_by_user: true,
     },
   });
 
@@ -424,7 +425,7 @@ async function getCashAdvances(req, res) {
             where: { company_id: companyId },
             orderBy: { created_at: "desc" },
             include: {
-              vendors: {
+              vendor: {
                 select: { id: true, name: true, code: true },
               },
             },
@@ -773,11 +774,11 @@ async function getAdvanceExpenses(req, res) {
       where,
       orderBy: { created_at: "desc" },
       include: {
-        users_cash_expenses_created_byTousers: true,
-        users_cash_expenses_approved_byTousers: true,
-        trips: true,
-        vehicles: true,
-        vendors: {
+        created_by_user: true,
+        approved_by_user: true,
+        trip: true,
+        vehicle: true,
+        vendor: {
           select: { id: true, name: true, code: true },
         },
       },
@@ -969,12 +970,12 @@ async function createCashExpense(req, res) {
           cash_advance_id: null,
           vendor_id: normalizedVendorId,
 
-          trips: trip_id ? { connect: { id: trip_id } } : undefined,
-          vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
-          maintenance_work_orders: maintenance_work_order_id
+          trip: trip_id ? { connect: { id: trip_id } } : undefined,
+          vehicle: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
+          maintenance_work_order: maintenance_work_order_id
             ? { connect: { id: maintenance_work_order_id } }
             : undefined,
-          vendors: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
+          vendor: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
 
           expense_type,
           amount,
@@ -989,10 +990,10 @@ async function createCashExpense(req, res) {
           invoice_total: invoice_total !== undefined && invoice_total !== null ? invoice_total : null,
 
           approval_status: "PENDING",
-          users_cash_expenses_created_byTousers: { connect: { id: userId } },
+          created_by_user: { connect: { id: userId } },
         },
         include: {
-          vendors: {
+          vendor: {
             select: { id: true, name: true, code: true },
           },
         },
@@ -1061,15 +1062,15 @@ async function createCashExpense(req, res) {
       data: {
         company_id: companyId,
         payment_source: "ADVANCE",
-        cash_advances: { connect: { id: cash_advance_id } },
+        cash_advance: { connect: { id: cash_advance_id } },
         vendor_id: normalizedVendorId,
 
-        trips: trip_id ? { connect: { id: trip_id } } : undefined,
-        vehicles: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
-        maintenance_work_orders: maintenance_work_order_id
+        trip: trip_id ? { connect: { id: trip_id } } : undefined,
+        vehicle: finalVehicleId ? { connect: { id: finalVehicleId } } : undefined,
+        maintenance_work_order: maintenance_work_order_id
           ? { connect: { id: maintenance_work_order_id } }
           : undefined,
-        vendors: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
+        vendor: normalizedVendorId ? { connect: { id: normalizedVendorId } } : undefined,
 
         expense_type,
         amount,
@@ -1077,10 +1078,10 @@ async function createCashExpense(req, res) {
         receipt_url: receipt_url ? String(receipt_url) : null,
 
         approval_status: "PENDING",
-        users_cash_expenses_created_byTousers: { connect: { id: userId } },
+        created_by_user: { connect: { id: userId } },
       },
       include: {
-        vendors: {
+        vendor: {
           select: { id: true, name: true, code: true },
         },
       },
@@ -1131,7 +1132,7 @@ async function listCashExpenses(req, res) {
         { invoice_no: { contains: qq, mode: "insensitive" } },
         { payment_ref: { contains: qq, mode: "insensitive" } },
         {
-          vendors: {
+          vendor: {
             is: {
               name: { contains: qq, mode: "insensitive" },
             },
@@ -1151,11 +1152,11 @@ async function listCashExpenses(req, res) {
         skip,
         take: ps,
         include: {
-          cash_advances: true,
-          trips: true,
-          vehicles: true,
-          maintenance_work_orders: true,
-          vendors: {
+          cash_advance: true,
+          trip: true,
+          vehicle: true,
+          maintenance_work_order: true,
+          vendor: {
             select: {
               id: true,
               name: true,
@@ -1165,8 +1166,8 @@ async function listCashExpenses(req, res) {
               status: true,
             },
           },
-          users_cash_expenses_created_byTousers: true,
-          users_cash_expenses_approved_byTousers: true,
+          created_by_user: true,
+          approved_by_user: true,
         },
       }),
       prisma.cash_expenses.count({ where }),
@@ -1208,7 +1209,7 @@ async function getCashAdvanceById(req, res) {
           where: { company_id: companyId },
           orderBy: { created_at: "desc" },
           include: {
-            vendors: {
+            vendor: {
               select: { id: true, name: true, code: true },
             },
           },
@@ -1272,7 +1273,7 @@ async function getCashExpensesSummary(req, res) {
         { invoice_no: { contains: qq, mode: "insensitive" } },
         { payment_ref: { contains: qq, mode: "insensitive" } },
         {
-          vendors: {
+          vendor: {
             is: {
               name: { contains: qq, mode: "insensitive" },
             },
@@ -1360,15 +1361,16 @@ async function getCashExpenseById(req, res) {
         company_id: companyId,
       },
       include: {
-        cash_advances: true,
-        trips: true,
-        vehicles: true,
-        maintenance_work_orders: true,
-        vendors: true,
-        users_cash_expenses_created_byTousers: true,
-        users_cash_expenses_approved_byTousers: true,
-        users_cash_expenses_rejected_byTousers: true,
-        users_cash_expenses_resolved_byTousers: true,
+        cash_advance: true,
+        trip: true,
+        vehicle: true,
+        maintenance_work_order: true,
+        vendor: true,
+        created_by_user: true,
+        approved_by_user: true,
+        rejected_by_user: true,
+        resolved_by_user: true,
+        appealed_by_user: true,
       },
     });
 
@@ -1376,7 +1378,7 @@ async function getCashExpenseById(req, res) {
 
     const isPrivileged = isAdminOrAccountant(req);
     const isOwner = row.created_by === userId;
-    const isAdvanceSupervisor = row.cash_advances?.field_supervisor_id === userId;
+    const isAdvanceSupervisor = row.cash_advance?.field_supervisor_id === userId;
 
     if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
       return res.status(403).json({ message: "Forbidden" });
@@ -1435,7 +1437,7 @@ async function approveCashExpense(req, res) {
           appeal_status: st === "APPEALED" ? "ACCEPTED" : expense.appeal_status,
         },
         include: {
-          vendors: {
+          vendor: {
             select: { id: true, name: true, code: true },
           },
         },
@@ -1509,7 +1511,7 @@ async function rejectCashExpense(req, res) {
           appeal_status: st === "APPEALED" ? "REJECTED" : expense.appeal_status,
         },
         include: {
-          vendors: {
+          vendor: {
             select: { id: true, name: true, code: true },
           },
         },
@@ -1565,7 +1567,7 @@ async function appealRejectedExpense(req, res) {
 
     const isPrivileged = isAdminOrAccountant(req);
     const isOwner = expense.created_by === actorId;
-    const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
+    const isAdvanceSupervisor = expense.cash_advance?.field_supervisor_id === actorId;
 
     if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
       return res.status(403).json({ message: "Forbidden" });
@@ -1586,7 +1588,7 @@ async function appealRejectedExpense(req, res) {
           resolved_by: null,
         },
         include: {
-          vendors: {
+          vendor: {
             select: { id: true, name: true, code: true },
           },
         },
@@ -1665,7 +1667,7 @@ async function resolveAppeal(req, res) {
             appeal_status: "ACCEPTED",
           },
           include: {
-            vendors: {
+            vendor: {
               select: { id: true, name: true, code: true },
             },
           },
@@ -1683,7 +1685,7 @@ async function resolveAppeal(req, res) {
             appeal_status: "REJECTED",
           },
           include: {
-            vendors: {
+            vendor: {
               select: { id: true, name: true, code: true },
             },
           },
@@ -1755,7 +1757,7 @@ async function reopenRejectedExpense(req, res) {
           resolved_by: null,
         },
         include: {
-          vendors: {
+          vendor: {
             select: { id: true, name: true, code: true },
           },
         },
@@ -1798,7 +1800,7 @@ async function getExpenseAudit(req, res) {
 
     const isPrivileged = isAdminOrAccountant(req);
     const isOwner = expense.created_by === actorId;
-    const isAdvanceSupervisor = expense.cash_advances?.field_supervisor_id === actorId;
+    const isAdvanceSupervisor = expense.cash_advance?.field_supervisor_id === actorId;
 
     if (!isPrivileged && !isOwner && !isAdvanceSupervisor) {
       return res.status(403).json({ message: "Forbidden" });
