@@ -103,7 +103,7 @@ async function recomputeInvoicePaymentStatus(tx, companyId, invoiceId) {
     where: {
       company_id: companyId,
       invoice_id: invoiceId,
-      ar_payments: {
+      payment: {
         is: {
           status: "POSTED",
           company_id: companyId,
@@ -156,7 +156,7 @@ async function listArInvoices(req, res) {
             trip_id: true,
             amount: true,
             notes: true,
-            trips: {
+            trip: {
               select: {
                 id: true,
                 trip_code: true,
@@ -205,34 +205,28 @@ async function getArInvoiceById(req, res) {
       include: {
         client: { select: { id: true, name: true } },
         contract: { select: { id: true, contract_no: true, status: true } },
-        created_by_user: { select: { id: true, full_name: true, email: true, role: true } },
-        approved_by_user: { select: { id: true, full_name: true, email: true, role: true } },
+        created_by_user: {
+          select: { id: true, full_name: true, email: true, role: true },
+        },
+        approved_by_user: {
+          select: { id: true, full_name: true, email: true, role: true },
+        },
         invoice_trip_lines: {
           where: {
             company_id: companyId,
           },
           orderBy: { trip_id: "asc" },
           include: {
-            trips: {
+            trip: {
               select: {
                 id: true,
                 trip_code: true,
                 status: true,
                 financial_status: true,
                 scheduled_at: true,
-                clients: { select: { id: true, name: true } },
+                client: { select: { id: true, name: true } },
+                contract: { select: { id: true, contract_no: true, status: true } },
                 site: { select: { id: true, name: true } },
-                pickup_site: { select: { id: true, name: true } },
-                dropoff_site: { select: { id: true, name: true } },
-                routes: {
-                  select: {
-                    id: true,
-                    name: true,
-                    code: true,
-                    origin_label: true,
-                    destination_label: true,
-                  },
-                },
               },
             },
           },
@@ -243,7 +237,7 @@ async function getArInvoiceById(req, res) {
           },
           orderBy: { created_at: "desc" },
           include: {
-            ar_payments: {
+            payment: {
               select: {
                 id: true,
                 payment_date: true,
@@ -261,7 +255,7 @@ async function getArInvoiceById(req, res) {
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
     const postedPaid = (invoice.payments || [])
-      .filter((p) => p.ar_payments?.status === "POSTED")
+      .filter((p) => p.payment?.status === "POSTED")
       .reduce((s, p) => s + Number(p.amount_allocated || 0), 0);
 
     return res.json({
@@ -363,17 +357,13 @@ async function createArInvoice(req, res) {
             const contract = await tx.client_contracts.findFirst({
               where: {
                 id: contract_id,
-                company_id: companyId,
+                client_id,
               },
-              select: { id: true, client_id: true, company_id: true },
+              select: { id: true, client_id: true },
             });
 
             if (!contract) {
               throw buildError("Contract not found", 404);
-            }
-
-            if (contract.client_id !== client_id) {
-              throw buildError("Contract does not belong to this client", 400);
             }
           }
 
@@ -450,7 +440,7 @@ async function createArInvoice(req, res) {
                   company_id: companyId,
                 },
                 include: {
-                  trips: {
+                  trip: {
                     select: {
                       id: true,
                       trip_code: true,
@@ -697,7 +687,7 @@ async function getArPaymentById(req, res) {
           },
           orderBy: { created_at: "desc" },
           include: {
-            ar_invoices: {
+            invoice: {
               select: {
                 id: true,
                 invoice_no: true,
@@ -751,7 +741,7 @@ async function getArPaymentById(req, res) {
         invoice_id: a.invoice_id,
         amount_allocated: Number(a.amount_allocated || 0),
         created_at: a.created_at,
-        invoice: a.ar_invoices,
+        invoice: a.invoice,
       })),
     });
   } catch (e) {
@@ -1109,7 +1099,7 @@ async function allocateArPayment(req, res) {
         where: {
           company_id: companyId,
           invoice_id,
-          ar_payments: {
+          payment: {
             is: {
               status: "POSTED",
               company_id: companyId,
@@ -1228,7 +1218,7 @@ async function getClientLedger(req, res) {
           },
           select: {
             amount_allocated: true,
-            ar_payments: { select: { status: true } },
+            payment: { select: { status: true } },
           },
         },
       },
@@ -1236,7 +1226,7 @@ async function getClientLedger(req, res) {
 
     const invoiceRows = invoices.map((inv) => {
       const paid = (inv.payments || [])
-        .filter((p) => p.ar_payments?.status === "POSTED")
+        .filter((p) => p.payment?.status === "POSTED")
         .reduce((s, p) => s + Number(p.amount_allocated || 0), 0);
 
       const total = Number(inv.total_amount || 0);
