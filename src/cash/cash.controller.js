@@ -418,8 +418,8 @@ async function getCashAdvances(req, res) {
         skip,
         take: ps,
         include: {
-          users_cash_advances_field_supervisor_idTousers: true,
-          users_cash_advances_issued_byTousers: true,
+          supervisor_user: true,
+          issued_by_user: true,
           cash_expenses: {
             where: { company_id: companyId },
             orderBy: { created_at: "desc" },
@@ -488,16 +488,16 @@ async function createCashAdvance(req, res) {
         company_id: companyId,
         amount,
         status: "OPEN",
-        users_cash_advances_field_supervisor_idTousers: {
+        supervisor_user: {
           connect: { id: field_supervisor_id },
         },
-        users_cash_advances_issued_byTousers: {
+        issued_by_user: {
           connect: { id: issuerId },
         },
       },
       include: {
-        users_cash_advances_field_supervisor_idTousers: true,
-        users_cash_advances_issued_byTousers: true,
+        supervisor_user: true,
+        issued_by_user: true,
       },
     });
 
@@ -1202,8 +1202,8 @@ async function getCashAdvanceById(req, res) {
         company_id: companyId,
       },
       include: {
-        users_cash_advances_field_supervisor_idTousers: true,
-        users_cash_advances_issued_byTousers: true,
+        supervisor_user: true,
+        issued_by_user: true,
         cash_expenses: {
           where: { company_id: companyId },
           orderBy: { created_at: "desc" },
@@ -1850,7 +1850,7 @@ async function getSupervisorDeficitReport(req, res) {
     const advances = await prisma.cash_advances.findMany({
       where: whereAdv,
       include: {
-        users_cash_advances_field_supervisor_idTousers: true,
+        supervisor_user: true,
       },
       orderBy: { created_at: "desc" },
       take: 2000,
@@ -1884,7 +1884,7 @@ async function getSupervisorDeficitReport(req, res) {
       return {
         cash_advance_id: a.id,
         supervisor_id: a.field_supervisor_id,
-        supervisor_name: a.users_cash_advances_field_supervisor_idTousers?.full_name || null,
+        supervisor_name: a.supervisor_user?.full_name || null,
         status: a.status,
         advance_amount: advanceAmount,
         approved_spent: approvedSpent,

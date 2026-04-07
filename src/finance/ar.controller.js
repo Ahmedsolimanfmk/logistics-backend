@@ -145,8 +145,8 @@ async function listArInvoices(req, res) {
       orderBy: { created_at: "desc" },
       take: 50,
       include: {
-        clients: { select: { id: true, name: true } },
-        client_contracts: { select: { id: true, contract_no: true } },
+        client: { select: { id: true, name: true } },
+        contract: { select: { id: true, contract_no: true } },
         invoice_trip_lines: {
           where: {
             company_id: companyId,
@@ -203,10 +203,10 @@ async function getArInvoiceById(req, res) {
         company_id: companyId,
       },
       include: {
-        clients: { select: { id: true, name: true } },
-        client_contracts: { select: { id: true, contract_no: true, status: true } },
-        users_created: { select: { id: true, full_name: true, email: true, role: true } },
-        users_approved: { select: { id: true, full_name: true, email: true, role: true } },
+        client: { select: { id: true, name: true } },
+        contract: { select: { id: true, contract_no: true, status: true } },
+        created_by_user: { select: { id: true, full_name: true, email: true, role: true } },
+        approved_by_user: { select: { id: true, full_name: true, email: true, role: true } },
         invoice_trip_lines: {
           where: {
             company_id: companyId,
@@ -282,17 +282,6 @@ async function getArInvoiceById(req, res) {
 
 // =======================
 // POST /finance/ar/invoices
-// body:
-// {
-//   client_id,
-//   contract_id?,
-//   issue_date?,
-//   due_date?,
-//   amount?,
-//   vat_amount?,
-//   notes?,
-//   trip_lines?: [{ trip_id, amount, notes? }]
-// }
 // =======================
 async function createArInvoice(req, res) {
   try {
@@ -454,8 +443,8 @@ async function createArInvoice(req, res) {
               company_id: companyId,
             },
             include: {
-              clients: { select: { id: true, name: true } },
-              client_contracts: { select: { id: true, contract_no: true } },
+              client: { select: { id: true, name: true } },
+              contract: { select: { id: true, contract_no: true } },
               invoice_trip_lines: {
                 where: {
                   company_id: companyId,
@@ -505,7 +494,6 @@ async function createArInvoice(req, res) {
 
 // =======================
 // PATCH /finance/ar/invoices/:id/submit
-// DRAFT -> SUBMITTED
 // =======================
 async function submitArInvoice(req, res) {
   try {
@@ -547,7 +535,6 @@ async function submitArInvoice(req, res) {
 
 // =======================
 // PATCH /finance/ar/invoices/:id/approve
-// SUBMITTED -> APPROVED
 // =======================
 async function approveArInvoice(req, res) {
   try {
@@ -599,7 +586,6 @@ async function approveArInvoice(req, res) {
 
 // =======================
 // PATCH /finance/ar/invoices/:id/reject
-// SUBMITTED -> REJECTED
 // =======================
 async function rejectArInvoice(req, res) {
   try {
@@ -672,7 +658,7 @@ async function listArPayments(req, res) {
       orderBy: { created_at: "desc" },
       take: 50,
       include: {
-        clients: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
       },
     });
 
@@ -704,7 +690,7 @@ async function getArPaymentById(req, res) {
         company_id: companyId,
       },
       include: {
-        clients: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
         allocations: {
           where: {
             company_id: companyId,
@@ -741,7 +727,7 @@ async function getArPaymentById(req, res) {
     return res.json({
       payment: {
         id: payment.id,
-        client: payment.clients,
+        client: payment.client,
         client_id: payment.client_id,
         payment_date: payment.payment_date,
         amount,
