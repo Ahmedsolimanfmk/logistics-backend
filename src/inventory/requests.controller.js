@@ -78,7 +78,7 @@ function requestInclude() {
     issues: true,
     reservations: {
       include: {
-        part_items: {
+        part_item: {
           include: {
             part: true,
             warehouse: true,
