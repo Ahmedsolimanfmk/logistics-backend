@@ -7,30 +7,40 @@ const prisma = require("../maintenance/prisma");
 function isUuid(v) {
   return (
     typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      v
-    )
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
   );
 }
 
+function requireCompanyId(companyId) {
+  return (
+    typeof companyId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(companyId)
+  );
+}
+
+function normalizeStatus(v) {
+  const s = String(v || "").trim().toUpperCase();
+  if (!s || s === "ALL") return "";
+  return s;
+}
 
 async function listPartItems(req, res) {
   try {
-    
     const q = String(req.query.q || "").trim();
     const warehouse_id = String(req.query.warehouse_id || "").trim();
     const part_id = String(req.query.part_id || "").trim();
-    const status = String(req.query.status || "").trim();
-    // IN_STOCK | RESERVED | ISSUED | INSTALLED | SCRAPPED
+    const status = normalizeStatus(req.query.status);
 
     const companyId = req.companyId;
+
+    if (!requireCompanyId(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
 
     const where = {
       company_id: companyId,
     };
 
-
-    // ✅ Guard UUID filters (avoid Prisma runtime errors on invalid UUID)
     if (warehouse_id) {
       if (!isUuid(warehouse_id)) {
         return res.status(400).json({ message: "Invalid warehouse_id" });
@@ -45,39 +55,40 @@ async function listPartItems(req, res) {
       where.part_id = part_id;
     }
 
-    if (status) where.status = status;
+    if (status) {
+      where.status = status;
+    }
 
-    // ✅ Expanded search: serials + part master + warehouse name
     if (q) {
       where.OR = [
-        // serials
         { internal_serial: { contains: q, mode: "insensitive" } },
         { manufacturer_serial: { contains: q, mode: "insensitive" } },
 
-        // part master
-        { parts: { part_number: { contains: q, mode: "insensitive" } } },
-        { parts: { name: { contains: q, mode: "insensitive" } } },
-        { parts: { brand: { contains: q, mode: "insensitive" } } },
+        { part: { is: { part_number: { contains: q, mode: "insensitive" } } } },
+        { part: { is: { name: { contains: q, mode: "insensitive" } } } },
+        { part: { is: { brand: { contains: q, mode: "insensitive" } } } },
 
-        // warehouse
-        { warehouses: { name: { contains: q, mode: "insensitive" } } },
+        { warehouse: { is: { name: { contains: q, mode: "insensitive" } } } },
       ];
     }
 
     const rows = await prisma.part_items.findMany({
-      where: Object.keys(where).length ? where : undefined,
+      where,
       include: {
-        parts: true,
-        warehouses: true,
+        part: true,
+        warehouse: true,
       },
       orderBy: { received_at: "desc" },
-      take: 200, // ✅ safety limit
+      take: 200,
     });
 
-    res.json({ items: rows });
+    return res.json({ items: rows });
   } catch (err) {
     console.error("listPartItems error:", err);
-    res.status(500).json({ message: "Failed to list part items" });
+    return res.status(500).json({
+      message: "Failed to list part items",
+      error: err?.message || "Unknown error",
+    });
   }
 }
 
