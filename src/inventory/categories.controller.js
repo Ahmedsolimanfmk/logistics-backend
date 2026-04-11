@@ -16,19 +16,28 @@ function normalizeCode(v) {
   return s || null;
 }
 
+function requireCompanyId(companyId, res) {
+  if (
+    typeof companyId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(companyId)
+  ) {
+    res.status(400).json({ message: "Invalid company context" });
+    return false;
+  }
+  return true;
+}
+
 async function listCategories(req, res) {
   try {
-    const company_id = req.user?.company_id;
-    if (!company_id) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    const companyId = req.companyId;
+    if (!requireCompanyId(companyId, res)) return;
 
-    const q = normalizeText(req.query.q).toLowerCase();
+    const q = normalizeText(req.query.q);
     const isActiveParam = req.query.is_active;
     const { page, pageSize, skip } = parsePagination(req.query);
 
     const where = {
-      company_id,
+      company_id: companyId,
       ...(typeof isActiveParam !== "undefined" && isActiveParam !== ""
         ? { is_active: String(isActiveParam).toLowerCase() === "true" }
         : {}),
@@ -87,19 +96,17 @@ async function listCategories(req, res) {
 
 async function getCategory(req, res) {
   try {
-    const company_id = req.user?.company_id;
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    if (!company_id) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!requireCompanyId(companyId, res)) return;
 
     const row = await prisma.part_categories.findFirst({
       where: {
         id,
-        company_id,
+        company_id: companyId,
       },
-        include: {
+      include: {
         _count: {
           select: {
             parts: true,
@@ -133,10 +140,8 @@ async function getCategory(req, res) {
 
 async function createCategory(req, res) {
   try {
-    const company_id = req.user?.company_id;
-    if (!company_id) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    const companyId = req.companyId;
+    if (!requireCompanyId(companyId, res)) return;
 
     const name = normalizeText(req.body?.name);
     const code = normalizeCode(req.body?.code);
@@ -147,7 +152,7 @@ async function createCategory(req, res) {
 
     const existingByName = await prisma.part_categories.findFirst({
       where: {
-        company_id,
+        company_id: companyId,
         name: {
           equals: name,
           mode: "insensitive",
@@ -165,7 +170,7 @@ async function createCategory(req, res) {
     if (code) {
       const existingByCode = await prisma.part_categories.findFirst({
         where: {
-          company_id,
+          company_id: companyId,
           code: {
             equals: code,
             mode: "insensitive",
@@ -183,7 +188,7 @@ async function createCategory(req, res) {
 
     const created = await prisma.part_categories.create({
       data: {
-        company_id,
+        company_id: companyId,
         name,
         code,
         is_active: true,
@@ -202,15 +207,13 @@ async function createCategory(req, res) {
 
 async function updateCategory(req, res) {
   try {
-    const company_id = req.user?.company_id;
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    if (!company_id) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!requireCompanyId(companyId, res)) return;
 
     const existing = await prisma.part_categories.findFirst({
-      where: { id, company_id },
+      where: { id, company_id: companyId },
     });
 
     if (!existing) {
@@ -231,7 +234,7 @@ async function updateCategory(req, res) {
     if (typeof name !== "undefined") {
       const duplicateName = await prisma.part_categories.findFirst({
         where: {
-          company_id,
+          company_id: companyId,
           id: { not: id },
           name: {
             equals: name,
@@ -251,7 +254,7 @@ async function updateCategory(req, res) {
     if (typeof code !== "undefined" && code) {
       const duplicateCode = await prisma.part_categories.findFirst({
         where: {
-          company_id,
+          company_id: companyId,
           id: { not: id },
           code: {
             equals: code,
@@ -289,15 +292,13 @@ async function updateCategory(req, res) {
 
 async function deleteCategory(req, res) {
   try {
-    const company_id = req.user?.company_id;
+    const companyId = req.companyId;
     const { id } = req.params;
 
-    if (!company_id) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!requireCompanyId(companyId, res)) return;
 
     const existing = await prisma.part_categories.findFirst({
-      where: { id, company_id },
+      where: { id, company_id: companyId },
       include: {
         _count: {
           select: {
