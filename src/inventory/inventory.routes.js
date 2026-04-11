@@ -15,6 +15,9 @@ const partItemsCtrl = require("./partItems.controller");
 const requestsCtrl = require("./requests.controller");
 const issuesCtrl = require("./issues.controller");
 
+// ✅ NEW
+const categoriesCtrl = require("./categories.controller");
+
 const router = express.Router();
 
 // 🔥 IMPORTANT
@@ -27,6 +30,13 @@ router.use(requireCompanyFeature("inventory.access"));
 router.get("/warehouses", warehousesCtrl.listWarehouses);
 router.post("/warehouses", warehousesCtrl.createWarehouse);
 router.patch("/warehouses/:id", warehousesCtrl.updateWarehouse);
+
+// ---------- Categories (NEW) ----------
+router.get("/categories", categoriesCtrl.listCategories);
+router.get("/categories/:id", categoriesCtrl.getCategory);
+router.post("/categories", categoriesCtrl.createCategory);
+router.patch("/categories/:id", categoriesCtrl.updateCategory);
+router.delete("/categories/:id", categoriesCtrl.deleteCategory);
 
 // ---------- Parts ----------
 router.get("/parts", partsCtrl.listParts);
