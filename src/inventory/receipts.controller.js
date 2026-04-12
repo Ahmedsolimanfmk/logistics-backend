@@ -879,11 +879,74 @@ async function postReceipt(req, res) {
     return res.status(500).json({ message: "Failed to post receipt" });
   }
 }
+async function cancelReceipt(req, res) {
+  try {
+    if (!isAdminOrAccountant(req)) {
+      return res.status(403).json({
+        message: "Only ACCOUNTANT/ADMIN can cancel receipts",
+      });
+    }
 
+    const companyId = req.companyId;
+    const id = String(req.params.id || "").trim();
+
+    if (!companyId || !isUuid(companyId)) {
+      return res.status(400).json({ message: "Invalid company context" });
+    }
+
+    if (!isUuid(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const receipt = await tx.inventory_receipts.findFirst({
+        where: {
+          id,
+          company_id: companyId,
+        },
+      });
+
+      if (!receipt) {
+        throw buildError("Receipt not found", 404);
+      }
+
+      const st = String(receipt.status || "").toUpperCase();
+
+      if (st === "POSTED") {
+        throw buildError("Posted receipts cannot be cancelled", 400);
+      }
+
+      if (st === "CANCELLED") {
+        return receipt;
+      }
+
+      return tx.inventory_receipts.update({
+        where: { id: receipt.id },
+        data: {
+          status: "CANCELLED",
+        },
+      });
+    });
+
+    return res.json({
+      message: "Receipt cancelled",
+      receipt: updated,
+    });
+  } catch (err) {
+    const sc = err?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: String(err.message || "Error") });
+    }
+
+    console.error("cancelReceipt error:", err);
+    return res.status(500).json({ message: "Failed to cancel receipt" });
+  }
+}
 module.exports = {
   listReceipts,
   getReceipt,
   createReceipt,
   submitReceipt,
   postReceipt,
+  cancelReceipt,
 };
