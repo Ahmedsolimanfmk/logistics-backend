@@ -52,6 +52,7 @@ router.get("/receipts/:id", receiptsCtrl.getReceipt);
 router.post("/receipts", receiptsCtrl.createReceipt);
 router.post("/receipts/:id/submit", receiptsCtrl.submitReceipt);
 router.post("/receipts/:id/post", receiptsCtrl.postReceipt);
+router.post("/receipts/:id/cancel", receiptsCtrl.cancelReceipt);
 
 // ---------- Requests ----------
 router.get("/requests", requestsCtrl.listRequests);
