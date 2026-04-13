@@ -564,11 +564,11 @@ async function createReceipt(req, res) {
 
 async function submitReceipt(req, res) {
   try {
-    if (!isAdminOrAccountant(req)) {
-      return res.status(403).json({
-        message: "Only ACCOUNTANT/ADMIN can submit receipts",
-      });
-    }
+    if (!isAdminOrStorekeeper(req)) {
+  return res.status(403).json({
+    message: "Only STOREKEEPER/ADMIN can submit receipts",
+  });
+}
 
     const companyId = req.companyId;
     const id = String(req.params.id || "").trim();
