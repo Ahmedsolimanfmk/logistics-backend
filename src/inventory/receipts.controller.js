@@ -565,10 +565,10 @@ async function createReceipt(req, res) {
 async function submitReceipt(req, res) {
   try {
     if (!isAdminOrAccountant(req)) {
-  return res.status(403).json({
-    message: "Only ACCOUNTANT/ADMIN can submit receipts",
-  });
-}
+      return res.status(403).json({
+        message: "Only ACCOUNTANT/ADMIN can submit receipts",
+      });
+    }
 
     const companyId = req.companyId;
     const id = String(req.params.id || "").trim();
@@ -717,6 +717,14 @@ async function postReceipt(req, res) {
       const safeItems = Array.isArray(receipt.items) ? receipt.items : [];
       const safeBulkLines = Array.isArray(receipt.bulk_lines) ? receipt.bulk_lines : [];
 
+      console.log("postReceipt:start", {
+        receipt_id: receipt.id,
+        company_id: companyId,
+        warehouse_id: receipt.warehouse_id,
+        items_count: safeItems.length,
+        bulk_lines_count: safeBulkLines.length,
+      });
+
       if (!safeItems.length && !safeBulkLines.length) {
         throw buildError("Receipt has no items", 400);
       }
@@ -751,6 +759,10 @@ async function postReceipt(req, res) {
             409
           );
         }
+
+        console.log("postReceipt:createMany part_items", {
+          count: safeItems.length,
+        });
 
         await tx.part_items.createMany({
           data: safeItems.map((it) => ({
@@ -788,9 +800,15 @@ async function postReceipt(req, res) {
           bulkTotal += Number(obj.total || 0);
 
           try {
+            console.log("postReceipt:warehouse_parts.upsert", {
+              warehouse_id: receipt.warehouse_id,
+              part_id,
+              qty_increment: obj.qty,
+            });
+
             await tx.warehouse_parts.upsert({
               where: {
-                uq_warehouse_parts_warehouse_part: {
+                warehouse_id_part_id: {
                   warehouse_id: receipt.warehouse_id,
                   part_id,
                 },
@@ -806,12 +824,12 @@ async function postReceipt(req, res) {
               },
             });
           } catch (e) {
-            if (isPrismaMissingAnyBulkModel(e)) {
-              throw buildError(
-                "Bulk posting requires Prisma migration for warehouse_parts & inventory_receipt_bulk_lines.",
-                400
-              );
-            }
+            console.error("warehouse_parts upsert error:", {
+              message: e?.message,
+              code: e?.code,
+              meta: e?.meta,
+              stack: e?.stack,
+            });
             throw e;
           }
         }
@@ -824,6 +842,11 @@ async function postReceipt(req, res) {
 
       const total = toMoney(serialTotal + bulkTotal) || 0;
 
+      console.log("postReceipt:update receipt", {
+        receipt_id: receipt.id,
+        total,
+      });
+
       const posted = await tx.inventory_receipts.update({
         where: { id: receipt.id },
         data: {
@@ -833,6 +856,12 @@ async function postReceipt(req, res) {
           approved_by: userId,
           total_amount: receipt.total_amount == null ? total : receipt.total_amount,
         },
+      });
+
+      console.log("postReceipt:create cash_expense", {
+        receipt_id: receipt.id,
+        total,
+        vendor_id: receipt.vendor_id || null,
       });
 
       const cashExpense = await tx.cash_expenses.create({
@@ -876,9 +905,19 @@ async function postReceipt(req, res) {
     }
 
     console.error("postReceipt error:", err);
-    return res.status(500).json({ message: "Failed to post receipt" });
+    console.error("postReceipt details:", {
+      code: err?.code,
+      message: err?.message,
+      meta: err?.meta,
+      stack: err?.stack,
+    });
+
+    return res.status(500).json({
+      message: err?.message || "Failed to post receipt",
+    });
   }
 }
+
 async function cancelReceipt(req, res) {
   try {
     if (!isAdminOrAccountant(req)) {
@@ -942,6 +981,7 @@ async function cancelReceipt(req, res) {
     return res.status(500).json({ message: "Failed to cancel receipt" });
   }
 }
+
 module.exports = {
   listReceipts,
   getReceipt,
