@@ -865,25 +865,24 @@ async function postReceipt(req, res) {
       });
 
       const cashExpense = await tx.cash_expenses.create({
-        data: {
-          company_id: companyId,
-          payment_source: "COMPANY",
-          module_source: "INVENTORY",
-          expense_type: "SPARE_PARTS_PURCHASE",
-          amount: total,
-          vendor_id: receipt.vendor_id || null,
-          invoice_no: receipt.invoice_no,
-          invoice_date: receipt.invoice_date,
-          invoice_total: total,
-          created_by: userId,
-          inventory_receipt_id: receipt.id,
-          approval_status: "PENDING",
-          notes: receipt.vendor?.name
-            ? `Inventory receipt posted for vendor: ${receipt.vendor.name}`
-            : "Inventory receipt posted",
-        },
-      });
-
+  data: {
+    company_id: companyId,
+    payment_source: "COMPANY",
+    module_source: "INVENTORY",
+    expense_type: "PARTS_PURCHASE",
+    amount: total,
+    vendor_id: receipt.vendor_id || null,
+    invoice_no: receipt.invoice_no,
+    invoice_date: receipt.invoice_date,
+    invoice_total: total,
+    created_by: userId,
+    inventory_receipt_id: receipt.id,
+    approval_status: "PENDING",
+    notes: receipt.vendor?.name
+      ? `Inventory receipt posted for vendor: ${receipt.vendor.name}`
+      : "Inventory receipt posted",
+  },
+});
       return { posted, cashExpense };
     });
 
