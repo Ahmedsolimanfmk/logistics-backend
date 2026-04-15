@@ -321,9 +321,13 @@ async function createReceipt(req, res) {
       return res.status(400).json({ message: "warehouse_id is required" });
     }
 
-    if (vendor_id && !isUuid(vendor_id)) {
-      return res.status(400).json({ message: "vendor_id is invalid" });
-    }
+    if (!vendor_id) {
+  return res.status(400).json({ message: "vendor_id is required" });
+}
+
+if (!isUuid(vendor_id)) {
+  return res.status(400).json({ message: "vendor_id is invalid" });
+}
 
     if (invoice_date && Number.isNaN(invoice_date.getTime())) {
       return res.status(400).json({ message: "invoice_date is invalid" });
