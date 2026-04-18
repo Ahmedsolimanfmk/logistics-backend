@@ -1,21 +1,15 @@
 const prisma = require("../prisma");
-
-function getAuthUserId(req) {
-  return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
-}
-
-function roleUpper(role) {
-  return String(role || "").toUpperCase();
-}
-
-function isAdminOrAccountant(role) {
-  return ["ADMIN", "ACCOUNTANT"].includes(roleUpper(role));
-}
+const {
+  getAuthUserId,
+  getCompanyIdOrThrow,
+} = require("../core/request-context");
+const { isAdminOrAccountant } = require("./maintenance.access");
 
 function buildLabel(v) {
   const fn = v?.fleet_no ? String(v.fleet_no).trim() : "";
   const pn = v?.plate_no ? String(v.plate_no).trim() : "";
   const dn = v?.display_name ? String(v.display_name).trim() : "";
+
   if (fn && pn) return `${fn} - ${pn}`;
   if (fn) return fn;
   if (pn) return pn;
@@ -26,13 +20,13 @@ function buildLabel(v) {
 async function listVehicleOptions(req, res) {
   try {
     const userId = getAuthUserId(req);
-    const companyId = req.companyId;
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
+    const companyId = getCompanyIdOrThrow(req);
 
-    const role = req.user?.role || null;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
-    if (isAdminOrAccountant(role)) {
+    if (isAdminOrAccountant(req)) {
       const rows = await prisma.vehicles.findMany({
         where: {
           company_id: companyId,
@@ -91,7 +85,12 @@ async function listVehicleOptions(req, res) {
       })),
     });
   } catch (e) {
-    console.log("LIST VEHICLE OPTIONS ERROR:", e);
+    const sc = e?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
+    console.error("LIST VEHICLE OPTIONS ERROR:", e);
     return res.status(500).json({ message: "Failed to load vehicle options" });
   }
 }

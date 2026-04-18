@@ -1,486 +1,335 @@
-// =======================
-// src/maintenance/maintenance.requests.controller.js
-// =======================
-
+const fs = require("fs");
+const path = require("path");
+const multer = require("multer");
 const prisma = require("../prisma");
 
-// ---------- helpers ----------
-function getAuthUserId(req) {
-  return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
+const {
+  getAuthUserId,
+  getCompanyIdOrThrow,
+} = require("../core/request-context");
+const { assertUuid } = require("../core/validation");
+
+const ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
 }
 
-function roleUpper(role) {
-  return String(role || "").toUpperCase();
+function safeBaseName(fileName) {
+  return String(fileName || "file")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .slice(0, 180);
 }
 
-function isAdminOrAccountant(role) {
-  return ["ADMIN", "ACCOUNTANT"].includes(roleUpper(role));
-}
-
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+function buildDiskPath({ companyId, requestId }) {
+  return path.join(
+    process.cwd(),
+    "uploads",
+    "maintenance",
+    String(companyId),
+    String(requestId)
   );
 }
 
-// المشرف يقدر يشتغل بس على عربياته داخل نفس الشركة
-async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyId }) {
-  const row = await prisma.vehicle_portfolio.findFirst({
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    try {
+      const companyId = req?.companyId || "unknown-company";
+      const requestId = req?.params?.id || "unknown-request";
+      const dir = buildDiskPath({ companyId, requestId });
+      ensureDir(dir);
+      cb(null, dir);
+    } catch (err) {
+      cb(err);
+    }
+  },
+  filename: function (req, file, cb) {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const ext = path.extname(file.originalname || "");
+    const base = path.basename(file.originalname || "file", ext);
+    cb(null, `${safeBaseName(base)}-${unique}${ext}`);
+  },
+});
+
+function fileFilter(req, file, cb) {
+  if (!ALLOWED_MIME_TYPES.has(String(file.mimetype || "").toLowerCase())) {
+    const err = new Error("Unsupported file type");
+    err.statusCode = 400;
+    return cb(err);
+  }
+  cb(null, true);
+}
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: MAX_FILE_SIZE,
+    files: 5,
+  },
+});
+
+function normalizeAttachmentType(value, mimeType) {
+  const raw = String(value || "").trim().toUpperCase();
+
+  const allowed = new Set(["IMAGE", "DOCUMENT", "INVOICE", "OTHER"]);
+  if (allowed.has(raw)) return raw;
+
+  const mime = String(mimeType || "").toLowerCase();
+  if (mime.startsWith("image/")) return "IMAGE";
+  if (mime === "application/pdf") return "DOCUMENT";
+  return "OTHER";
+}
+
+async function assertRequestAccessible(req, requestId) {
+  const userId = getAuthUserId(req);
+  const companyId = getCompanyIdOrThrow(req);
+
+  if (!userId) {
+    const err = new Error("Unauthorized");
+    err.statusCode = 401;
+    throw err;
+  }
+
+  const row = await prisma.maintenance_requests.findFirst({
     where: {
+      id: requestId,
       company_id: companyId,
-      vehicle_id,
-      field_supervisor_id: userId,
-      is_active: true,
     },
-    select: { id: true },
+    select: {
+      id: true,
+      vehicle_id: true,
+      requested_by: true,
+    },
   });
 
-  return !!row;
+  if (!row) {
+    const err = new Error("Maintenance request not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return row;
 }
 
-// =======================
-// POST /maintenance/requests
-// =======================
-async function createMaintenanceRequest(req, res) {
+// GET /maintenance/requests/:id/attachments
+async function listRequestAttachments(req, res) {
   try {
     const userId = getAuthUserId(req);
-    const companyId = req.companyId;
+    const companyId = getCompanyIdOrThrow(req);
 
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
-
-    const { vehicle_id, problem_title, problem_description } = req.body || {};
-
-    if (!isUuid(vehicle_id)) {
-      return res.status(400).json({ message: "vehicle_id must be uuid" });
-    }
-    if (!problem_title || String(problem_title).trim().length < 2) {
-      return res.status(400).json({ message: "problem_title is required" });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const vehicle = await prisma.vehicles.findFirst({
+    const requestId = String(req.params.id || "");
+    assertUuid(requestId, "request id");
+
+    await assertRequestAccessible(req, requestId);
+
+    const items = await prisma.maintenance_request_attachments.findMany({
       where: {
-        id: vehicle_id,
         company_id: companyId,
+        request_id: requestId,
       },
-      select: { id: true, company_id: true },
-    });
-
-    if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
-
-    const role = req.user?.role || null;
-    if (!isAdminOrAccountant(role)) {
-      const ok = await assertVehicleInSupervisorPortfolio({
-        vehicle_id,
-        userId,
-        companyId,
-      });
-      if (!ok) {
-        return res.status(403).json({ message: "Forbidden: vehicle not in your portfolio" });
-      }
-    }
-
-    const now = new Date();
-
-    const row = await prisma.maintenance_requests.create({
-      data: {
-        company_id: companyId,
-        vehicle_id,
-        problem_title: String(problem_title).trim(),
-        problem_description: problem_description
-          ? String(problem_description).trim()
-          : null,
-        status: "SUBMITTED",
-        requested_by: userId,
-        requested_at: now,
-        created_at: now,
-        updated_at: now,
-      },
-    });
-
-    return res.status(201).json(row);
-  } catch (e) {
-    console.error("CREATE MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to create request" });
-  }
-}
-
-// =======================
-// GET /maintenance/requests
-// =======================
-async function listMaintenanceRequests(req, res) {
-  try {
-    const userId = getAuthUserId(req);
-    const companyId = req.companyId;
-
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
-
-    const { status, vehicle_id, page, limit } = req.query || {};
-    const role = req.user?.role || null;
-
-    const where = {
-      company_id: companyId,
-    };
-
-    if (status) where.status = String(status).toUpperCase();
-
-    if (vehicle_id) {
-      if (!isUuid(vehicle_id)) return res.status(400).json({ message: "vehicle_id must be uuid" });
-      where.vehicle_id = vehicle_id;
-    }
-
-    if (!isAdminOrAccountant(role)) {
-      where.requested_by = userId;
-    }
-
-    const pageNum = Math.max(1, Number(page || 1));
-    const limitNum = Math.min(100, Math.max(1, Number(limit || 20)));
-    const skip = (pageNum - 1) * limitNum;
-
-    const [items, total] = await Promise.all([
-      prisma.maintenance_requests.findMany({
-        where,
-        orderBy: { requested_at: "desc" },
-        skip,
-        take: limitNum,
-      }),
-      prisma.maintenance_requests.count({ where }),
-    ]);
-
-    return res.json({
-      items,
-      meta: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        pages: Math.ceil(total / limitNum),
-      },
-    });
-  } catch (e) {
-    console.error("LIST MAINT REQUESTS ERROR:", e);
-    return res.status(500).json({ message: "Failed to fetch requests" });
-  }
-}
-
-// =======================
-// GET /maintenance/requests/:id
-// =======================
-async function getMaintenanceRequestById(req, res) {
-  try {
-    const userId = getAuthUserId(req);
-    const companyId = req.companyId;
-
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
-
-    const { id } = req.params;
-    if (!isUuid(id)) {
-      return res.status(400).json({ message: "Invalid request id" });
-    }
-
-    const row = await prisma.maintenance_requests.findFirst({
-      where: {
-        id,
-        company_id: companyId,
-      },
-      include: {
-        vehicles: {
-          select: {
-            id: true,
-            fleet_no: true,
-            plate_no: true,
-            display_name: true,
-            status: true,
-            current_odometer: true,
-          },
-        },
-        requested_by_user: {
-          select: { id: true, full_name: true },
-        },
-        reviewed_by_user: {
-          select: { id: true, full_name: true },
-        },
-        attachments: {
-          where: {
-            company_id: companyId,
-          },
-        },
-        work_orders: {
-          where: {
-            company_id: companyId,
-          },
-          orderBy: { opened_at: "desc" },
-          select: {
-            id: true,
-            status: true,
-            type: true,
-            maintenance_mode: true,
-            vendor_id: true,
-            opened_at: true,
-            started_at: true,
-            completed_at: true,
-            odometer: true,
-            notes: true,
-            vendors: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-                vendor_type: true,
-                classification: true,
-                status: true,
-                phone: true,
-                city: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    if (!row) return res.status(404).json({ message: "Maintenance request not found" });
-
-    const role = req.user?.role || null;
-    if (!isAdminOrAccountant(role)) {
-      const ok = await assertVehicleInSupervisorPortfolio({
-        vehicle_id: row.vehicle_id,
-        userId,
-        companyId,
-      });
-      if (!ok) return res.status(403).json({ message: "Forbidden" });
-    }
-
-    return res.json({ request: row });
-  } catch (e) {
-    console.error("GET MAINT REQUEST BY ID ERROR:", e);
-    return res.status(500).json({ message: "Failed to fetch maintenance request" });
-  }
-}
-
-// =======================
-// POST /maintenance/requests/:id/approve
-// =======================
-async function approveMaintenanceRequest(req, res) {
-  try {
-    const actorId = getAuthUserId(req);
-    const companyId = req.companyId;
-    const role = req.user?.role || null;
-
-    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
-    if (!isAdminOrAccountant(role)) {
-      return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can approve" });
-    }
-
-    const { id } = req.params;
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid request id" });
-
-    const {
-      vendor_id,
-      maintenance_mode,
-      type,
-      odometer,
-      notes,
-    } = req.body || {};
-
-    const reqRow = await prisma.maintenance_requests.findFirst({
-      where: {
-        id,
-        company_id: companyId,
+      orderBy: {
+        created_at: "desc",
       },
       select: {
         id: true,
         company_id: true,
-        vehicle_id: true,
-        status: true,
+        request_id: true,
+        type: true,
+        original_name: true,
+        mime_type: true,
+        size_bytes: true,
+        storage_path: true,
+        uploaded_by: true,
+        created_at: true,
       },
     });
 
-    if (!reqRow) return res.status(404).json({ message: "Request not found" });
-
-    if (reqRow.status !== "SUBMITTED") {
-      return res.status(409).json({ message: "Request is not SUBMITTED" });
-    }
-
-    let normalizedVendorId = null;
-    if (vendor_id !== undefined && vendor_id !== null && String(vendor_id).trim() !== "") {
-      if (!isUuid(String(vendor_id))) {
-        return res.status(400).json({ message: "Invalid vendor_id" });
-      }
-
-      const vendor = await prisma.vendors.findFirst({
-        where: {
-          id: String(vendor_id),
-          company_id: companyId,
-        },
-        select: {
-          id: true,
-          name: true,
-          status: true,
-        },
-      });
-
-      if (!vendor) {
-        return res.status(404).json({ message: "Vendor not found" });
-      }
-
-      normalizedVendorId = vendor.id;
-    }
-
-    const normalizedMaintenanceMode = maintenance_mode
-      ? String(maintenance_mode).toUpperCase()
-      : normalizedVendorId
-      ? "EXTERNAL"
-      : "INTERNAL";
-
-    const normalizedType = type
-      ? String(type).toUpperCase()
-      : "CORRECTIVE";
-
-    const normalizedOdometer =
-      odometer === undefined || odometer === null || odometer === ""
-        ? null
-        : Number(odometer);
-
-    if (
-      normalizedOdometer !== null &&
-      (!Number.isFinite(normalizedOdometer) || normalizedOdometer < 0)
-    ) {
-      return res.status(400).json({ message: "Invalid odometer" });
-    }
-
-    const now = new Date();
-
-    const result = await prisma.$transaction(async (tx) => {
-      const updatedReq = await tx.maintenance_requests.update({
-        where: { id },
-        data: {
-          status: "APPROVED",
-          reviewed_by: actorId,
-          reviewed_at: now,
-          updated_at: now,
-        },
-      });
-
-      const wo = await tx.maintenance_work_orders.create({
-        data: {
-          company_id: companyId,
-          vehicle_id: reqRow.vehicle_id,
-          request_id: reqRow.id,
-          vendor_id: normalizedVendorId,
-          status: "OPEN",
-          type: normalizedType,
-          maintenance_mode: normalizedMaintenanceMode,
-          opened_at: now,
-          odometer: normalizedOdometer,
-          notes: notes ? String(notes).trim() : null,
-          created_by: actorId,
-          created_at: now,
-          updated_at: now,
-        },
-        include: {
-          vendors: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              vendor_type: true,
-              classification: true,
-              status: true,
-              phone: true,
-              city: true,
-            },
-          },
-          vehicles: {
-            select: {
-              id: true,
-              fleet_no: true,
-              plate_no: true,
-              display_name: true,
-              status: true,
-              current_odometer: true,
-            },
-          },
-        },
-      });
-
-      await tx.vehicles.update({
-        where: { id: reqRow.vehicle_id },
-        data: { status: "MAINTENANCE", updated_at: now },
-      });
-
-      return { request: updatedReq, work_order: wo };
-    });
-
-    return res.json(result);
+    return res.json({ items });
   } catch (e) {
-    console.error("APPROVE MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to approve request" });
+    const sc = e?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
+    console.error("LIST REQUEST ATTACHMENTS ERROR:", e);
+    return res.status(500).json({
+      message: "Failed to list attachments",
+      error: e.message,
+    });
   }
 }
 
-// =======================
-// POST /maintenance/requests/:id/reject
-// =======================
-async function rejectMaintenanceRequest(req, res) {
+// POST /maintenance/requests/:id/attachments
+async function createRequestAttachments(req, res) {
   try {
-    const actorId = getAuthUserId(req);
-    const companyId = req.companyId;
-    const role = req.user?.role || null;
+    const userId = getAuthUserId(req);
+    const companyId = getCompanyIdOrThrow(req);
 
-    if (!actorId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
-    if (!isAdminOrAccountant(role)) {
-      return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can reject" });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const { id } = req.params;
-    const { reason } = req.body || {};
+    const requestId = String(req.params.id || "");
+    assertUuid(requestId, "request id");
 
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid request id" });
-    if (!reason || String(reason).trim().length < 2) {
-      return res.status(400).json({ message: "reason is required" });
+    await assertRequestAccessible(req, requestId);
+
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length === 0) {
+      return res.status(400).json({ message: "No files uploaded" });
     }
 
-    const reqRow = await prisma.maintenance_requests.findFirst({
+    const bodyTypes = Array.isArray(req.body?.types)
+      ? req.body.types
+      : req.body?.types
+      ? [req.body.types]
+      : [];
+
+    const created = await prisma.$transaction(async (tx) => {
+      const rows = [];
+
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        const inputType = bodyTypes[i] ?? req.body?.type ?? null;
+        const attachmentType = normalizeAttachmentType(inputType, file.mimetype);
+
+        const row = await tx.maintenance_request_attachments.create({
+          data: {
+            company_id: companyId,
+            request_id: requestId,
+            type: attachmentType,
+            original_name: String(file.originalname || "").trim() || file.filename,
+            mime_type: String(file.mimetype || "").trim(),
+            size_bytes: Number(file.size || 0),
+            storage_path: String(file.path || "").trim(),
+            uploaded_by: userId,
+          },
+          select: {
+            id: true,
+            company_id: true,
+            request_id: true,
+            type: true,
+            original_name: true,
+            mime_type: true,
+            size_bytes: true,
+            storage_path: true,
+            uploaded_by: true,
+            created_at: true,
+          },
+        });
+
+        rows.push(row);
+      }
+
+      return rows;
+    });
+
+    return res.status(201).json({
+      message: "Attachments uploaded",
+      items: created,
+    });
+  } catch (e) {
+    const files = Array.isArray(req.files) ? req.files : [];
+    for (const f of files) {
+      try {
+        if (f?.path && fs.existsSync(f.path)) {
+          fs.unlinkSync(f.path);
+        }
+      } catch (_) {}
+    }
+
+    const sc = e?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
+    console.error("CREATE REQUEST ATTACHMENTS ERROR:", e);
+    return res.status(500).json({
+      message: "Failed to upload attachments",
+      error: e.message,
+    });
+  }
+}
+
+// DELETE /maintenance/attachments/:attachmentId
+async function deleteAttachment(req, res) {
+  try {
+    const userId = getAuthUserId(req);
+    const companyId = getCompanyIdOrThrow(req);
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const attachmentId = String(req.params.attachmentId || "");
+    assertUuid(attachmentId, "attachment id");
+
+    const row = await prisma.maintenance_request_attachments.findFirst({
       where: {
-        id,
+        id: attachmentId,
+        company_id: companyId,
+      },
+      select: {
+        id: true,
+        storage_path: true,
+      },
+    });
+
+    if (!row) {
+      return res.status(404).json({ message: "Attachment not found" });
+    }
+
+    await prisma.maintenance_request_attachments.deleteMany({
+      where: {
+        id: attachmentId,
         company_id: companyId,
       },
     });
 
-    if (!reqRow) return res.status(404).json({ message: "Request not found" });
-
-    if (reqRow.status !== "SUBMITTED") {
-      return res.status(409).json({ message: "Request is not SUBMITTED" });
+    try {
+      if (row.storage_path && fs.existsSync(row.storage_path)) {
+        fs.unlinkSync(row.storage_path);
+      }
+    } catch (fsErr) {
+      console.warn("DELETE ATTACHMENT FILE WARNING:", fsErr?.message || fsErr);
     }
 
-    const now = new Date();
-
-    const updated = await prisma.maintenance_requests.update({
-      where: { id },
-      data: {
-        status: "REJECTED",
-        reviewed_by: actorId,
-        reviewed_at: now,
-        rejection_reason: String(reason).trim(),
-        updated_at: now,
-      },
+    return res.json({
+      message: "Attachment deleted",
     });
-
-    return res.json({ request: updated });
   } catch (e) {
-    console.error("REJECT MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to reject request" });
+    const sc = e?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
+    console.error("DELETE ATTACHMENT ERROR:", e);
+    return res.status(500).json({
+      message: "Failed to delete attachment",
+      error: e.message,
+    });
   }
 }
 
+const uploadRequestAttachments = [
+  upload.array("files", 5),
+  createRequestAttachments,
+];
+
 module.exports = {
-  createMaintenanceRequest,
-  listMaintenanceRequests,
-  getMaintenanceRequestById,
-  approveMaintenanceRequest,
-  rejectMaintenanceRequest,
+  uploadRequestAttachments,
+  listRequestAttachments,
+  deleteAttachment,
 };

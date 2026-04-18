@@ -1,15 +1,9 @@
 const prisma = require("../prisma");
-
-function getAuthUserId(req) {
-  return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
-}
-
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
+const {
+  getAuthUserId,
+  getCompanyIdOrThrow,
+} = require("../core/request-context");
+const { assertUuid } = require("../core/validation");
 
 function toNum(v) {
   if (v === null || v === undefined) return 0;
@@ -26,13 +20,14 @@ function toNum(v) {
 async function addInstallations(req, res) {
   try {
     const userId = getAuthUserId(req);
-    const companyId = req.companyId;
+    const companyId = getCompanyIdOrThrow(req);
 
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const workOrderId = String(req.params.id || "").trim();
-    if (!isUuid(workOrderId)) return res.status(400).json({ message: "Invalid work order id" });
+    assertUuid(workOrderId, "work order id");
 
     const { items } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
@@ -52,14 +47,17 @@ async function addInstallations(req, res) {
       },
     });
 
-    if (!wo) return res.status(404).json({ message: "Work order not found" });
-    if (!isUuid(wo.vehicle_id)) {
-      return res.status(500).json({ message: "Work order missing vehicle_id (data issue)" });
+    if (!wo) {
+      return res.status(404).json({ message: "Work order not found" });
     }
+
+    assertUuid(String(wo.vehicle_id || ""), "work order vehicle_id");
 
     const st = String(wo.status || "").toUpperCase();
     if (["COMPLETED", "CANCELED", "CANCELLED"].includes(st)) {
-      return res.status(409).json({ message: `Work order is ${wo.status}. No installations allowed.` });
+      return res.status(409).json({
+        message: `Work order is ${wo.status}. No installations allowed.`,
+      });
     }
 
     const now = new Date();
@@ -74,28 +72,33 @@ async function addInstallations(req, res) {
 
       const qty = it?.qty_installed == null ? 1 : Number(it.qty_installed);
 
-      if (!isUuid(part_id)) {
-        return res.status(400).json({ message: `items[${idx}].part_id must be uuid` });
-      }
+      assertUuid(part_id, `items[${idx}].part_id`);
 
       if (part_item_id) {
-        if (!isUuid(part_item_id)) {
-          return res.status(400).json({ message: `items[${idx}].part_item_id must be uuid` });
-        }
+        assertUuid(part_item_id, `items[${idx}].part_item_id`);
+
         if (!Number.isFinite(qty) || qty !== 1) {
-          return res.status(400).json({ message: `items[${idx}].qty_installed must be 1 for serial items` });
+          return res.status(400).json({
+            message: `items[${idx}].qty_installed must be 1 for serial items`,
+          });
         }
       } else {
         if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ message: `items[${idx}].qty_installed must be > 0` });
+          return res.status(400).json({
+            message: `items[${idx}].qty_installed must be > 0`,
+          });
         }
       }
 
       const odometer =
-        it?.odometer !== undefined && it?.odometer !== null ? Number(it.odometer) : null;
+        it?.odometer !== undefined && it?.odometer !== null
+          ? Number(it.odometer)
+          : null;
 
       if (odometer !== null && (!Number.isFinite(odometer) || odometer < 0)) {
-        return res.status(400).json({ message: `items[${idx}].odometer must be >= 0` });
+        return res.status(400).json({
+          message: `items[${idx}].odometer must be >= 0`,
+        });
       }
 
       payload.push({
@@ -143,10 +146,15 @@ async function addInstallations(req, res) {
           select: { part_item_id: true },
         });
 
-        const issuedSet = new Set((issuedSerialLines || []).map((x) => x.part_item_id));
+        const issuedSet = new Set(
+          (issuedSerialLines || []).map((x) => x.part_item_id)
+        );
+
         for (const sid of serialIds) {
           if (!issuedSet.has(sid)) {
-            const e = new Error(`Serial part_item was not issued for this work order: ${sid}`);
+            const e = new Error(
+              `Serial part_item was not issued for this work order: ${sid}`
+            );
             e.statusCode = 409;
             throw e;
           }
@@ -169,16 +177,21 @@ async function addInstallations(req, res) {
 
         for (const p of serialItems) {
           const pi = map.get(p.part_item_id);
+
           if (!pi) {
             const e = new Error(`part_item not found: ${p.part_item_id}`);
             e.statusCode = 400;
             throw e;
           }
+
           if (pi.part_id !== p.part_id) {
-            const e = new Error(`part_item does not match part_id: ${p.part_item_id}`);
+            const e = new Error(
+              `part_item does not match part_id: ${p.part_item_id}`
+            );
             e.statusCode = 400;
             throw e;
           }
+
           if (pi.status !== "ISSUED") {
             const e = new Error(
               `part_item must be ISSUED before install (current=${pi.status}): ${p.part_item_id}`
@@ -238,14 +251,19 @@ async function addInstallations(req, res) {
           _sum: { qty_installed: true },
         });
 
-        const issuedMap = new Map(issuedAgg.map((x) => [x.part_id, toNum(x._sum?.qty)]));
+        const issuedMap = new Map(
+          issuedAgg.map((x) => [x.part_id, toNum(x._sum?.qty)])
+        );
         const installedMap = new Map(
           installedAgg.map((x) => [x.part_id, toNum(x._sum?.qty_installed)])
         );
 
         const addMap = new Map();
         for (const b of bulkItems) {
-          addMap.set(b.part_id, (addMap.get(b.part_id) || 0) + toNum(b.qty_installed));
+          addMap.set(
+            b.part_id,
+            (addMap.get(b.part_id) || 0) + toNum(b.qty_installed)
+          );
         }
 
         for (const partId of bulkPartIds) {
@@ -272,7 +290,9 @@ async function addInstallations(req, res) {
               maintenance_work_orders: { connect: { id: workOrderId } },
               vehicles: { connect: { id: vehicleId } },
               parts: { connect: { id: p.part_id } },
-              ...(p.part_item_id ? { part_items: { connect: { id: p.part_item_id } } } : {}),
+              ...(p.part_item_id
+                ? { part_items: { connect: { id: p.part_item_id } } }
+                : {}),
               qty_installed: p.qty_installed,
               installed_by: userId,
               installed_at: now,
@@ -284,35 +304,58 @@ async function addInstallations(req, res) {
       );
 
       if (String(wo.status || "").toUpperCase() === "OPEN") {
-        await tx.maintenance_work_orders.update({
-          where: { id: wo.id },
-          data: { status: "IN_PROGRESS", started_at: now, updated_at: now },
+        const woUpd = await tx.maintenance_work_orders.updateMany({
+          where: {
+            id: wo.id,
+            company_id: companyId,
+            status: "OPEN",
+          },
+          data: {
+            status: "IN_PROGRESS",
+            started_at: now,
+            updated_at: now,
+          },
         });
+
+        if (woUpd.count !== 1) {
+          const e = new Error("Work order status update failed");
+          e.statusCode = 409;
+          throw e;
+        }
       }
 
       return rows;
     });
 
-    return res.status(201).json({ message: "Installations added", installations: created });
+    return res.status(201).json({
+      message: "Installations added",
+      installations: created,
+    });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: String(e.message || "Error") });
+    if (sc !== 500) {
+      return res.status(sc).json({ message: String(e.message || "Error") });
+    }
 
-    console.log("ADD INSTALLATIONS ERROR:", e);
-    return res.status(500).json({ message: "Failed to add installations", error: e.message });
+    console.error("ADD INSTALLATIONS ERROR:", e);
+    return res.status(500).json({
+      message: "Failed to add installations",
+      error: e.message,
+    });
   }
 }
 
 async function listInstallations(req, res) {
   try {
     const userId = getAuthUserId(req);
-    const companyId = req.companyId;
+    const companyId = getCompanyIdOrThrow(req);
 
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    if (!companyId) return res.status(403).json({ message: "Company context missing" });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const workOrderId = String(req.params.id || "").trim();
-    if (!isUuid(workOrderId)) return res.status(400).json({ message: "Invalid work order id" });
+    assertUuid(workOrderId, "work order id");
 
     const wo = await prisma.maintenance_work_orders.findFirst({
       where: {
@@ -322,7 +365,9 @@ async function listInstallations(req, res) {
       select: { id: true },
     });
 
-    if (!wo) return res.status(404).json({ message: "Work order not found" });
+    if (!wo) {
+      return res.status(404).json({ message: "Work order not found" });
+    }
 
     const rows = await prisma.work_order_installations.findMany({
       where: {
@@ -339,8 +384,16 @@ async function listInstallations(req, res) {
 
     return res.json({ items: rows });
   } catch (e) {
-    console.log("LIST INSTALLATIONS ERROR:", e);
-    return res.status(500).json({ message: "Failed to list installations", error: e.message });
+    const sc = e?.statusCode || 500;
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
+    console.error("LIST INSTALLATIONS ERROR:", e);
+    return res.status(500).json({
+      message: "Failed to list installations",
+      error: e.message,
+    });
   }
 }
 
