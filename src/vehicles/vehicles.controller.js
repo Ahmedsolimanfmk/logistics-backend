@@ -1,7 +1,7 @@
 // =======================
 // src/vehicles/vehicles.controller.js
 // tenant-safe version
-// schema-aligned (without supervisor_id)
+// schema-aligned without is_active
 // =======================
 
 const prisma = require("../prisma");
@@ -19,12 +19,6 @@ function normalizeText(input) {
 
 function upper(value) {
   return String(value || "").trim().toUpperCase();
-}
-
-function parseBooleanQuery(value) {
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
 }
 
 function parseIntQuery(value, fallback) {
@@ -53,7 +47,9 @@ function isExpiredDate(dateValue) {
 function buildVehicleLabel(vehicle) {
   const fleetNo = vehicle?.fleet_no ? String(vehicle.fleet_no).trim() : "";
   const plateNo = vehicle?.plate_no ? String(vehicle.plate_no).trim() : "";
-  const displayName = vehicle?.display_name ? String(vehicle.display_name).trim() : "";
+  const displayName = vehicle?.display_name
+    ? String(vehicle.display_name).trim()
+    : "";
 
   if (fleetNo && plateNo) return `${fleetNo} - ${plateNo}`;
   return fleetNo || plateNo || displayName || vehicle?.id;
@@ -68,7 +64,7 @@ function asVehicleOption(vehicle) {
 }
 
 function buildVehicleWhere(companyId, query) {
-  const { q, status, is_active } = query || {};
+  const { q, status } = query || {};
 
   const where = {
     company_id: companyId,
@@ -76,11 +72,6 @@ function buildVehicleWhere(companyId, query) {
 
   if (status) {
     where.status = upper(status);
-  }
-
-  const isActiveParsed = parseBooleanQuery(is_active);
-  if (typeof isActiveParsed === "boolean") {
-    where.is_active = isActiveParsed;
   }
 
   if (q) {
@@ -126,8 +117,14 @@ function handleKnownError(res, error, fallbackMessage) {
   }
 
   return res.status(status).json({
-    message: error?.message || fallbackMessage,
-    ...(status >= 500 ? { error: error?.message } : {}),
+    message: status >= 500 ? fallbackMessage : error?.message || fallbackMessage,
+    ...(status >= 500
+      ? {
+          error: error?.message || String(error),
+          code: error?.code,
+          meta: error?.meta,
+        }
+      : {}),
   });
 }
 
@@ -177,16 +174,9 @@ async function getActiveVehicles(req, res) {
   }
 }
 
-/**
- * GET /vehicles
- * query:
- *  - q
- *  - status
- *  - is_active=true|false
- *  - page
- *  - limit
- *  - pageSize
- */
+// =======================
+// GET /vehicles
+// =======================
 async function getVehicles(req, res) {
   try {
     const query = req.query || {};
@@ -241,24 +231,22 @@ async function getVehicles(req, res) {
   }
 }
 
-/**
- * GET /vehicles/:id
- */
+// =======================
+// GET /vehicles/:id
+// =======================
 async function getVehicleById(req, res) {
   try {
     const { id } = req.params;
-
     const vehicle = await getVehicleOrThrow(req.companyId, id);
-
     return res.json(asVehicleOption(vehicle));
   } catch (error) {
     return handleKnownError(res, error, "Failed to fetch vehicle");
   }
 }
 
-/**
- * POST /vehicles
- */
+// =======================
+// POST /vehicles
+// =======================
 async function createVehicle(req, res) {
   try {
     const {
@@ -270,7 +258,6 @@ async function createVehicle(req, res) {
       year,
       current_odometer,
       gps_device_id,
-      is_active,
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -333,7 +320,6 @@ async function createVehicle(req, res) {
         year: yearValue,
         current_odometer: odometerValue,
         gps_device_id: gps_device_id ? String(gps_device_id).trim() : null,
-        is_active: typeof is_active === "boolean" ? is_active : true,
         license_no: license_no ? String(license_no).trim() : null,
         license_issue_date: licIssue === undefined ? null : licIssue,
         license_expiry_date: licExpiry === undefined ? null : licExpiry,
@@ -349,9 +335,9 @@ async function createVehicle(req, res) {
   }
 }
 
-/**
- * PATCH /vehicles/:id
- */
+// =======================
+// PATCH /vehicles/:id
+// =======================
 async function updateVehicle(req, res) {
   try {
     const { id } = req.params;
@@ -369,7 +355,6 @@ async function updateVehicle(req, res) {
       year,
       current_odometer,
       gps_device_id,
-      is_active,
       license_no,
       license_issue_date,
       license_expiry_date,
@@ -434,10 +419,6 @@ async function updateVehicle(req, res) {
       data.gps_device_id = gps_device_id ? String(gps_device_id).trim() : null;
     }
 
-    if (typeof is_active === "boolean") {
-      data.is_active = is_active;
-    }
-
     if (license_no !== undefined) {
       data.license_no = license_no ? String(license_no).trim() : null;
     }
@@ -475,19 +456,22 @@ async function updateVehicle(req, res) {
   }
 }
 
-/**
- * PATCH /vehicles/:id/toggle
- */
+// =======================
+// PATCH /vehicles/:id/toggle
+// Replacement: toggle disable/available without is_active
+// =======================
 async function toggleVehicle(req, res) {
   try {
     const { id } = req.params;
-
     const existing = await getVehicleOrThrow(req.companyId, id);
+
+    const currentlyDisabled = String(existing.status || "").toUpperCase() === "DISABLED";
 
     const updated = await prisma.vehicles.update({
       where: { id },
       data: {
-        is_active: !existing.is_active,
+        status: currentlyDisabled ? "AVAILABLE" : "DISABLED",
+        disable_reason: currentlyDisabled ? null : existing.disable_reason || "OTHER",
         updated_at: new Date(),
       },
     });
@@ -498,10 +482,10 @@ async function toggleVehicle(req, res) {
   }
 }
 
-/**
- * DELETE /vehicles/:id
- * soft delete = deactivate
- */
+// =======================
+// DELETE /vehicles/:id
+// soft delete replacement = DISABLED
+// =======================
 async function deleteVehicle(req, res) {
   try {
     const { id } = req.params;
@@ -511,7 +495,8 @@ async function deleteVehicle(req, res) {
     const updated = await prisma.vehicles.update({
       where: { id },
       data: {
-        is_active: false,
+        status: "DISABLED",
+        disable_reason: "OTHER",
         updated_at: new Date(),
       },
     });
@@ -525,9 +510,9 @@ async function deleteVehicle(req, res) {
   }
 }
 
-/**
- * GET /vehicles/:id/summary
- */
+// =======================
+// GET /vehicles/:id/summary
+// =======================
 async function getVehicleSummary(req, res) {
   try {
     const { id } = req.params;
@@ -542,7 +527,6 @@ async function getVehicleSummary(req, res) {
       license_issue_date: true,
       license_expiry_date: true,
       status: true,
-      is_active: true,
       disable_reason: true,
       current_odometer: true,
       created_at: true,
@@ -594,7 +578,9 @@ async function getVehicleSummary(req, res) {
       (item) => !item.trips || item.trips.company_id === req.companyId
     );
 
-    const uniqueTripIds = [...new Set(validAssignments.map((item) => item.trip_id).filter(Boolean))];
+    const uniqueTripIds = [
+      ...new Set(validAssignments.map((item) => item.trip_id).filter(Boolean)),
+    ];
 
     let expenses = [];
     if (uniqueTripIds.length > 0) {

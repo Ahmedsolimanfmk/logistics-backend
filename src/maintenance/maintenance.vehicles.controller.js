@@ -16,6 +16,25 @@ function buildLabel(v) {
   return dn || v?.id;
 }
 
+function isExpiredDate(dateValue) {
+  if (!dateValue) return false;
+
+  const d = new Date(dateValue);
+  if (Number.isNaN(d.getTime())) return false;
+
+  return d.getTime() < Date.now();
+}
+
+function asOption(v) {
+  return {
+    id: v.id,
+    label: buildLabel(v),
+    status: v.status,
+    license_expiry_date: v.license_expiry_date || null,
+    disable_reason: v.disable_reason || null,
+  };
+}
+
 // GET /maintenance/vehicles/options
 async function listVehicleOptions(req, res) {
   try {
@@ -30,28 +49,24 @@ async function listVehicleOptions(req, res) {
       const rows = await prisma.vehicles.findMany({
         where: {
           company_id: companyId,
-          is_active: true,
         },
-        orderBy: [
-          { fleet_no: "asc" },
-          { plate_no: "asc" },
-        ],
+        orderBy: [{ fleet_no: "asc" }, { plate_no: "asc" }],
         select: {
           id: true,
           fleet_no: true,
           plate_no: true,
           display_name: true,
           status: true,
+          license_expiry_date: true,
+          disable_reason: true,
         },
       });
 
-      return res.json({
-        items: rows.map((v) => ({
-          id: v.id,
-          label: buildLabel(v),
-          status: v.status,
-        })),
-      });
+      const items = rows
+        .filter((v) => !isExpiredDate(v.license_expiry_date))
+        .map(asOption);
+
+      return res.json({ items });
     }
 
     const rows = await prisma.vehicle_portfolio.findMany({
@@ -60,9 +75,7 @@ async function listVehicleOptions(req, res) {
         field_supervisor_id: userId,
         is_active: true,
       },
-      orderBy: {
-        created_at: "desc",
-      },
+      orderBy: { created_at: "desc" },
       select: {
         vehicles: {
           select: {
@@ -71,24 +84,20 @@ async function listVehicleOptions(req, res) {
             plate_no: true,
             display_name: true,
             status: true,
-            is_active: true,
+            license_expiry_date: true,
+            disable_reason: true,
           },
         },
       },
     });
 
-    const vehicles = rows
+    const items = rows
       .map((r) => r.vehicles)
       .filter(Boolean)
-      .filter((v) => v.is_active);
+      .filter((v) => !isExpiredDate(v.license_expiry_date))
+      .map(asOption);
 
-    return res.json({
-      items: vehicles.map((v) => ({
-        id: v.id,
-        label: buildLabel(v),
-        status: v.status,
-      })),
-    });
+    return res.json({ items });
   } catch (e) {
     console.error("LIST VEHICLE OPTIONS ERROR:", e);
 
