@@ -14,17 +14,12 @@ function toNum(v) {
   return 0;
 }
 
-/**
- * POST /maintenance/work-orders/:id/installations
- */
 async function addInstallations(req, res) {
   try {
     const userId = getAuthUserId(req);
     const companyId = getCompanyIdOrThrow(req);
 
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const workOrderId = String(req.params.id || "").trim();
     assertUuid(workOrderId, "work order id");
@@ -35,23 +30,11 @@ async function addInstallations(req, res) {
     }
 
     const wo = await prisma.maintenance_work_orders.findFirst({
-      where: {
-        id: workOrderId,
-        company_id: companyId,
-      },
-      select: {
-        id: true,
-        company_id: true,
-        status: true,
-        vehicle_id: true,
-      },
+      where: { id: workOrderId, company_id: companyId },
+      select: { id: true, company_id: true, status: true, vehicle_id: true },
     });
 
-    if (!wo) {
-      return res.status(404).json({ message: "Work order not found" });
-    }
-
-    assertUuid(String(wo.vehicle_id || ""), "work order vehicle_id");
+    if (!wo) return res.status(404).json({ message: "Work order not found" });
 
     const st = String(wo.status || "").toUpperCase();
     if (["COMPLETED", "CANCELED", "CANCELLED"].includes(st)) {
@@ -61,8 +44,8 @@ async function addInstallations(req, res) {
     }
 
     const now = new Date();
-
     const payload = [];
+
     for (const [idx, it] of items.entries()) {
       const part_id = String(it?.part_id || "").trim();
       const part_item_id =
@@ -82,12 +65,10 @@ async function addInstallations(req, res) {
             message: `items[${idx}].qty_installed must be 1 for serial items`,
           });
         }
-      } else {
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({
-            message: `items[${idx}].qty_installed must be > 0`,
-          });
-        }
+      } else if (!Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({
+          message: `items[${idx}].qty_installed must be > 0`,
+        });
       }
 
       const odometer =
@@ -103,28 +84,28 @@ async function addInstallations(req, res) {
 
       payload.push({
         company_id: companyId,
+        work_order_id: workOrderId,
+        vehicle_id: wo.vehicle_id,
         part_id,
         part_item_id,
         qty_installed: qty,
+        installed_by: userId,
+        installed_at: now,
         odometer_at_install: odometer,
         notes: it?.notes != null ? String(it.notes).trim() : null,
       });
     }
 
     const partIds = [...new Set(payload.map((p) => p.part_id))];
+
     const parts = await prisma.parts.findMany({
-      where: {
-        company_id: companyId,
-        id: { in: partIds },
-      },
+      where: { company_id: companyId, id: { in: partIds } },
       select: { id: true },
     });
 
     if (parts.length !== partIds.length) {
       return res.status(400).json({ message: "One or more part_id not found" });
     }
-
-    const vehicleId = wo.vehicle_id;
 
     const created = await prisma.$transaction(async (tx) => {
       const serialItems = payload.filter((p) => Boolean(p.part_item_id));
@@ -136,7 +117,7 @@ async function addInstallations(req, res) {
           where: {
             company_id: companyId,
             part_item_id: { in: serialIds },
-            inventory_issues: {
+            issue: {
               is: {
                 company_id: companyId,
                 work_order_id: workOrderId,
@@ -209,7 +190,7 @@ async function addInstallations(req, res) {
           },
           data: {
             status: "INSTALLED",
-            installed_vehicle_id: vehicleId,
+            installed_vehicle_id: wo.vehicle_id,
             installed_at: now,
             last_moved_at: now,
           },
@@ -223,6 +204,7 @@ async function addInstallations(req, res) {
       }
 
       const bulkItems = payload.filter((p) => !p.part_item_id);
+
       if (bulkItems.length) {
         const bulkPartIds = [...new Set(bulkItems.map((b) => b.part_id))];
 
@@ -231,7 +213,7 @@ async function addInstallations(req, res) {
           where: {
             company_id: companyId,
             part_id: { in: bulkPartIds },
-            inventory_issues: {
+            issue: {
               is: {
                 company_id: companyId,
                 work_order_id: workOrderId,
@@ -254,6 +236,7 @@ async function addInstallations(req, res) {
         const issuedMap = new Map(
           issuedAgg.map((x) => [x.part_id, toNum(x._sum?.qty)])
         );
+
         const installedMap = new Map(
           installedAgg.map((x) => [x.part_id, toNum(x._sum?.qty_installed)])
         );
@@ -287,17 +270,20 @@ async function addInstallations(req, res) {
           tx.work_order_installations.create({
             data: {
               company_id: companyId,
-              maintenance_work_orders: { connect: { id: workOrderId } },
-              vehicles: { connect: { id: vehicleId } },
-              parts: { connect: { id: p.part_id } },
-              ...(p.part_item_id
-                ? { part_items: { connect: { id: p.part_item_id } } }
-                : {}),
+              work_order_id: workOrderId,
+              vehicle_id: wo.vehicle_id,
+              part_id: p.part_id,
+              part_item_id: p.part_item_id,
               qty_installed: p.qty_installed,
               installed_by: userId,
               installed_at: now,
               odometer_at_install: p.odometer_at_install,
               notes: p.notes,
+            },
+            include: {
+              part: true,
+              part_item: true,
+              vehicle: true,
             },
           })
         )
@@ -333,6 +319,7 @@ async function addInstallations(req, res) {
     });
   } catch (e) {
     const sc = e?.statusCode || 500;
+
     if (sc !== 500) {
       return res.status(sc).json({ message: String(e.message || "Error") });
     }
@@ -340,7 +327,9 @@ async function addInstallations(req, res) {
     console.error("ADD INSTALLATIONS ERROR:", e);
     return res.status(500).json({
       message: "Failed to add installations",
-      error: e.message,
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
     });
   }
 }
@@ -350,9 +339,7 @@ async function listInstallations(req, res) {
     const userId = getAuthUserId(req);
     const companyId = getCompanyIdOrThrow(req);
 
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const workOrderId = String(req.params.id || "").trim();
     assertUuid(workOrderId, "work order id");
@@ -365,9 +352,7 @@ async function listInstallations(req, res) {
       select: { id: true },
     });
 
-    if (!wo) {
-      return res.status(404).json({ message: "Work order not found" });
-    }
+    if (!wo) return res.status(404).json({ message: "Work order not found" });
 
     const rows = await prisma.work_order_installations.findMany({
       where: {
@@ -376,15 +361,23 @@ async function listInstallations(req, res) {
       },
       orderBy: { installed_at: "desc" },
       include: {
-        parts: true,
-        part_items: true,
-        vehicles: true,
+        part: true,
+        part_item: true,
+        vehicle: true,
       },
     });
 
-    return res.json({ items: rows });
+    return res.json({
+      items: rows.map((x) => ({
+        ...x,
+        parts: x.part || null,
+        part_items: x.part_item || null,
+        vehicles: x.vehicle || null,
+      })),
+    });
   } catch (e) {
     const sc = e?.statusCode || 500;
+
     if (sc !== 500) {
       return res.status(sc).json({ message: e.message });
     }
@@ -392,7 +385,9 @@ async function listInstallations(req, res) {
     console.error("LIST INSTALLATIONS ERROR:", e);
     return res.status(500).json({
       message: "Failed to list installations",
-      error: e.message,
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
     });
   }
 }
