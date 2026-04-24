@@ -32,7 +32,10 @@ async function listVehicleOptions(req, res) {
           company_id: companyId,
           is_active: true,
         },
-        orderBy: [{ fleet_no: "asc" }, { plate_no: "asc" }],
+        orderBy: [
+          { fleet_no: "asc" },
+          { plate_no: "asc" },
+        ],
         select: {
           id: true,
           fleet_no: true,
@@ -57,7 +60,9 @@ async function listVehicleOptions(req, res) {
         field_supervisor_id: userId,
         is_active: true,
       },
-      orderBy: { created_at: "desc" },
+      orderBy: {
+        created_at: "desc",
+      },
       select: {
         vehicles: {
           select: {
@@ -85,14 +90,25 @@ async function listVehicleOptions(req, res) {
       })),
     });
   } catch (e) {
+    console.error("LIST VEHICLE OPTIONS ERROR:", e);
+
     const sc = e?.statusCode || 500;
+
     if (sc !== 500) {
-      return res.status(sc).json({ message: e.message });
+      return res.status(sc).json({
+        message: e.message,
+      });
     }
 
-    console.error("LIST VEHICLE OPTIONS ERROR:", e);
-    return res.status(500).json({ message: "Failed to load vehicle options" });
+    return res.status(500).json({
+      message: "Failed to load vehicle options",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
-module.exports = { listVehicleOptions };
+module.exports = {
+  listVehicleOptions,
+};

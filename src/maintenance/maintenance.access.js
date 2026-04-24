@@ -24,7 +24,11 @@ function isAdminOrAccountant(reqOrUser) {
   return ["ADMIN", "ACCOUNTANT", "SUPER_ADMIN"].includes(role);
 }
 
-async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyId }) {
+async function assertVehicleInSupervisorPortfolio({
+  vehicle_id,
+  userId,
+  companyId,
+}) {
   const row = await prisma.vehicle_portfolio.findFirst({
     where: {
       company_id: companyId,
@@ -54,7 +58,9 @@ async function assertMaintenanceVehicleAccess({ req, vehicleId }) {
     throw err;
   }
 
-  if (isAdminOrAccountant(req)) return true;
+  if (isAdminOrAccountant(req)) {
+    return true;
+  }
 
   const ok = await assertVehicleInSupervisorPortfolio({
     vehicle_id: vehicleId,
