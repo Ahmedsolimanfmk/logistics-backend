@@ -1,8 +1,27 @@
 const prisma = require("../prisma");
-const { getUserRole, isAdminOrAccountant: accessIsAdminOrAccountant } = require("../auth/access");
+
+function getAuthUserId(req) {
+  return req?.user?.sub || req?.user?.id || req?.user?.userId || null;
+}
+
+function roleUpper(role) {
+  return String(role || "").toUpperCase();
+}
+
+function getRole(reqOrUser) {
+  return roleUpper(
+    reqOrUser?.user?.role ||
+      reqOrUser?.user?.effective_role ||
+      reqOrUser?.user?.platform_role ||
+      reqOrUser?.role ||
+      reqOrUser?.effective_role ||
+      reqOrUser?.platform_role
+  );
+}
 
 function isAdminOrAccountant(reqOrUser) {
-  return accessIsAdminOrAccountant(reqOrUser);
+  const role = getRole(reqOrUser);
+  return ["ADMIN", "ACCOUNTANT", "SUPER_ADMIN"].includes(role);
 }
 
 async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyId }) {
@@ -20,7 +39,7 @@ async function assertVehicleInSupervisorPortfolio({ vehicle_id, userId, companyI
 }
 
 async function assertMaintenanceVehicleAccess({ req, vehicleId }) {
-  const userId = req?.user?.sub || req?.user?.id || req?.user?.userId || null;
+  const userId = getAuthUserId(req);
   const companyId = req?.companyId || null;
 
   if (!userId) {
@@ -53,6 +72,7 @@ async function assertMaintenanceVehicleAccess({ req, vehicleId }) {
 }
 
 module.exports = {
+  getRole,
   isAdminOrAccountant,
   assertVehicleInSupervisorPortfolio,
   assertMaintenanceVehicleAccess,
