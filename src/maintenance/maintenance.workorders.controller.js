@@ -325,14 +325,23 @@ async function listWorkOrders(req, res) {
       total,
       items,
     });
-  } catch (e) {
+    } catch (e) {
+    console.error("LIST WORK ORDERS ERROR:", e);
+
     const sc = e?.statusCode || 500;
+
     if (sc !== 500) {
-      return res.status(sc).json({ message: e.message });
+      return res.status(sc).json({
+        message: e.message,
+      });
     }
 
-    console.error("LIST WORK ORDERS ERROR:", e);
-    return res.status(500).json({ message: "Failed to list work orders" });
+    return res.status(500).json({
+      message: "Failed to list work orders",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
