@@ -53,8 +53,8 @@ function buildRuntimeReport(woFull, opts = {}) {
 
   for (const issue of woFull.inventory_issues || []) {
     for (const line of issue.inventory_issue_lines || []) {
-      const part = line.parts || line.part || null;
-      const partItem = line.part_items || line.part_item || null;
+      const part = line.part || line.parts || null;
+      const partItem = line.part_item || line.part_items || null;
       const partId = line.part_id;
 
       const qty = toNum(line.qty);
@@ -96,7 +96,7 @@ function buildRuntimeReport(woFull, opts = {}) {
   const installationsFlat = [];
 
   for (const ins of woFull.work_order_installations || []) {
-    const part = ins.parts || ins.part || null;
+    const part = ins.part || ins.parts || null;
     const partId = ins.part_id;
     const qty = toNum(ins.qty_installed);
 
@@ -451,6 +451,7 @@ async function getWorkOrderReport(req, res) {
         vehicle: {
           select: {
             id: true,
+            fleet_no: true,
             plate_no: true,
             display_name: true,
             status: true,
@@ -484,7 +485,7 @@ async function getWorkOrderReport(req, res) {
                 company_id: companyId,
               },
               include: {
-                parts: {
+                part: {
                   select: {
                     id: true,
                     name: true,
@@ -493,7 +494,7 @@ async function getWorkOrderReport(req, res) {
                     unit: true,
                   },
                 },
-                part_items: {
+                part_item: {
                   select: {
                     id: true,
                     internal_serial: true,
@@ -510,7 +511,7 @@ async function getWorkOrderReport(req, res) {
             company_id: companyId,
           },
           include: {
-            parts: {
+            part: {
               select: {
                 id: true,
                 name: true,
@@ -542,7 +543,7 @@ async function getWorkOrderReport(req, res) {
             created_by: true,
             cash_advance_id: true,
             vendor_id: true,
-            vendors: {
+            vendor: {
               select: {
                 id: true,
                 name: true,
@@ -636,7 +637,7 @@ async function getWorkOrderReport(req, res) {
       post_report_db: woFull.post_maintenance_reports,
       work_order_expenses: woExpenses.map((x) => ({
         ...x,
-        vendor_name: x.vendors?.name || null,
+        vendor_name: x.vendor?.name || null,
       })),
       report_runtime,
     });
