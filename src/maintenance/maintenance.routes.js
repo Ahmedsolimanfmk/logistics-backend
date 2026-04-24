@@ -10,6 +10,7 @@ const instCtrl = require("./maintenance.installations.controller");
 const workCtrl = require("./maintenance.workorders.controller");
 const vehCtrl = require("./maintenance.vehicles.controller");
 const attCtrl = require("./maintenance.attachments.controller");
+const invReqCtrl = require("./maintenance.inventory-requests.controller");
 
 const authRequired =
   typeof jwtMod === "function"
@@ -102,6 +103,17 @@ const uploadRequestAttachments =
   attCtrl && Array.isArray(attCtrl.uploadRequestAttachments)
     ? attCtrl.uploadRequestAttachments
     : pick(attCtrl, ["uploadRequestAttachments"]) || fallback("uploadRequestAttachments");
+const createInventoryRequestForWorkOrder =
+  pick(invReqCtrl, ["createInventoryRequestForWorkOrder"]) ||
+  fallback("createInventoryRequestForWorkOrder");
+
+const addInventoryRequestLines =
+  pick(invReqCtrl, ["addInventoryRequestLines"]) ||
+  fallback("addInventoryRequestLines");
+
+const listInventoryRequestsForWorkOrder =
+  pick(invReqCtrl, ["listInventoryRequestsForWorkOrder"]) ||
+  fallback("listInventoryRequestsForWorkOrder");
 
 // Global enforcement
 router.use(authRequired || fallback("authRequired"));
@@ -145,5 +157,20 @@ router.post("/work-orders/:id/complete", completeWorkOrder);
 
 // Vehicles options
 router.get("/vehicles/options", listVehicleOptions);
+
+router.post(
+  "/work-orders/:id/inventory-requests",
+  createInventoryRequestForWorkOrder
+);
+
+router.get(
+  "/work-orders/:id/inventory-requests",
+  listInventoryRequestsForWorkOrder
+);
+
+router.post(
+  "/inventory-requests/:requestId/lines",
+  addInventoryRequestLines
+);
 
 module.exports = router;
