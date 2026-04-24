@@ -31,6 +31,17 @@ function parseIntQuery(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function normalizeWorkOrderRow(row) {
+  if (!row) return row;
+
+  return {
+    ...row,
+    vehicles: row.vehicle || null,
+    vendors: row.vendor || null,
+    vendor_name: row.vendor?.name || null,
+  };
+}
+
 function buildRuntimeReport(woFull, opts = {}) {
   const labor = toNum(opts.labor_cost);
   const service = toNum(opts.service_cost);
@@ -42,7 +53,8 @@ function buildRuntimeReport(woFull, opts = {}) {
 
   for (const issue of woFull.inventory_issues || []) {
     for (const line of issue.inventory_issue_lines || []) {
-      const part = line.parts || null;
+      const part = line.parts || line.part || null;
+      const partItem = line.part_items || line.part_item || null;
       const partId = line.part_id;
 
       const qty = toNum(line.qty);
@@ -60,12 +72,12 @@ function buildRuntimeReport(woFull, opts = {}) {
         total_cost: round2(totalCost),
         notes: line.notes || null,
         part_item_id: line.part_item_id || null,
-        part_item: line.part_items
+        part_item: partItem
           ? {
-              id: line.part_items.id,
-              internal_serial: line.part_items.internal_serial,
-              manufacturer_serial: line.part_items.manufacturer_serial,
-              status: line.part_items.status,
+              id: partItem.id,
+              internal_serial: partItem.internal_serial,
+              manufacturer_serial: partItem.manufacturer_serial,
+              status: partItem.status,
             }
           : null,
       });
@@ -84,7 +96,7 @@ function buildRuntimeReport(woFull, opts = {}) {
   const installationsFlat = [];
 
   for (const ins of woFull.work_order_installations || []) {
-    const part = ins.parts || null;
+    const part = ins.parts || ins.part || null;
     const partId = ins.part_id;
     const qty = toNum(ins.qty_installed);
 
@@ -212,9 +224,7 @@ async function listWorkOrders(req, res) {
     const vendor_id = req.query.vendor_id ? String(req.query.vendor_id) : null;
     const q = req.query.q ? String(req.query.q).trim() : "";
 
-    const where = {
-      company_id: companyId,
-    };
+    const where = { company_id: companyId };
 
     if (status) where.status = status;
 
@@ -260,7 +270,7 @@ async function listWorkOrders(req, res) {
     if (q) {
       where.OR = [
         {
-          vendors: {
+          vendor: {
             is: {
               name: { contains: q, mode: "insensitive" },
             },
@@ -270,7 +280,7 @@ async function listWorkOrders(req, res) {
       ];
     }
 
-    const [items, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       prisma.maintenance_work_orders.findMany({
         where,
         orderBy: { created_at: "desc" },
@@ -286,13 +296,15 @@ async function listWorkOrders(req, res) {
           opened_at: true,
           started_at: true,
           completed_at: true,
+          closed_at: true,
+          cancelled_at: true,
           odometer: true,
           notes: true,
           vehicle_id: true,
           request_id: true,
           created_at: true,
           updated_at: true,
-          vehicles: {
+          vehicle: {
             select: {
               id: true,
               fleet_no: true,
@@ -302,7 +314,7 @@ async function listWorkOrders(req, res) {
               current_odometer: true,
             },
           },
-          vendors: {
+          vendor: {
             select: {
               id: true,
               name: true,
@@ -323,17 +335,15 @@ async function listWorkOrders(req, res) {
       page,
       limit,
       total,
-      items,
+      items: rows.map(normalizeWorkOrderRow),
     });
-    } catch (e) {
+  } catch (e) {
     console.error("LIST WORK ORDERS ERROR:", e);
 
     const sc = e?.statusCode || 500;
 
     if (sc !== 500) {
-      return res.status(sc).json({
-        message: e.message,
-      });
+      return res.status(sc).json({ message: e.message });
     }
 
     return res.status(500).json({
@@ -363,7 +373,7 @@ async function getWorkOrderById(req, res) {
         company_id: companyId,
       },
       include: {
-        vehicles: {
+        vehicle: {
           select: {
             id: true,
             fleet_no: true,
@@ -373,7 +383,7 @@ async function getWorkOrderById(req, res) {
             current_odometer: true,
           },
         },
-        vendors: {
+        vendor: {
           select: {
             id: true,
             name: true,
@@ -403,7 +413,7 @@ async function getWorkOrderById(req, res) {
       vehicleId: row.vehicle_id,
     });
 
-    return res.json({ work_order: row });
+    return res.json({ work_order: normalizeWorkOrderRow(row) });
   } catch (e) {
     const sc = e?.statusCode || 500;
     if (sc !== 500) {
@@ -411,7 +421,12 @@ async function getWorkOrderById(req, res) {
     }
 
     console.error("GET WORK ORDER ERROR:", e);
-    return res.status(500).json({ message: "Failed to get work order" });
+    return res.status(500).json({
+      message: "Failed to get work order",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -433,7 +448,7 @@ async function getWorkOrderReport(req, res) {
         company_id: companyId,
       },
       include: {
-        vehicles: {
+        vehicle: {
           select: {
             id: true,
             plate_no: true,
@@ -442,7 +457,7 @@ async function getWorkOrderReport(req, res) {
             current_odometer: true,
           },
         },
-        vendors: {
+        vendor: {
           select: {
             id: true,
             name: true,
@@ -470,7 +485,13 @@ async function getWorkOrderReport(req, res) {
               },
               include: {
                 parts: {
-                  select: { id: true, name: true, part_number: true, brand: true, unit: true },
+                  select: {
+                    id: true,
+                    name: true,
+                    part_number: true,
+                    brand: true,
+                    unit: true,
+                  },
                 },
                 part_items: {
                   select: {
@@ -490,7 +511,13 @@ async function getWorkOrderReport(req, res) {
           },
           include: {
             parts: {
-              select: { id: true, name: true, part_number: true, brand: true, unit: true },
+              select: {
+                id: true,
+                name: true,
+                part_number: true,
+                brand: true,
+                unit: true,
+              },
             },
           },
         },
@@ -595,16 +622,17 @@ async function getWorkOrderReport(req, res) {
         type: woFull.type,
         maintenance_mode: woFull.maintenance_mode,
         vendor_id: woFull.vendor_id || null,
-        vendor_name: woFull.vendors?.name || null,
-        vendor: woFull.vendors || null,
+        vendor_name: woFull.vendor?.name || null,
+        vendor: woFull.vendor || null,
         opened_at: woFull.opened_at,
         started_at: woFull.started_at,
         completed_at: woFull.completed_at,
+        closed_at: woFull.closed_at || null,
         odometer: woFull.odometer,
         notes: woFull.notes,
         request_id: woFull.request_id ?? null,
       },
-      vehicle: woFull.vehicles,
+      vehicle: woFull.vehicle,
       post_report_db: woFull.post_maintenance_reports,
       work_order_expenses: woExpenses.map((x) => ({
         ...x,
@@ -623,6 +651,8 @@ async function getWorkOrderReport(req, res) {
       message: "Failed to get work order report",
       error: e?.message || String(e),
       stack: process.env.NODE_ENV === "production" ? undefined : e?.stack,
+      code: e?.code,
+      meta: e?.meta,
     });
   }
 }
@@ -637,9 +667,9 @@ async function upsertPostReport(req, res) {
     }
 
     if (!isAdminOrAccountant(req)) {
-      return res
-        .status(403)
-        .json({ message: "Only ADMIN/ACCOUNTANT can submit post report (for now)" });
+      return res.status(403).json({
+        message: "Only ADMIN/ACCOUNTANT can submit post report (for now)",
+      });
     }
 
     const workOrderId = String(req.params.id || "");
@@ -672,7 +702,9 @@ async function upsertPostReport(req, res) {
         work_order_id: workOrderId,
         checked_by: userId,
         checked_at: now,
-        road_test_result: road_test_result ? String(road_test_result).toUpperCase() : null,
+        road_test_result: road_test_result
+          ? String(road_test_result).toUpperCase()
+          : null,
         checklist_json: checklist_json ?? null,
         remarks: remarks ? String(remarks) : null,
         created_at: now,
@@ -680,13 +712,18 @@ async function upsertPostReport(req, res) {
       update: {
         checked_by: userId,
         checked_at: now,
-        road_test_result: road_test_result ? String(road_test_result).toUpperCase() : null,
+        road_test_result: road_test_result
+          ? String(road_test_result).toUpperCase()
+          : null,
         checklist_json: checklist_json ?? null,
         remarks: remarks ? String(remarks) : null,
       },
     });
 
-    return res.json({ message: "Post maintenance report saved", post_report: row });
+    return res.json({
+      message: "Post maintenance report saved",
+      post_report: row,
+    });
   } catch (e) {
     const sc = e?.statusCode || 500;
     if (sc !== 500) {
@@ -694,7 +731,12 @@ async function upsertPostReport(req, res) {
     }
 
     console.error("UPSERT POST REPORT ERROR:", e);
-    return res.status(500).json({ message: "Failed to save post report", error: e.message });
+    return res.status(500).json({
+      message: "Failed to save post report",
+      error: e.message,
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -708,9 +750,9 @@ async function completeWorkOrder(req, res) {
     }
 
     if (!isAdminOrAccountant(req)) {
-      return res
-        .status(403)
-        .json({ message: "Only ADMIN/ACCOUNTANT can complete work orders (for now)" });
+      return res.status(403).json({
+        message: "Only ADMIN/ACCOUNTANT can complete work orders (for now)",
+      });
     }
 
     const workOrderId = String(req.params.id || "");
@@ -787,7 +829,8 @@ async function completeWorkOrder(req, res) {
     }
 
     if (
-      String(woFull.post_maintenance_reports?.road_test_result || "").toUpperCase() === "FAIL"
+      String(woFull.post_maintenance_reports?.road_test_result || "").toUpperCase() ===
+      "FAIL"
     ) {
       return res.status(409).json({
         message: "Cannot complete work order while QA result is FAIL",
@@ -851,7 +894,10 @@ async function completeWorkOrder(req, res) {
       });
     });
 
-    return res.json({ message: "Work order completed", work_order: updated });
+    return res.json({
+      message: "Work order completed",
+      work_order: updated,
+    });
   } catch (e) {
     const sc = e?.statusCode || 500;
     if (sc !== 500) {
@@ -859,7 +905,12 @@ async function completeWorkOrder(req, res) {
     }
 
     console.error("COMPLETE WORK ORDER ERROR:", e);
-    return res.status(500).json({ message: "Failed to complete work order", error: e.message });
+    return res.status(500).json({
+      message: "Failed to complete work order",
+      error: e.message,
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
