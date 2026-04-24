@@ -1,10 +1,33 @@
 const prisma = require("../prisma");
 const { getAuthUserId, getCompanyIdOrThrow } = require("../core/request-context");
-const { assertUuid, isUuid } = require("../core/validation");
+const { assertUuid } = require("../core/validation");
 const {
   isAdminOrAccountant,
   assertMaintenanceVehicleAccess,
 } = require("./maintenance.access");
+
+function normalizeWorkOrderRow(row) {
+  if (!row) return row;
+
+  return {
+    ...row,
+    vehicles: row.vehicle || null,
+    vendors: row.vendor || null,
+    vendor_name: row.vendor?.name || null,
+  };
+}
+
+function normalizeRequestRow(row) {
+  if (!row) return row;
+
+  return {
+    ...row,
+    vehicles: row.vehicle || null,
+    work_orders: Array.isArray(row.work_orders)
+      ? row.work_orders.map(normalizeWorkOrderRow)
+      : row.work_orders,
+  };
+}
 
 async function createMaintenanceRequest(req, res) {
   try {
@@ -54,9 +77,18 @@ async function createMaintenanceRequest(req, res) {
     return res.status(201).json(row);
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: e.message });
+
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
     console.error("CREATE MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to create request" });
+    return res.status(500).json({
+      message: "Failed to create request",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -106,9 +138,18 @@ async function listMaintenanceRequests(req, res) {
     });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: e.message });
+
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
     console.error("LIST MAINT REQUESTS ERROR:", e);
-    return res.status(500).json({ message: "Failed to fetch requests" });
+    return res.status(500).json({
+      message: "Failed to fetch requests",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -128,7 +169,7 @@ async function getMaintenanceRequestById(req, res) {
         company_id: companyId,
       },
       include: {
-        vehicles: {
+        vehicle: {
           select: {
             id: true,
             fleet_no: true,
@@ -159,9 +200,10 @@ async function getMaintenanceRequestById(req, res) {
             opened_at: true,
             started_at: true,
             completed_at: true,
+            closed_at: true,
             odometer: true,
             notes: true,
-            vendors: {
+            vendor: {
               select: {
                 id: true,
                 name: true,
@@ -178,16 +220,27 @@ async function getMaintenanceRequestById(req, res) {
       },
     });
 
-    if (!row) return res.status(404).json({ message: "Maintenance request not found" });
+    if (!row) {
+      return res.status(404).json({ message: "Maintenance request not found" });
+    }
 
     await assertMaintenanceVehicleAccess({ req, vehicleId: row.vehicle_id });
 
-    return res.json({ request: row });
+    return res.json({ request: normalizeRequestRow(row) });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: e.message });
+
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
     console.error("GET MAINT REQUEST BY ID ERROR:", e);
-    return res.status(500).json({ message: "Failed to fetch maintenance request" });
+    return res.status(500).json({
+      message: "Failed to fetch maintenance request",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -197,8 +250,11 @@ async function approveMaintenanceRequest(req, res) {
     const companyId = getCompanyIdOrThrow(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
     if (!isAdminOrAccountant(req)) {
-      return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can approve" });
+      return res.status(403).json({
+        message: "Only ADMIN/ACCOUNTANT can approve",
+      });
     }
 
     const { id } = req.params;
@@ -219,12 +275,18 @@ async function approveMaintenanceRequest(req, res) {
     });
 
     if (!reqRow) return res.status(404).json({ message: "Request not found" });
+
     if (reqRow.status !== "SUBMITTED") {
       return res.status(409).json({ message: "Request is not SUBMITTED" });
     }
 
     let normalizedVendorId = null;
-    if (vendor_id !== undefined && vendor_id !== null && String(vendor_id).trim() !== "") {
+
+    if (
+      vendor_id !== undefined &&
+      vendor_id !== null &&
+      String(vendor_id).trim() !== ""
+    ) {
       assertUuid(String(vendor_id), "vendor_id");
 
       const vendor = await prisma.vendors.findFirst({
@@ -301,7 +363,7 @@ async function approveMaintenanceRequest(req, res) {
           updated_at: now,
         },
         include: {
-          vendors: {
+          vendor: {
             select: {
               id: true,
               name: true,
@@ -313,7 +375,7 @@ async function approveMaintenanceRequest(req, res) {
               city: true,
             },
           },
-          vehicles: {
+          vehicle: {
             select: {
               id: true,
               fleet_no: true,
@@ -343,7 +405,9 @@ async function approveMaintenanceRequest(req, res) {
         throw err;
       }
 
-      return { work_order: wo };
+      return {
+        work_order: normalizeWorkOrderRow(wo),
+      };
     });
 
     return res.json({
@@ -352,9 +416,18 @@ async function approveMaintenanceRequest(req, res) {
     });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: e.message });
+
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
     console.error("APPROVE MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to approve request" });
+    return res.status(500).json({
+      message: "Failed to approve request",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
@@ -364,8 +437,11 @@ async function rejectMaintenanceRequest(req, res) {
     const companyId = getCompanyIdOrThrow(req);
 
     if (!actorId) return res.status(401).json({ message: "Unauthorized" });
+
     if (!isAdminOrAccountant(req)) {
-      return res.status(403).json({ message: "Only ADMIN/ACCOUNTANT can reject" });
+      return res.status(403).json({
+        message: "Only ADMIN/ACCOUNTANT can reject",
+      });
     }
 
     const { id } = req.params;
@@ -386,6 +462,7 @@ async function rejectMaintenanceRequest(req, res) {
     });
 
     if (!reqRow) return res.status(404).json({ message: "Request not found" });
+
     if (reqRow.status !== "SUBMITTED") {
       return res.status(409).json({ message: "Request is not SUBMITTED" });
     }
@@ -417,9 +494,18 @@ async function rejectMaintenanceRequest(req, res) {
     return res.json({ request: fresh });
   } catch (e) {
     const sc = e?.statusCode || 500;
-    if (sc !== 500) return res.status(sc).json({ message: e.message });
+
+    if (sc !== 500) {
+      return res.status(sc).json({ message: e.message });
+    }
+
     console.error("REJECT MAINT REQUEST ERROR:", e);
-    return res.status(500).json({ message: "Failed to reject request" });
+    return res.status(500).json({
+      message: "Failed to reject request",
+      error: e?.message || String(e),
+      code: e?.code,
+      meta: e?.meta,
+    });
   }
 }
 
