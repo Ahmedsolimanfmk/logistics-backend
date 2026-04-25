@@ -808,20 +808,21 @@ async function completeWorkOrder(req, res) {
       }
 
       await tx.maintenance_work_order_events.create({
-        data: {
-          company_id: companyId,
-          work_order_id: workOrderId,
+  data: {
+    company_id: companyId,
+    work_order_id: workOrderId,
 
-          action: "COMPLETE",
-          event_type: "COMPLETE",
+    action: "COMPLETE",
+    actor_id: userId,
 
-          actor_id: userId,
-          notes: notes ? String(notes) : null,
-          payload: null,
-          created_at: now,
-        },
-      });
+    from_status: st,
+    to_status: "COMPLETED",
 
+    notes: notes ? String(notes) : null,
+    payload: null,
+    created_at: now,
+  },
+});
       return tx.maintenance_work_orders.findFirst({
         where: {
           id: workOrderId,
