@@ -45,7 +45,7 @@ async function listIssuedParts(req, res) {
         },
       },
       orderBy: {
-        created_at: "desc",
+        id: "desc",
       },
       include: {
         part: {
