@@ -1,5 +1,6 @@
 // =======================
 // src/inventory/warehouses.controller.js
+// tenant-safe version
 // =======================
 
 const prisma = require("../maintenance/prisma");
@@ -11,82 +12,202 @@ function isUuid(v) {
   );
 }
 
+function requireCompanyId(req, res) {
+  const companyId = req.companyId;
+
+  if (!isUuid(companyId)) {
+    res.status(400).json({ message: "Invalid company context" });
+    return null;
+  }
+
+  return companyId;
+}
+
 async function listWarehouses(req, res) {
   try {
-    const companyId = req.companyId;
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const onlyActive = String(req.query.active || "").trim() === "1";
+    const q = String(req.query.q || "").trim();
 
     const where = {
       company_id: companyId,
+      ...(onlyActive ? { is_active: true } : {}),
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: "insensitive" } },
+              { location: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
     };
 
-    const onlyActive = String(req.query.active || "").trim() === "1";
-    
-
     const rows = await prisma.warehouses.findMany({
-      where: onlyActive ? { is_active: true } : undefined,
+      where,
       orderBy: [{ name: "asc" }],
     });
 
-    res.json({ items: rows });
+    return res.json({ items: rows });
   } catch (err) {
     console.error("listWarehouses error:", err);
-    res.status(500).json({ message: "Failed to list warehouses" });
+    return res.status(500).json({
+      message: "Failed to list warehouses",
+      error: err?.message || String(err),
+      code: err?.code,
+      meta: err?.meta,
+    });
   }
 }
 
 async function createWarehouse(req, res) {
   try {
-    const name = String(req.body?.name || "").trim();
-    const location = req.body?.location != null ? String(req.body.location).trim() : null;
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
 
-    if (!name) return res.status(400).json({ message: "name is required" });
+    const name = String(req.body?.name || "").trim();
+    const location =
+      req.body?.location != null ? String(req.body.location).trim() : null;
+
+    if (!name) {
+      return res.status(400).json({ message: "name is required" });
+    }
+
+    const existing = await prisma.warehouses.findFirst({
+      where: {
+        company_id: companyId,
+        name: {
+          equals: name,
+          mode: "insensitive",
+        },
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return res.status(409).json({
+        message: "Warehouse name already exists in this company",
+      });
+    }
 
     const created = await prisma.warehouses.create({
       data: {
+        company_id: companyId,
         name,
         location,
         is_active: true,
       },
     });
 
-    res.status(201).json(created);
+    return res.status(201).json(created);
   } catch (err) {
-    // unique name
     if (String(err?.code) === "P2002") {
-      return res.status(409).json({ message: "Warehouse name already exists" });
+      return res.status(409).json({
+        message: "Warehouse name already exists",
+      });
     }
+
     console.error("createWarehouse error:", err);
-    res.status(500).json({ message: "Failed to create warehouse" });
+    return res.status(500).json({
+      message: "Failed to create warehouse",
+      error: err?.message || String(err),
+      code: err?.code,
+      meta: err?.meta,
+    });
   }
 }
 
 async function updateWarehouse(req, res) {
   try {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
     const id = String(req.params.id || "").trim();
-    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
+
+    if (!isUuid(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const existing = await prisma.warehouses.findFirst({
+      where: {
+        id,
+        company_id: companyId,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Warehouse not found" });
+    }
 
     const patch = {};
-    if (req.body?.name != null) patch.name = String(req.body.name).trim();
-    if (req.body?.location !== undefined) patch.location = req.body.location == null ? null : String(req.body.location).trim();
-    if (req.body?.is_active != null) patch.is_active = Boolean(req.body.is_active);
 
-    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No fields to update" });
+    if (req.body?.name != null) {
+      const name = String(req.body.name).trim();
+
+      if (!name) {
+        return res.status(400).json({ message: "name cannot be empty" });
+      }
+
+      const duplicate = await prisma.warehouses.findFirst({
+        where: {
+          company_id: companyId,
+          id: { not: id },
+          name: {
+            equals: name,
+            mode: "insensitive",
+          },
+        },
+        select: { id: true },
+      });
+
+      if (duplicate) {
+        return res.status(409).json({
+          message: "Warehouse name already exists in this company",
+        });
+      }
+
+      patch.name = name;
+    }
+
+    if (req.body?.location !== undefined) {
+      patch.location =
+        req.body.location == null ? null : String(req.body.location).trim();
+    }
+
+    if (req.body?.is_active != null) {
+      patch.is_active = Boolean(req.body.is_active);
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ message: "No fields to update" });
+    }
 
     const updated = await prisma.warehouses.update({
       where: { id },
       data: patch,
     });
 
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
     if (String(err?.code) === "P2025") {
       return res.status(404).json({ message: "Warehouse not found" });
     }
+
     if (String(err?.code) === "P2002") {
-      return res.status(409).json({ message: "Warehouse name already exists" });
+      return res.status(409).json({
+        message: "Warehouse name already exists",
+      });
     }
+
     console.error("updateWarehouse error:", err);
-    res.status(500).json({ message: "Failed to update warehouse" });
+    return res.status(500).json({
+      message: "Failed to update warehouse",
+      error: err?.message || String(err),
+      code: err?.code,
+      meta: err?.meta,
+    });
   }
 }
 
