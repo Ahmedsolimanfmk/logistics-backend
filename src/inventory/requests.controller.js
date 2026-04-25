@@ -310,16 +310,20 @@ async function approveRequest(req, res) {
       const now = new Date();
 
       const issue = await tx.inventory_issues.create({
-        data: {
-          company_id: companyId,
-          warehouse_id: request.warehouse_id,
-          request_id: request.id,
-          work_order_id: request.work_order_id || null,
-          status: "POSTED",
-          created_by: userId,
-          posted_at: now,
-        },
-      });
+  data: {
+    company_id: companyId,
+    warehouse_id: request.warehouse_id,
+    request_id: request.id,
+    work_order_id: request.work_order_id || null,
+    status: "POSTED",
+    issued_by: userId,
+    approved_by: userId,
+    approved_at: now,
+    issued_at: now,
+    reference_no: `WO-${String(request.work_order_id || request.id).slice(0, 8)}`,
+    notes: "Auto issued from approved inventory request",
+  },
+});
 
       const reservedByLine = [];
       const issueLinesCreated = [];
