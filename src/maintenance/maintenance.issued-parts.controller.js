@@ -35,10 +35,9 @@ async function listIssuedParts(req, res) {
     const issueWhere = {
       company_id: companyId,
       ...(work_order_id ? { work_order_id } : {}),
-      work_order_id: work_order_id ? work_order_id : { not: null },
     };
 
-    const issueLines = await prisma.inventory_issue_lines.findMany({
+    const issueLinesRaw = await prisma.inventory_issue_lines.findMany({
       where: {
         company_id: companyId,
         issue: {
@@ -100,37 +99,44 @@ async function listIssuedParts(req, res) {
       },
     });
 
+    const issueLines = issueLinesRaw.filter((x) => {
+      if (work_order_id) return true;
+      return Boolean(x.issue?.work_order_id);
+    });
+
     const workOrderIds = [
-      ...new Set(
-        issueLines
-          .map((x) => x.issue?.work_order_id)
-          .filter(Boolean)
-      ),
+      ...new Set(issueLines.map((x) => x.issue?.work_order_id).filter(Boolean)),
     ];
 
-    const partIds = [...new Set(issueLines.map((x) => x.part_id).filter(Boolean))];
+    const partIds = [
+      ...new Set(issueLines.map((x) => x.part_id).filter(Boolean)),
+    ];
 
-    const installations = await prisma.work_order_installations.findMany({
-      where: {
-        company_id: companyId,
-        work_order_id: { in: workOrderIds },
-        part_id: { in: partIds },
-      },
-      orderBy: {
-        installed_at: "desc",
-      },
-      include: {
-        part: {
-          select: {
-            id: true,
-            name: true,
-            part_number: true,
-            brand: true,
-            unit: true,
+    let installations = [];
+
+    if (workOrderIds.length > 0 && partIds.length > 0) {
+      installations = await prisma.work_order_installations.findMany({
+        where: {
+          company_id: companyId,
+          work_order_id: { in: workOrderIds },
+          part_id: { in: partIds },
+        },
+        orderBy: {
+          installed_at: "desc",
+        },
+        include: {
+          part: {
+            select: {
+              id: true,
+              name: true,
+              part_number: true,
+              brand: true,
+              unit: true,
+            },
           },
         },
-      },
-    });
+      });
+    }
 
     const installedMap = new Map();
 
@@ -161,6 +167,8 @@ async function listIssuedParts(req, res) {
 
     for (const line of issueLines) {
       const woId = line.issue?.work_order_id;
+      if (!woId) continue;
+
       const key = `${woId}:${line.part_id}`;
 
       const prev = grouped.get(key) || {
@@ -182,8 +190,8 @@ async function listIssuedParts(req, res) {
 
       if (
         !prev.issued_at ||
-        new Date(line.issue?.issued_at).getTime() >
-          new Date(prev.issued_at).getTime()
+        new Date(line.issue?.issued_at || 0).getTime() >
+          new Date(prev.issued_at || 0).getTime()
       ) {
         prev.issued_at = line.issue?.issued_at || null;
       }
