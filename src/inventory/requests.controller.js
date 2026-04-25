@@ -1,5 +1,6 @@
 // =======================
 // src/inventory/requests.controller.js
+// Supports SERIAL + BULK stock
 // =======================
 
 const prisma = require("../maintenance/prisma");
@@ -43,10 +44,7 @@ async function assertWarehouseBelongsToCompany(tx, companyId, warehouseId) {
     select: { id: true, company_id: true, is_active: true, name: true },
   });
 
-  if (!row) {
-    throw buildError("Warehouse not found", 404);
-  }
-
+  if (!row) throw buildError("Warehouse not found", 404);
   return row;
 }
 
@@ -152,9 +150,7 @@ async function getRequest(req, res) {
       include: requestInclude(),
     });
 
-    if (!row) {
-      return res.status(404).json({ message: "Request not found" });
-    }
+    if (!row) return res.status(404).json({ message: "Request not found" });
 
     return res.json(row);
   } catch (err) {
@@ -182,9 +178,7 @@ async function createRequest(req, res) {
     const notes = req.body?.notes != null ? String(req.body.notes).trim() : null;
     const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
 
-    if (!requested_by) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!requested_by) return res.status(401).json({ message: "Unauthorized" });
 
     if (!isUuid(warehouse_id)) {
       return res.status(400).json({ message: "warehouse_id is required" });
@@ -215,6 +209,7 @@ async function createRequest(req, res) {
 
     const created = await prisma.$transaction(async (tx) => {
       await assertWarehouseBelongsToCompany(tx, companyId, warehouse_id);
+
       await assertPartsBelongToCompany(
         tx,
         companyId,
@@ -260,6 +255,9 @@ async function createRequest(req, res) {
 
 // =======================
 // APPROVE
+// Serial: part_items -> ISSUED
+// Bulk: warehouse_parts qty_on_hand decrement
+// Creates inventory_issue + inventory_issue_lines
 // =======================
 async function approveRequest(req, res) {
   try {
@@ -271,9 +269,7 @@ async function approveRequest(req, res) {
     }
 
     const userId = getAuthUserId(req);
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const result = await prisma.$transaction(async (tx) => {
       const request = await tx.inventory_requests.findFirst({
@@ -282,14 +278,16 @@ async function approveRequest(req, res) {
           company_id: companyId,
         },
         include: {
-          lines: true,
+          lines: {
+            include: {
+              part: true,
+            },
+          },
           reservations: true,
         },
       });
 
-      if (!request) {
-        throw buildError("Request not found", 404);
-      }
+      if (!request) throw buildError("Request not found", 404);
 
       if (request.status !== "PENDING") {
         throw buildError("Only PENDING requests can be approved", 400);
@@ -307,17 +305,37 @@ async function approveRequest(req, res) {
         throw buildError("Request already has reservations", 409);
       }
 
+      await assertWarehouseBelongsToCompany(tx, companyId, request.warehouse_id);
+
+      const now = new Date();
+
+      const issue = await tx.inventory_issues.create({
+        data: {
+          company_id: companyId,
+          warehouse_id: request.warehouse_id,
+          request_id: request.id,
+          work_order_id: request.work_order_id || null,
+          status: "POSTED",
+          created_by: userId,
+          posted_at: now,
+        },
+      });
+
       const reservedByLine = [];
+      const issueLinesCreated = [];
 
       for (const ln of request.lines) {
-        const partId = ln.part_id;
+        const partId = String(ln.part_id || "").trim();
         const qty = safeInt(ln.needed_qty);
 
         if (!isUuid(partId) || qty == null || qty <= 0) {
           throw buildError("Invalid request lines", 400);
         }
 
-        const picked = await tx.part_items.findMany({
+        // ======================
+        // 1) SERIAL stock
+        // ======================
+        const serialItems = await tx.part_items.findMany({
           where: {
             company_id: companyId,
             warehouse_id: request.warehouse_id,
@@ -336,44 +354,131 @@ async function approveRequest(req, res) {
           },
         });
 
-        if (picked.length < qty) {
+        if (serialItems.length >= qty) {
+          const picked = serialItems.slice(0, qty);
+          const ids = picked.map((p) => p.id);
+
+          const upd = await tx.part_items.updateMany({
+            where: {
+              company_id: companyId,
+              id: { in: ids },
+              status: "IN_STOCK",
+            },
+            data: {
+              status: "ISSUED",
+              last_moved_at: now,
+            },
+          });
+
+          if (upd.count !== ids.length) {
+            throw buildError("Stock changed while approving. Please retry.", 409);
+          }
+
+          await tx.inventory_request_reservations.createMany({
+            data: ids.map((part_item_id) => ({
+              company_id: companyId,
+              request_id: request.id,
+              part_item_id,
+            })),
+          });
+
+          const createdLines = await Promise.all(
+            picked.map((item) =>
+              tx.inventory_issue_lines.create({
+                data: {
+                  company_id: companyId,
+                  issue_id: issue.id,
+                  part_id: partId,
+                  part_item_id: item.id,
+                  qty: 1,
+                  unit_cost: null,
+                  total_cost: null,
+                  notes: ln.notes || null,
+                },
+              })
+            )
+          );
+
+          issueLinesCreated.push(...createdLines);
+
+          reservedByLine.push({
+            request_line_id: ln.id,
+            part_id: partId,
+            mode: "SERIAL",
+            reserved_qty: ids.length,
+            issued_qty: ids.length,
+            reserved_items: picked,
+          });
+
+          continue;
+        }
+
+        // ======================
+        // 2) BULK stock
+        // ======================
+        const stock = await tx.warehouse_parts.findFirst({
+          where: {
+            company_id: companyId,
+            warehouse_id: request.warehouse_id,
+            part_id: partId,
+          },
+          select: {
+            id: true,
+            qty_on_hand: true,
+          },
+        });
+
+        const available = Number(stock?.qty_on_hand || 0);
+
+        if (!stock || available < qty) {
           throw buildError(
-            `Insufficient stock for part_id=${partId}. Needed ${qty}, available ${picked.length}.`,
+            `Insufficient stock for part_id=${partId}. Needed ${qty}, available ${available}.`,
             409
           );
         }
 
-        const ids = picked.map((p) => p.id);
-
-        const upd = await tx.part_items.updateMany({
+        const bulkUpd = await tx.warehouse_parts.updateMany({
           where: {
+            id: stock.id,
             company_id: companyId,
-            id: { in: ids },
-            status: "IN_STOCK",
+            qty_on_hand: {
+              gte: qty,
+            },
           },
           data: {
-            status: "RESERVED",
-            last_moved_at: new Date(),
+            qty_on_hand: {
+              decrement: qty,
+            },
           },
         });
 
-        if (upd.count !== ids.length) {
+        if (bulkUpd.count !== 1) {
           throw buildError("Stock changed while approving. Please retry.", 409);
         }
 
-        await tx.inventory_request_reservations.createMany({
-          data: ids.map((part_item_id) => ({
+        const createdLine = await tx.inventory_issue_lines.create({
+          data: {
             company_id: companyId,
-            request_id: request.id,
-            part_item_id,
-          })),
+            issue_id: issue.id,
+            part_id: partId,
+            part_item_id: null,
+            qty,
+            unit_cost: null,
+            total_cost: null,
+            notes: ln.notes || null,
+          },
         });
+
+        issueLinesCreated.push(createdLine);
 
         reservedByLine.push({
           request_line_id: ln.id,
           part_id: partId,
-          reserved_qty: ids.length,
-          reserved_items: picked,
+          mode: "BULK",
+          reserved_qty: qty,
+          issued_qty: qty,
+          available_before: available,
+          available_after: available - qty,
         });
       }
 
@@ -385,22 +490,35 @@ async function approveRequest(req, res) {
         include: requestInclude(),
       });
 
-      return { updated, reservedByLine };
+      return {
+        updated,
+        issue,
+        issue_lines: issueLinesCreated,
+        reservedByLine,
+      };
     });
 
     return res.json({
-      message: "Request approved and stock reserved",
+      message: "Request approved and stock issued",
       request: result.updated,
+      issue: result.issue,
+      issue_lines: result.issue_lines,
       reserved: result.reservedByLine,
     });
   } catch (err) {
     const sc = err?.statusCode || 500;
+
     if (sc !== 500) {
       return res.status(sc).json({ message: String(err.message || "Error") });
     }
 
     console.error("approveRequest error:", err);
-    return res.status(500).json({ message: "Failed to approve request" });
+    return res.status(500).json({
+      message: "Failed to approve request",
+      error: err?.message || String(err),
+      code: err?.code,
+      meta: err?.meta,
+    });
   }
 }
 
@@ -412,14 +530,10 @@ async function unreserveRequest(req, res) {
     const companyId = requireCompanyId(req.companyId);
     const id = String(req.params.id || "").trim();
 
-    if (!isUuid(id)) {
-      return res.status(400).json({ message: "Invalid id" });
-    }
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
     const userId = getAuthUserId(req);
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const result = await prisma.$transaction(async (tx) => {
       const request = await tx.inventory_requests.findFirst({
@@ -430,9 +544,7 @@ async function unreserveRequest(req, res) {
         include: { reservations: true },
       });
 
-      if (!request) {
-        throw buildError("Request not found", 404);
-      }
+      if (!request) throw buildError("Request not found", 404);
 
       if (request.status !== "APPROVED") {
         throw buildError("Only APPROVED requests can be unreserved", 400);
@@ -478,6 +590,7 @@ async function unreserveRequest(req, res) {
     });
   } catch (err) {
     const sc = err?.statusCode || 500;
+
     if (sc !== 500) {
       return res.status(sc).json({ message: String(err.message || "Error") });
     }
@@ -495,17 +608,13 @@ async function rejectRequest(req, res) {
     const companyId = requireCompanyId(req.companyId);
     const id = String(req.params.id || "").trim();
 
-    if (!isUuid(id)) {
-      return res.status(400).json({ message: "Invalid id" });
-    }
+    if (!isUuid(id)) return res.status(400).json({ message: "Invalid id" });
 
     const reason =
       req.body?.reason != null ? String(req.body.reason).trim() : null;
 
     const userId = getAuthUserId(req);
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
     const result = await prisma.$transaction(async (tx) => {
       const row = await tx.inventory_requests.findFirst({
@@ -516,37 +625,14 @@ async function rejectRequest(req, res) {
         include: { reservations: true },
       });
 
-      if (!row) {
-        throw buildError("Request not found", 404);
-      }
+      if (!row) throw buildError("Request not found", 404);
 
       if (row.status === "APPROVED") {
-        const partItemIds = (row.reservations || [])
-          .map((r) => r.part_item_id)
-          .filter(Boolean);
+        throw buildError("Approved requests already issued. Cannot reject.", 409);
+      }
 
-        if (partItemIds.length) {
-          await tx.part_items.updateMany({
-            where: {
-              company_id: companyId,
-              id: { in: partItemIds },
-              status: "RESERVED",
-            },
-            data: {
-              status: "IN_STOCK",
-              last_moved_at: new Date(),
-            },
-          });
-
-          await tx.inventory_request_reservations.deleteMany({
-            where: {
-              company_id: companyId,
-              request_id: row.id,
-            },
-          });
-        }
-      } else if (row.status !== "PENDING") {
-        throw buildError("Only PENDING/APPROVED requests can be rejected", 400);
+      if (row.status !== "PENDING") {
+        throw buildError("Only PENDING requests can be rejected", 400);
       }
 
       const updated = await tx.inventory_requests.update({
@@ -568,6 +654,7 @@ async function rejectRequest(req, res) {
     return res.json(result);
   } catch (err) {
     const sc = err?.statusCode || 500;
+
     if (sc !== 500) {
       return res.status(sc).json({ message: String(err.message || "Error") });
     }
