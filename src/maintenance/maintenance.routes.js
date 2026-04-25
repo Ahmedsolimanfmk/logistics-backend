@@ -11,6 +11,7 @@ const workCtrl = require("./maintenance.workorders.controller");
 const vehCtrl = require("./maintenance.vehicles.controller");
 const attCtrl = require("./maintenance.attachments.controller");
 const invReqCtrl = require("./maintenance.inventory-requests.controller");
+const issuedPartsCtrl = require("./maintenance.issued-parts.controller");
 
 const authRequired =
   typeof jwtMod === "function"
@@ -171,6 +172,13 @@ router.get(
 router.post(
   "/inventory-requests/:requestId/lines",
   addInventoryRequestLines
+);
+
+router.get("/issued-parts", issuedPartsCtrl.listIssuedParts);
+
+router.post(
+  "/issued-parts/work-orders/:workOrderId/parts/:partId/install",
+  issuedPartsCtrl.installIssuedPart
 );
 
 module.exports = router;
