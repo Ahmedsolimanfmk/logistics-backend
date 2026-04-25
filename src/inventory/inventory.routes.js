@@ -14,7 +14,7 @@ const receiptsCtrl = require("./receipts.controller");
 const partItemsCtrl = require("./partItems.controller");
 const requestsCtrl = require("./requests.controller");
 const issuesCtrl = require("./issues.controller");
-
+const stockCtrl = require("./stock.controller");
 // ✅ NEW
 const categoriesCtrl = require("./categories.controller");
 
@@ -45,6 +45,8 @@ router.patch("/parts/:id", partsCtrl.updatePart);
 
 // ---------- Part Items ----------
 router.get("/part-items", partItemsCtrl.listPartItems);
+// ---------- Stock ----------
+router.get("/stock", stockCtrl.listStock);
 
 // ---------- Receipts ----------
 router.get("/receipts", receiptsCtrl.listReceipts);
