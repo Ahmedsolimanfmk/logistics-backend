@@ -86,7 +86,6 @@ async function getTripOrThrow(tripId, companyId) {
             select: {
               id: true,
               company_id: true,
-              vehicle_class_id: true,
             },
           },
         },
@@ -115,7 +114,7 @@ async function getTripOrThrow(tripId, companyId) {
 
     pickup_zone_id: trip.site?.zone_id || null,
     dropoff_zone_id: null,
-    vehicle_class_id: activeAssignment?.vehicle?.vehicle_class_id || null,
+    vehicle_class_id: null,
     route_distance_km: null,
   };
 }
