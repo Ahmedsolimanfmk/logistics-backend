@@ -5,9 +5,6 @@ const controller = require("./trip-revenues.controller");
 
 const router = express.Router();
 
-// =======================
-// Guard helper
-// =======================
 function mustBeFn(name, fn) {
   if (typeof fn !== "function") {
     throw new TypeError(
@@ -27,16 +24,15 @@ function isUuid(v) {
 function requireUuidParam(paramName = "tripId") {
   return (req, res, next) => {
     const v = req.params?.[paramName];
+
     if (!isUuid(v)) {
-      return res.status(404).json({ message: "Not found" });
+      return res.status(400).json({ message: "Invalid trip id" });
     }
+
     return next();
   };
 }
 
-// =======================
-// Bind handlers safely
-// =======================
 const getByTripId = mustBeFn("getByTripId", controller.getByTripId);
 const getRevenueHistoryByTripId = mustBeFn(
   "getRevenueHistoryByTripId",
@@ -55,27 +51,35 @@ const getTripProfitability = mustBeFn(
   controller.getTripProfitability
 );
 
-// =======================
-// Routes
-// =======================
 router.use(authRequired);
 router.use(requireCompany);
 
-// Revenue by trip
 router.get("/:tripId/revenue", requireUuidParam("tripId"), getByTripId);
+
 router.get(
   "/:tripId/revenue/history",
   requireUuidParam("tripId"),
   getRevenueHistoryByTripId
 );
-router.put("/:tripId/revenue", requireUuidParam("tripId"), createOrUpdateRevenue);
+
+router.put(
+  "/:tripId/revenue",
+  requireUuidParam("tripId"),
+  createOrUpdateRevenue
+);
+
+router.patch(
+  "/:tripId/revenue",
+  requireUuidParam("tripId"),
+  createOrUpdateRevenue
+);
+
 router.post(
   "/:tripId/revenue/approve",
   requireUuidParam("tripId"),
   approveCurrentRevenue
 );
 
-// Profitability by trip
 router.get(
   "/:tripId/profitability",
   requireUuidParam("tripId"),
