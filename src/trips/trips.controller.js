@@ -33,7 +33,7 @@ function canAccessTrips(role) {
 function isUuid(v) {
   return (
     typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(v)
   );
 }
 
@@ -95,8 +95,14 @@ async function enforceDriverCompliance(tx, companyId, driver) {
   }
 
   const st = upper(driver.status);
-  if (st === "DISABLED") return { ok: false, status: 400, message: "Driver is DISABLED" };
-  if (st === "INACTIVE") return { ok: false, status: 400, message: "Driver is INACTIVE" };
+
+  if (st === "DISABLED") {
+    return { ok: false, status: 400, message: "Driver is DISABLED" };
+  }
+
+  if (st === "INACTIVE") {
+    return { ok: false, status: 400, message: "Driver is INACTIVE" };
+  }
 
   if (isExpiredDate(driver.license_expiry_date)) {
     try {
@@ -123,8 +129,15 @@ async function enforceVehicleCompliance(tx, companyId, vehicle) {
   const st = upper(vehicle.status);
 
   if (st && st !== "AVAILABLE") {
-    if (st === "DISABLED") return { ok: false, status: 400, message: "Vehicle is DISABLED" };
-    return { ok: false, status: 400, message: `Vehicle not AVAILABLE (current=${vehicle.status})` };
+    if (st === "DISABLED") {
+      return { ok: false, status: 400, message: "Vehicle is DISABLED" };
+    }
+
+    return {
+      ok: false,
+      status: 400,
+      message: `Vehicle not AVAILABLE (current=${vehicle.status})`,
+    };
   }
 
   if (isExpiredDate(vehicle.license_expiry_date)) {
@@ -220,6 +233,7 @@ async function validateTripReferences({
           },
         })
       : null,
+
     site_id
       ? prisma.sites.findFirst({
           where: {
@@ -251,6 +265,7 @@ async function validateTripReferences({
 
   if (contract) {
     const st = upper(contract.status);
+
     if (st !== "ACTIVE") {
       const err = new Error("Selected contract is not ACTIVE");
       err.statusCode = 400;
@@ -390,6 +405,7 @@ async function getTrips(req, res) {
     ]);
 
     const tripIds = trips.map((t) => t.id);
+
     if (tripIds.length === 0) {
       return res.json({ page, pageSize, total, items: [] });
     }
@@ -575,6 +591,7 @@ async function getTripById(req, res) {
         client: true,
         contract: true,
         site: true,
+
         trip_assignments: {
           where: {
             company_id: companyId,
@@ -586,6 +603,7 @@ async function getTripById(req, res) {
             field_supervisor: true,
           },
         },
+
         trip_events: {
           where: {
             company_id: companyId,
@@ -593,6 +611,7 @@ async function getTripById(req, res) {
           orderBy: { created_at: "desc" },
           take: 50,
         },
+
         trip_revenues: {
           where: {
             company_id: companyId,
@@ -617,15 +636,17 @@ async function getTripById(req, res) {
             invoice: true,
           },
         },
+
         cash_expenses: {
           where: {
             company_id: companyId,
           },
           orderBy: { created_at: "desc" },
         },
+
         invoice_trip_lines: {
           include: {
-            ar_invoices: true,
+            invoice: true,
           },
         },
       },
@@ -637,6 +658,7 @@ async function getTripById(req, res) {
       const ok = (trip.trip_assignments || []).some(
         (a) => a.field_supervisor_id === userId
       );
+
       if (!ok) return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -730,6 +752,7 @@ async function autoPriceTrip(req, res) {
     const { contract_id, notes, auto_approve } = req.body || {};
 
     const result = await tripRevenuesService.autoCalculateTripRevenue({
+      companyId,
       trip_id: id,
       contract_id: contract_id || null,
       entered_by: userId,
@@ -890,8 +913,10 @@ async function assignTrip(req, res) {
     if (!isUuid(id)) return res.status(400).json({ message: "Invalid trip id" });
 
     const { vehicle_id, driver_id, field_supervisor_id } = req.body || {};
+
     if (!isUuid(vehicle_id)) return res.status(400).json({ message: "Invalid vehicle_id" });
     if (!isUuid(driver_id)) return res.status(400).json({ message: "Invalid driver_id" });
+
     if (field_supervisor_id && !isUuid(field_supervisor_id)) {
       return res.status(400).json({ message: "Invalid field_supervisor_id" });
     }
@@ -902,6 +927,7 @@ async function assignTrip(req, res) {
         company_id: companyId,
       },
     });
+
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
     if (trip.status !== "DRAFT") {
@@ -927,6 +953,7 @@ async function assignTrip(req, res) {
         },
         select: { id: true, trip_id: true },
       }),
+
       prisma.trip_assignments.findFirst({
         where: {
           company_id: companyId,
@@ -957,7 +984,10 @@ async function assignTrip(req, res) {
           trip_id: id,
           is_active: true,
         },
-        data: { is_active: false, unassigned_at: new Date() },
+        data: {
+          is_active: false,
+          unassigned_at: new Date(),
+        },
       });
 
       const a = await tx.trip_assignments.create({
@@ -1031,7 +1061,10 @@ async function startTrip(req, res) {
             is_active: true,
           },
           take: 1,
-          select: { driver_id: true, vehicle_id: true },
+          select: {
+            driver_id: true,
+            vehicle_id: true,
+          },
         },
       },
     });
@@ -1154,7 +1187,10 @@ async function finishTrip(req, res) {
           trip_id: id,
           is_active: true,
         },
-        data: { is_active: false, unassigned_at: new Date() },
+        data: {
+          is_active: false,
+          unassigned_at: new Date(),
+        },
       });
 
       const t = await tx.trips.update({
@@ -1196,6 +1232,7 @@ async function finishTrip(req, res) {
 
     try {
       autoPricing = await tripRevenuesService.autoCalculateTripRevenue({
+        companyId,
         trip_id: id,
         entered_by: userId,
         notes: "AUTO_CALCULATED_ON_FINISH",
