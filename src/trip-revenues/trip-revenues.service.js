@@ -431,35 +431,23 @@ function pickRevenueEntryMode(source) {
   return "MANUAL";
 }
 
-function includeRevenueRelations() {
+function selectRevenueFields() {
   return {
-    users_entered: {
-      select: { id: true, full_name: true, email: true, role: true },
-    },
-    users_approved: {
-      select: { id: true, full_name: true, email: true, role: true },
-    },
-    users_replaced: {
-      select: { id: true, full_name: true, email: true, role: true },
-    },
-    clients: {
-      select: { id: true, name: true },
-    },
-    client_contracts: {
-      select: { id: true, contract_no: true, status: true, currency: true },
-    },
-    ar_invoices: {
-      select: { id: true, invoice_no: true, status: true, total_amount: true },
-    },
-    contract_pricing_rules: {
-      select: {
-        id: true,
-        base_price: true,
-        currency: true,
-        priority: true,
-        is_active: true,
-      },
-    },
+    id: true,
+    company_id: true,
+    trip_id: true,
+    client_id: true,
+    contract_id: true,
+    invoice_id: true,
+    amount: true,
+    currency: true,
+    source: true,
+    status: true,
+    entered_by: true,
+    approved_by: true,
+    entered_at: true,
+    approved_at: true,
+    notes: true,
   };
 }
 
@@ -476,7 +464,7 @@ async function getByTripId(tripId, companyId) {
       is_current: true,
     },
     orderBy: [{ version_no: "desc" }],
-    include: includeRevenueRelations(),
+    select: selectRevenueFields(),
   });
 
   return row;
@@ -491,7 +479,7 @@ async function getRevenueHistoryByTripId(tripId, companyId) {
       company_id: companyId,
     },
     orderBy: [{ version_no: "desc" }, { entered_at: "desc" }],
-    include: includeRevenueRelations(),
+    select: selectRevenueFields(),
   });
 }
 
@@ -631,7 +619,7 @@ async function createOrUpdateRevenue({
         replaced_at: null,
         replaced_by: null,
       },
-      include: includeRevenueRelations(),
+      select: selectRevenueFields(),
     });
 
     await tx.trips.update({
@@ -701,7 +689,7 @@ async function approveCurrentRevenue({
         approved_at: new Date(),
         approval_notes: approval_notes || null,
       },
-      include: includeRevenueRelations(),
+      select: selectRevenueFields(),
     });
 
     await tx.trips.update({
@@ -822,7 +810,7 @@ async function autoCalculateTripRevenue({
         replaced_at: null,
         replaced_by: null,
       },
-      include: includeRevenueRelations(),
+      select: selectRevenueFields(),
     });
 
     await tx.trips.update({
