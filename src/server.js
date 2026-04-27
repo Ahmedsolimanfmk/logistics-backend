@@ -93,7 +93,7 @@ app.use("/auth", authRoutes);
 // =======================
 app.use("/vehicles", authRequired, vehiclesRoutes);
 app.use("/trips", authRequired, tripsRoutes);
-app.use("/trips", authRequired, tripRevenuesRoutes);
+app.use("/trip-revenues", authRequired, tripRevenuesRoutes);
 app.use("/drivers", authRequired, driversRoutes);
 app.use("/users", authRequired, usersRoutes);
 app.use("/supervisors", authRequired, supervisorsRoutes);
