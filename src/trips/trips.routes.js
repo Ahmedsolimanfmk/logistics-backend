@@ -9,7 +9,6 @@ const {
   requireTripStartFinishPermission,
 } = require("./trip-permissions.middleware");
 
-// Guard helper
 function mustBeFn(name, fn) {
   if (typeof fn !== "function") {
     throw new TypeError(
@@ -19,7 +18,6 @@ function mustBeFn(name, fn) {
   return fn;
 }
 
-// UUID validator
 function isUuid(v) {
   return (
     typeof v === "string" &&
@@ -30,7 +28,7 @@ function isUuid(v) {
 function requireUuidParam(paramName = "id") {
   return (req, res, next) => {
     const v = req.params?.[paramName];
-    if (!isUuid(v)) return res.status(404).json({ message: "Not found" });
+    if (!isUuid(v)) return res.status(400).json({ message: "Invalid trip id" });
     return next();
   };
 }
@@ -42,7 +40,6 @@ function requireAdminOrAccountant(req, res, next) {
   return next();
 }
 
-// === Bind handlers safely ===
 const createTrip = mustBeFn("createTrip", tripsController.createTrip);
 const getTrips = mustBeFn("getTrips", tripsController.getTrips);
 const getTripById = mustBeFn("getTripById", tripsController.getTripById);
@@ -56,7 +53,6 @@ const assignTrip = mustBeFn("assignTrip", tripsController.assignTrip);
 const startTrip = mustBeFn("startTrip", tripsController.startTrip);
 const finishTrip = mustBeFn("finishTrip", tripsController.finishTrip);
 
-// finance state handlers
 const openTripFinanceReview = mustBeFn(
   "openTripFinanceReview",
   cashController.openTripFinanceReview
@@ -66,18 +62,14 @@ const closeTripFinance = mustBeFn(
   cashController.closeTripFinance
 );
 
-// =======================
-// Routes (JWT + company required)
-// =======================
 router.use(authRequired);
 router.use(requireCompany);
 
-// List / Create / Details
+// List / Create
 router.get("/", getTrips);
 router.post("/", createTrip);
-router.get("/:id", requireUuidParam("id"), getTripById);
 
-// Finance
+// Finance routes BEFORE /:id
 router.get("/:id/finance/summary", requireUuidParam("id"), getTripFinanceSummary);
 router.post("/:id/auto-price", requireUuidParam("id"), autoPriceTrip);
 
@@ -95,7 +87,7 @@ router.post(
   closeTripFinance
 );
 
-// Assign / Start / Finish
+// Assign / Start / Finish BEFORE /:id
 router.post("/:id/assign", requireUuidParam("id"), assignTrip);
 
 router.post(
@@ -111,5 +103,8 @@ router.post(
   requireTripStartFinishPermission,
   finishTrip
 );
+
+// Details LAST
+router.get("/:id", requireUuidParam("id"), getTripById);
 
 module.exports = router;
