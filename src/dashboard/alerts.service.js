@@ -988,6 +988,13 @@ async function getBaseAlerts(user, filters = {}) {
           limit: filters.limit || 50,
         })
       : Promise.resolve([]),
+       areas.includes("operations")
+    ? getTripBusinessAlerts({ companyId, user })
+    : Promise.resolve([]),
+
+  areas.includes("finance")
+    ? getFinanceAlerts({ companyId, clientId })
+    : Promise.resolve([]),
   ]);
 
   const items = parts.flat();
@@ -1005,6 +1012,104 @@ async function getBaseAlerts(user, filters = {}) {
   });
 
   return items;
+}
+async function getTripBusinessAlerts({ companyId, user }) {
+  const rows = await prisma.trips.findMany({
+    where: {
+      company_id: companyId,
+    },
+    select: {
+      id: true,
+      status: true,
+      financial_status: true,
+      trip_assignments: {
+        where: { is_active: true },
+        select: { id: true },
+      },
+      trip_revenues: {
+        select: {
+          id: true,
+          status: true,
+          amount: true,
+        },
+      },
+      cash_expenses: {
+        where: { approval_status: "APPROVED" },
+        select: {
+          amount: true,
+        },
+      },
+      created_at: true,
+    },
+    take: 200,
+  });
+
+  const alerts = [];
+
+  for (const t of rows) {
+    const hasAssignment = (t.trip_assignments || []).length > 0;
+    const revenues = t.trip_revenues || [];
+    const approvedRevenue = revenues.find(r => r.status === "APPROVED");
+    const totalExpenses = (t.cash_expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+
+    // 🚨 1. بدون تعيين
+    if (!hasAssignment && t.status !== "CANCELLED") {
+      alerts.push(buildAlert({
+        id: `TRIP_NO_ASSIGNMENT:${t.id}`,
+        type: "TRIP_NO_ASSIGNMENT",
+        severity: "warn",
+        area: "operations",
+        title: "رحلة بدون تعيين",
+        message: `الرحلة ${t.id.slice(0,8)} بدون مركبة أو سائق`,
+        entity_type: "trip",
+        entity_id: t.id,
+        href: `/trips/${t.id}`,
+        created_at: t.created_at,
+      }));
+    }
+
+    // 🚨 2. بدون إيراد
+    if (!approvedRevenue && t.status === "COMPLETED") {
+      alerts.push(buildAlert({
+        id: `TRIP_NO_REVENUE:${t.id}`,
+        type: "TRIP_NO_REVENUE",
+        severity: "danger",
+        area: "finance",
+        title: "رحلة بدون إيراد",
+        message: `الرحلة ${t.id.slice(0,8)} لا يوجد لها إيراد معتمد`,
+        entity_type: "trip",
+        entity_id: t.id,
+        href: `/trips/${t.id}`,
+        created_at: t.created_at,
+      }));
+    }
+
+    // 🚨 3. خسارة
+    if (approvedRevenue) {
+      const revenueAmount = Number(approvedRevenue.amount || 0);
+
+      if (totalExpenses > revenueAmount) {
+        alerts.push(buildAlert({
+          id: `TRIP_LOSS:${t.id}`,
+          type: "TRIP_LOSS",
+          severity: "danger",
+          area: "finance",
+          title: "رحلة خاسرة",
+          message: `الرحلة ${t.id.slice(0,8)} تحقق خسارة`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+          meta: {
+            revenue: revenueAmount,
+            expenses: totalExpenses,
+          },
+        }));
+      }
+    }
+  }
+
+  return alerts;
 }
 
 exports.getAlerts = async (user, filters = {}) => {
