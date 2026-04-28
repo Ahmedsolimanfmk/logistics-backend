@@ -78,4 +78,9 @@ router.get("/trips/top-vehicles", controller.getTopVehiclesByTrips);
 
 router.get("/profit/client-summary", controller.getEntityProfitSummary);
 
+router.get("/profit/trips/summary", controller.getTripsProfitSummary);
+router.get("/profit/trips/top", controller.getTopProfitableTrips);
+router.get("/profit/trips/worst", controller.getWorstTrips);
+router.get("/profit/trips/low-margin", controller.getLowMarginTrips);
+
 module.exports = router;

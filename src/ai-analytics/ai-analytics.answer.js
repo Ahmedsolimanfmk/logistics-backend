@@ -866,7 +866,108 @@ function handleTopVehiclesByTrips(parsed, result) {
     unit: "عدد",
   });
 }
+function handleTripsProfitSummary(parsed, result) {
+  const totalTrips = Number(pickValue(result, [["data", "total_trips"]]) || 0);
+  const profitableCount = Number(pickValue(result, [["data", "profitable_count"]]) || 0);
+  const lossCount = Number(pickValue(result, [["data", "loss_count"]]) || 0);
+  const totalRevenue = Number(pickValue(result, [["data", "total_revenue"]]) || 0);
+  const totalExpense = Number(pickValue(result, [["data", "total_expense"]]) || 0);
+  const totalProfit = Number(pickValue(result, [["data", "total_profit"]]) || 0);
+  const marginPct = pickValue(result, [["data", "margin_pct"]]);
 
+  const answer = `ملخص ربحية الرحلات خلال ${getRangeLabel(parsed)}: عدد الرحلات ${totalTrips}، منها ${profitableCount} مربحة و${lossCount} خاسرة. إجمالي الإيراد ${money(totalRevenue)} جنيه، وإجمالي المصروفات ${money(totalExpense)} جنيه، وصافي الربح ${money(totalProfit)} جنيه، بهامش ${marginPct === null || marginPct === undefined ? "غير متاح" : `${money(marginPct)}%`}.`;
+
+  return answerWithUi({ parsed, result, answer });
+}
+
+function handleTopProfitableTrips(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد رحلات مربحة خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أعلى ${count} رحلات ربحًا خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أعلى رحلة ربحًا خلال ${rangeLabel} هي "${
+        top.trip_code || top.trip_id || "رحلة غير محددة"
+      }" بصافي ربح ${money(top.profit || 0)} جنيه، وهامش ${
+        top.margin_pct === null || top.margin_pct === undefined
+          ? "غير متاح"
+          : `${money(top.margin_pct)}%`
+      }.`,
+    getLabel: (x) =>
+      `${x.trip_code || x.trip_id || "رحلة"} — ${x.client_name || "عميل غير معروف"}`,
+    getValue: (x) => x.profit || 0,
+  });
+}
+
+function handleWorstTripsByProfit(parsed, result) {
+  return buildTopOrSingleAnswer({
+    parsed,
+    result,
+    emptyText: (rangeLabel) => `لا توجد رحلات خاسرة خلال ${rangeLabel}.`,
+    topText: (rangeLabel, count, list) =>
+      `أكثر ${count} رحلات خسارة خلال ${rangeLabel}:\n${list}`,
+    singleText: (rangeLabel, top) =>
+      `أكثر رحلة خسارة خلال ${rangeLabel} هي "${
+        top.trip_code || top.trip_id || "رحلة غير محددة"
+      }" بصافي ${money(top.profit || 0)} جنيه، وهامش ${
+        top.margin_pct === null || top.margin_pct === undefined
+          ? "غير متاح"
+          : `${money(top.margin_pct)}%`
+      }.`,
+    getLabel: (x) =>
+      `${x.trip_code || x.trip_id || "رحلة"} — ${x.client_name || "عميل غير معروف"}`,
+    getValue: (x) => x.profit || 0,
+  });
+}
+
+function handleLowMarginTrips(parsed, result) {
+  const items = pickItems(result);
+
+  const answer = !items.length
+    ? `لا توجد رحلات بهامش ربح منخفض خلال ${getRangeLabel(parsed)}.`
+    : `الرحلات ذات هامش الربح المنخفض خلال ${getRangeLabel(parsed)}:\n${renderTopList(
+        items,
+        (x) => `${x.trip_code || x.trip_id || "رحلة"} — ${x.client_name || "عميل غير معروف"} — هامش ${money(x.margin_pct || 0)}%`,
+        (x) => x.profit || 0
+      )}`;
+
+  return answerWithUi({ parsed, result, answer });
+}
+function handleTripProfitSummary(parsed, result) {
+  const row = pickValue(result, [["data"]]);
+
+  if (!row) {
+    return answerWithUi({
+      parsed,
+      result,
+      answer: "لم أجد الرحلة المطلوبة داخل الفترة المحددة.",
+    });
+  }
+
+  const tripLabel = row.trip_code || row.trip_id || "الرحلة المحددة";
+  const revenue = Number(row.revenue || 0);
+  const expense = Number(row.expense || 0);
+  const profit = Number(row.profit || 0);
+  const marginPct = row.margin_pct;
+
+  let verdict = "الرحلة عند نقطة التعادل تقريبًا.";
+  if (profit > 0) verdict = "الرحلة مربحة.";
+  if (profit < 0) verdict = "الرحلة خاسرة.";
+
+  const answer = `${verdict} ${tripLabel} إيرادها ${money(
+    revenue
+  )} جنيه، ومصروفاتها ${money(expense)} جنيه، وصافي الربح ${money(
+    profit
+  )} جنيه، وهامش الربح ${
+    marginPct === null || marginPct === undefined
+      ? "غير متاح"
+      : `${money(marginPct)}%`
+  }.`;
+
+  return answerWithUi({ parsed, result, answer });
+}
 // =======================
 // Main
 // =======================
@@ -894,6 +995,25 @@ function buildArabicAnswer({ parsed, result, execution = null }) {
       answer: buildExpenseCompareAnswer(result),
     });
   }
+if (intent === "trips_profit_summary") {
+  return handleTripsProfitSummary(parsed, result);
+}
+
+if (intent === "trip_profit_summary") {
+  return handleTripProfitSummary(parsed, result);
+}
+
+if (intent === "top_profitable_trips") {
+  return handleTopProfitableTrips(parsed, result);
+}
+
+if (intent === "worst_trips_by_profit") {
+  return handleWorstTripsByProfit(parsed, result);
+}
+
+if (intent === "low_margin_trips") {
+  return handleLowMarginTrips(parsed, result);
+}
 
   if (intent === "expense_summary") {
     return handleExpenseSummary(parsed, result);

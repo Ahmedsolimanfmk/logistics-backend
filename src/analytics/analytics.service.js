@@ -274,7 +274,53 @@ async function getEntityProfitSummary({ companyId, user, query = {} }) {
     query: ctx.query,
   });
 }
+async function getTripsProfitSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
 
+  return profitAnalytics.getTripsProfitSummary({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
+  });
+}
+
+async function getTopProfitableTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return profitAnalytics.getTopProfitableTrips({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
+  });
+}
+
+async function getWorstTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return profitAnalytics.getWorstTrips({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
+  });
+}
+
+async function getLowMarginTrips({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return profitAnalytics.getLowMarginTrips({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    threshold: Number(query.threshold || 10),
+    query: ctx.query,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -300,4 +346,9 @@ module.exports = {
   getTopVehiclesByTrips,
 
   getEntityProfitSummary,
+
+  getTripsProfitSummary,
+  getTopProfitableTrips,
+  getWorstTrips,
+  getLowMarginTrips,
 };

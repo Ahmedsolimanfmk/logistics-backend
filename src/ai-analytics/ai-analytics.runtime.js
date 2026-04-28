@@ -125,8 +125,13 @@ async function executeParsedQuery({ companyId, user, parsed }) {
     top_clients_by_trips: analyticsService.getTopClientsByTrips,
     top_sites_by_trips: analyticsService.getTopSitesByTrips,
     top_vehicles_by_trips: analyticsService.getTopVehiclesByTrips,
+    trips_profit_summary: analyticsService.getTripsProfitSummary,
+    top_profitable_trips: analyticsService.getTopProfitableTrips,
+    worst_trips_by_profit: analyticsService.getWorstTrips,
+    low_margin_trips: analyticsService.getLowMarginTrips,
 
     entity_profit_summary: analyticsService.getEntityProfitSummary,
+    
   };
 
   const handler = handlers[intent];

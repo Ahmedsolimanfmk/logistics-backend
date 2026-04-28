@@ -867,7 +867,117 @@ function parseTripsFollowup(question, base, body = {}) {
       });
     }
   }
+if (
+  includesAny(text, [
+    "ربحية الرحلات",
+    "ملخص ربحية الرحلات",
+    "ارباح الرحلات",
+    "أرباح الرحلات",
+    "خسائر الرحلات",
+    "الرحلات الخاسره",
+    "الرحلات الخاسرة",
+    "الرحلات المربحه",
+    "الرحلات المربحة",
+  ])
+) {
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "trips_profit_summary",
+    confidence: 0.92,
+    metric: "trip_profit",
+    group_by: null,
+    options: {
+      ...base.options,
+      response_type: "summary",
+    },
+  });
+}
 
+if (
+  includesAny(text, [
+    "اعلى الرحلات ربحا",
+    "أعلى الرحلات ربحًا",
+    "اكثر الرحلات ربحا",
+    "أكثر الرحلات ربحًا",
+    "اعرض اعلى 5 رحلات ربحا",
+    "اعرض أعلى 5 رحلات ربحًا",
+    "top profitable trips",
+  ])
+) {
+  const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "top_profitable_trips",
+    confidence: 0.94,
+    metric: "profit",
+    group_by: "trip",
+    options: {
+      ...base.options,
+      limit: finalLimit,
+      response_type: finalLimit > 1 ? "table" : "summary",
+    },
+  });
+}
+
+if (
+  includesAny(text, [
+    "اسوأ الرحلات",
+    "أسوأ الرحلات",
+    "اكثر الرحلات خساره",
+    "أكثر الرحلات خسارة",
+    "اعلى الرحلات خساره",
+    "أعلى الرحلات خسارة",
+    "اعرض الرحلات الخاسره",
+    "اعرض الرحلات الخاسرة",
+    "worst trips",
+    "loss trips",
+  ])
+) {
+  const finalLimit = limit || (qType === "top" ? 5 : 1);
+
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "worst_trips_by_profit",
+    confidence: 0.94,
+    metric: "profit",
+    group_by: "trip",
+    options: {
+      ...base.options,
+      limit: finalLimit,
+      response_type: finalLimit > 1 ? "table" : "summary",
+    },
+  });
+}
+
+if (
+  includesAny(text, [
+    "رحلات هامشها ضعيف",
+    "رحلات هامش ربحها ضعيف",
+    "رحلات ربحها ضعيف",
+    "رحلات هامشها قليل",
+    "low margin trips",
+  ])
+) {
+  const finalLimit = limit || 5;
+
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "low_margin_trips",
+    confidence: 0.92,
+    metric: "margin_pct",
+    group_by: "trip",
+    options: {
+      ...base.options,
+      limit: finalLimit,
+      response_type: "table",
+    },
+  });
+}
   return null;
 }
 
@@ -1074,7 +1184,90 @@ function parsePossessiveFollowUp(question, base, body = {}) {
       },
     });
   }
+if (
+  includesAny(text, [
+    "ربحها كام",
+    "ربحه كام",
+    "هل الرحله مربحه",
+    "هل الرحلة مربحة",
+    "هل هي مربحه",
+    "هل هي مربحة",
+    "ربحيه الرحله",
+    "ربحية الرحلة",
+  ])
+) {
+  if (ownerType !== "trip") {
+    return withUnsupported(base, {
+      module: "trips",
+      domain: "trips",
+      intent: "profit_requires_trip",
+      confidence: 0.8,
+      unsupported_reason: "profit_requires_trip",
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    });
+  }
 
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "trip_profit_summary",
+    confidence: 0.92,
+    metric: "profit",
+    entities: {
+      ...base.entities,
+      trip_hint: ownerLabel,
+    },
+    options: {
+      ...base.options,
+      response_type: "summary",
+    },
+  });
+}
+if (
+  includesAny(text, [
+    "ربحها كام",
+    "ربحه كام",
+    "هل الرحله مربحه",
+    "هل الرحلة مربحة",
+    "هل هي مربحه",
+    "هل هي مربحة",
+    "ربحيه الرحله",
+    "ربحية الرحلة",
+  ])
+) {
+  if (ownerType !== "trip") {
+    return withUnsupported(base, {
+      module: "trips",
+      domain: "trips",
+      intent: "profit_requires_trip",
+      confidence: 0.8,
+      unsupported_reason: "profit_requires_trip",
+      options: {
+        ...base.options,
+        response_type: "summary",
+      },
+    });
+  }
+
+  return withQuery(base, {
+    module: "trips",
+    domain: "trips",
+    intent: "trip_profit_summary",
+    confidence: 0.92,
+    metric: "profit",
+    entities: {
+      ...base.entities,
+      trip_hint: ownerLabel,
+    },
+    options: {
+      ...base.options,
+      response_type: "summary",
+    },
+  });
+}
   return null;
 }
 

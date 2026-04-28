@@ -217,7 +217,49 @@ async function getEntityProfitSummary(req, res, next) {
     next(err);
   }
 }
+async function getTripsProfitSummary(req, res, next) {
+  try {
+    const result = await analyticsService.getTripsProfitSummary(
+      getRequestContext(req)
+    );
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 
+async function getTopProfitableTrips(req, res, next) {
+  try {
+    const result = await analyticsService.getTopProfitableTrips(
+      getRequestContext(req)
+    );
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getWorstTrips(req, res, next) {
+  try {
+    const result = await analyticsService.getWorstTrips(
+      getRequestContext(req)
+    );
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getLowMarginTrips(req, res, next) {
+  try {
+    const result = await analyticsService.getLowMarginTrips(
+      getRequestContext(req)
+    );
+    return res.json(ok(result));
+  } catch (err) {
+    next(err);
+  }
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,

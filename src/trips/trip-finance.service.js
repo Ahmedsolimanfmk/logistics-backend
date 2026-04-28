@@ -11,6 +11,95 @@ function toAmount(v) {
   return Number(v || 0);
 }
 
+function toMoney(v) {
+  return Number(Number(v || 0).toFixed(2));
+}
+
+function safeDivide(numerator, denominator) {
+  const n = Number(numerator || 0);
+  const d = Number(denominator || 0);
+
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) {
+    return null;
+  }
+
+  return toMoney(n / d);
+}
+
+function calculateTripFinanceMetrics({
+  revenue,
+  expenses,
+  pendingExpenses,
+  profit,
+  cargoWeight,
+}) {
+  const totalRevenue = toAmount(revenue);
+  const approvedExpenses = toAmount(expenses);
+  const pending = toAmount(pendingExpenses);
+  const currentProfit = toAmount(profit);
+  const weight = toAmount(cargoWeight);
+
+  const expectedExpenses = approvedExpenses + pending;
+  const expectedProfit = totalRevenue - expectedExpenses;
+
+  const profitMarginPct =
+    totalRevenue > 0 ? toMoney((currentProfit / totalRevenue) * 100) : null;
+
+  const expectedProfitMarginPct =
+    totalRevenue > 0 ? toMoney((expectedProfit / totalRevenue) * 100) : null;
+
+  const costRatioPct =
+    totalRevenue > 0 ? toMoney((approvedExpenses / totalRevenue) * 100) : null;
+
+  const expectedCostRatioPct =
+    totalRevenue > 0 ? toMoney((expectedExpenses / totalRevenue) * 100) : null;
+
+  const profitPerTon = safeDivide(currentProfit, weight);
+  const revenuePerTon = safeDivide(totalRevenue, weight);
+  const expensePerTon = safeDivide(approvedExpenses, weight);
+
+  return {
+    profit_margin_pct: profitMarginPct,
+    cost_ratio_pct: costRatioPct,
+
+    expected_expenses: toMoney(expectedExpenses),
+    expected_profit: toMoney(expectedProfit),
+    expected_profit_margin_pct: expectedProfitMarginPct,
+    expected_cost_ratio_pct: expectedCostRatioPct,
+
+    cargo_weight: weight > 0 ? weight : null,
+    profit_per_ton: profitPerTon,
+    revenue_per_ton: revenuePerTon,
+    expense_per_ton: expensePerTon,
+  };
+}
+
+function buildTripFinanceFlags(metrics, { profit }) {
+  const currentProfit = toAmount(profit);
+  const margin = metrics.profit_margin_pct;
+  const expectedMargin = metrics.expected_profit_margin_pct;
+  const costRatio = metrics.cost_ratio_pct;
+  const expectedProfit = metrics.expected_profit;
+
+  return {
+    is_loss_making: currentProfit < 0,
+    is_expected_loss: Number(expectedProfit || 0) < 0,
+
+    is_low_margin:
+      margin !== null && Number(margin) >= 0 && Number(margin) < 10,
+
+    is_expected_low_margin:
+      expectedMargin !== null &&
+      Number(expectedMargin) >= 0 &&
+      Number(expectedMargin) < 10,
+
+    is_high_cost:
+      costRatio !== null && Number(costRatio) > 80,
+
+    has_pending_expenses_risk: Number(metrics.expected_expenses || 0) > 0,
+  };
+}
+
 // =======================
 // Service
 // =======================
@@ -27,6 +116,11 @@ async function getTripFinanceSummary(tripId, companyId) {
       revenue_currency: true,
       financial_status: true,
       client_id: true,
+      cargo_weight: true,
+      trip_type: true,
+      cargo_type: true,
+      origin: true,
+      destination: true,
     },
   });
 
@@ -157,20 +251,42 @@ async function getTripFinanceSummary(tripId, companyId) {
   if (profit > 0) profitStatus = "PROFIT";
   if (profit < 0) profitStatus = "LOSS";
 
+  const metrics = calculateTripFinanceMetrics({
+    revenue,
+    expenses,
+    pendingExpenses: pendingExpensesTotal,
+    profit,
+    cargoWeight: trip.cargo_weight,
+  });
+
+  const flags = buildTripFinanceFlags(metrics, { profit });
+
   return {
     trip_id: trip.id,
     company_id: trip.company_id,
     financial_status: trip.financial_status || "OPEN",
 
-    revenue,
-    expenses,
-    pending_expenses: pendingExpensesTotal,
+    trip_info: {
+      client_id: trip.client_id,
+      trip_type: trip.trip_type,
+      cargo_type: trip.cargo_type,
+      cargo_weight: trip.cargo_weight,
+      origin: trip.origin,
+      destination: trip.destination,
+    },
 
-    company_expenses: companyExpenses,
-    advance_expenses: advanceExpenses,
+    revenue: toMoney(revenue),
+    expenses: toMoney(expenses),
+    pending_expenses: toMoney(pendingExpensesTotal),
 
-    profit,
+    company_expenses: toMoney(companyExpenses),
+    advance_expenses: toMoney(advanceExpenses),
+
+    profit: toMoney(profit),
     profit_status: profitStatus,
+
+    metrics,
+    flags,
 
     currency: revenueSourceRow?.currency || trip.revenue_currency || "EGP",
 
@@ -187,4 +303,5 @@ async function getTripFinanceSummary(tripId, companyId) {
 
 module.exports = {
   getTripFinanceSummary,
+  calculateTripFinanceMetrics,
 };
