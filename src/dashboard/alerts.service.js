@@ -1087,6 +1087,12 @@ async function getTripBusinessAlerts({ companyId, user }) {
     // 🚨 3. خسارة
     if (approvedRevenue) {
       const revenueAmount = Number(approvedRevenue.amount || 0);
+      const profit = revenueAmount - totalExpenses;
+      const profitMarginPct =
+      revenueAmount > 0 ? (profit / revenueAmount) * 100 : null;
+
+      const costRatioPct =
+      revenueAmount > 0 ? (totalExpenses / revenueAmount) * 100 : null;
 
       if (totalExpenses > revenueAmount) {
         alerts.push(buildAlert({
@@ -1108,7 +1114,57 @@ async function getTripBusinessAlerts({ companyId, user }) {
       }
     }
   }
+// 🚨 4. هامش ربح منخفض
+if (
+  revenueAmount > 0 &&
+  profit > 0 &&
+  profitMarginPct !== null &&
+  profitMarginPct < 10
+) {
+  alerts.push(buildAlert({
+    id: `LOW_MARGIN_TRIP:${t.id}`,
+    type: "LOW_MARGIN_TRIP",
+    severity: "warn",
+    area: "finance",
+    title: "رحلة بهامش ربح منخفض",
+    message: `الرحلة ${t.id.slice(0,8)} هامش ربحها منخفض (${profitMarginPct.toFixed(2)}%)`,
+    entity_type: "trip",
+    entity_id: t.id,
+    href: `/trips/${t.id}`,
+    created_at: t.created_at,
+    meta: {
+      revenue: revenueAmount,
+      expenses: totalExpenses,
+      profit,
+      profit_margin_pct: Number(profitMarginPct.toFixed(2)),
+    },
+  }));
+}
 
+// 🚨 5. تكلفة عالية مقارنة بالإيراد
+if (
+  revenueAmount > 0 &&
+  costRatioPct !== null &&
+  costRatioPct > 80
+) {
+  alerts.push(buildAlert({
+    id: `HIGH_COST_TRIP:${t.id}`,
+    type: "HIGH_COST_TRIP",
+    severity: "warn",
+    area: "finance",
+    title: "رحلة بتكلفة مرتفعة",
+    message: `الرحلة ${t.id.slice(0,8)} تكلفتها تمثل ${costRatioPct.toFixed(2)}% من الإيراد`,
+    entity_type: "trip",
+    entity_id: t.id,
+    href: `/trips/${t.id}`,
+    created_at: t.created_at,
+    meta: {
+      revenue: revenueAmount,
+      expenses: totalExpenses,
+      cost_ratio_pct: Number(costRatioPct.toFixed(2)),
+    },
+  }));
+}
   return alerts;
 }
 
