@@ -39,9 +39,11 @@ function daysBetweenCairo(fromDate, toDate) {
   const from = DateTime.fromJSDate(toJsDate(fromDate), {
     zone: CAIRO_TZ,
   }).startOf("day");
+
   const to = DateTime.fromJSDate(toJsDate(toDate), {
     zone: CAIRO_TZ,
   }).startOf("day");
+
   return Math.round(to.diff(from, "days").days);
 }
 
@@ -91,6 +93,7 @@ async function getOperationsAlerts({
   siteId = null,
 }) {
   const isSupervisor = isSupervisorRole(user?.role);
+  const userId = user?.id || user?.sub || user?.userId || null;
 
   const rows = await prisma.$queryRaw`
     SELECT
@@ -117,7 +120,7 @@ async function getOperationsAlerts({
       AND t.financial_closed_at IS NULL
       AND (${clientId}::uuid IS NULL OR t.client_id = ${clientId}::uuid)
       AND (${siteId}::uuid IS NULL OR t.site_id = ${siteId}::uuid)
-      AND (${isSupervisor}::boolean = false OR ta.field_supervisor_id = ${user.id}::uuid)
+      AND (${isSupervisor}::boolean = false OR ta.field_supervisor_id = ${userId}::uuid)
     ORDER BY t.created_at ASC
     LIMIT 50;
   `;
@@ -217,6 +220,7 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
 
     if (dueDateCairo < todayStartCairo) {
       const daysOverdue = daysBetweenCairo(dueDate, new Date());
+
       alerts.push(
         buildAlert({
           id: `AR_OVERDUE:${r.id}`,
@@ -224,7 +228,9 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
           severity: "danger",
           area: "finance",
           title: "فاتورة عميل متأخرة",
-          message: `الفاتورة ${r.invoice_no} للعميل ${r.client_name || "—"} متأخرة ${daysOverdue} يوم`,
+          message: `الفاتورة ${r.invoice_no} للعميل ${
+            r.client_name || "—"
+          } متأخرة ${daysOverdue} يوم`,
           entity_type: "invoice",
           entity_id: r.id,
           href: "/finance/ar/invoices",
@@ -243,6 +249,7 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
           sort_order: daysOverdue,
         })
       );
+
       continue;
     }
 
@@ -251,6 +258,7 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
       dueDateCairo < dueSoonEndExclusiveCairo
     ) {
       const daysToDue = daysBetweenCairo(new Date(), dueDate);
+
       alerts.push(
         buildAlert({
           id: `AR_DUE_SOON:${r.id}`,
@@ -258,7 +266,9 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
           severity: "warn",
           area: "finance",
           title: "فاتورة عميل مستحقة قريبًا",
-          message: `الفاتورة ${r.invoice_no} للعميل ${r.client_name || "—"} تستحق خلال ${daysToDue} يوم`,
+          message: `الفاتورة ${r.invoice_no} للعميل ${
+            r.client_name || "—"
+          } تستحق خلال ${daysToDue} يوم`,
           entity_type: "invoice",
           entity_id: r.id,
           href: "/finance/ar/invoices",
@@ -281,6 +291,7 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
   }
 
   const pending48h = nowCairo.minus({ hours: 48 }).toJSDate();
+
   const pendingExpenses = await prisma.cash_expenses.findMany({
     where: {
       company_id: companyId,
@@ -302,6 +313,7 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
 
   for (const e of pendingExpenses || []) {
     const ageDays = daysBetweenCairo(e.created_at, new Date());
+
     alerts.push(
       buildAlert({
         id: `EXPENSE_PENDING_TOO_LONG:${e.id}`,
@@ -309,7 +321,9 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
         severity: "warn",
         area: "finance",
         title: "مصروف معلق لفترة طويلة",
-        message: `مصروف ${e.expense_type || "—"} بقيمة ${toMoneyNumber(e.amount)} ما زال معلقًا منذ ${ageDays} يوم`,
+        message: `مصروف ${e.expense_type || "—"} بقيمة ${toMoneyNumber(
+          e.amount
+        )} ما زال معلقًا منذ ${ageDays} يوم`,
         entity_type: "expense",
         entity_id: e.id,
         href: `/finance/expenses/${e.id}`,
@@ -328,25 +342,27 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
   }
 
   const advance7d = nowCairo.minus({ days: 7 }).toJSDate();
+
   const openAdvances = await prisma.cash_advances.findMany({
-  where: {
-    company_id: companyId,
-    status: "OPEN",
-    created_at: { lt: advance7d },
-  },
-  select: {
-    id: true,
-    amount: true,
-    status: true,
-    created_at: true,
-    field_supervisor_id: true,
-  },
-  orderBy: { created_at: "asc" },
-  take: 50,
-});
+    where: {
+      company_id: companyId,
+      status: "OPEN",
+      created_at: { lt: advance7d },
+    },
+    select: {
+      id: true,
+      amount: true,
+      status: true,
+      created_at: true,
+      field_supervisor_id: true,
+    },
+    orderBy: { created_at: "asc" },
+    take: 50,
+  });
 
   for (const a of openAdvances || []) {
     const ageDays = daysBetweenCairo(a.created_at, new Date());
+
     alerts.push(
       buildAlert({
         id: `ADVANCE_OPEN_TOO_LONG:${a.id}`,
@@ -354,7 +370,10 @@ async function getFinanceAlerts({ companyId, clientId = null }) {
         severity: "warn",
         area: "finance",
         title: "سلفة مفتوحة لفترة طويلة",
-        message: `السلفة ${String(a.id).slice(0, 8)} ما زالت مفتوحة منذ ${ageDays} يوم`,
+        message: `السلفة ${String(a.id).slice(
+          0,
+          8
+        )} ما زالت مفتوحة منذ ${ageDays} يوم`,
         entity_type: "advance",
         entity_id: a.id,
         href: `/finance/advances/${a.id}`,
@@ -396,6 +415,7 @@ async function getMaintenanceAlerts(companyId) {
   for (const wo of openWorkOrders || []) {
     const baseDate = wo.opened_at || wo.updated_at || new Date();
     const ageDays = daysBetweenCairo(baseDate, new Date());
+
     alerts.push(
       buildAlert({
         id: `MAINT_OPEN_WO:${wo.id}`,
@@ -403,7 +423,10 @@ async function getMaintenanceAlerts(companyId) {
         severity: "warn",
         area: "maintenance",
         title: "أمر عمل مفتوح",
-        message: `أمر العمل ${String(wo.id).slice(0, 8)} ما زال مفتوحًا منذ ${ageDays} يوم`,
+        message: `أمر العمل ${String(wo.id).slice(
+          0,
+          8
+        )} ما زال مفتوحًا منذ ${ageDays} يوم`,
         entity_type: "work_order",
         entity_id: wo.id,
         href: `/maintenance/work-orders/${wo.id}`,
@@ -446,7 +469,10 @@ async function getMaintenanceAlerts(companyId) {
         severity: "warn",
         area: "maintenance",
         title: "أمر عمل يحتاج QA",
-        message: `أمر العمل ${String(r.id).slice(0, 8)} مكتمل بدون تقرير ما بعد الصيانة`,
+        message: `أمر العمل ${String(r.id).slice(
+          0,
+          8
+        )} مكتمل بدون تقرير ما بعد الصيانة`,
         entity_type: "work_order",
         entity_id: r.id,
         href: `/maintenance/work-orders/${r.id}`,
@@ -486,7 +512,10 @@ async function getMaintenanceAlerts(companyId) {
         severity: "danger",
         area: "maintenance",
         title: "QA فشل",
-        message: `أمر العمل ${String(r.id).slice(0, 8)} لديه نتيجة QA = FAIL`,
+        message: `أمر العمل ${String(r.id).slice(
+          0,
+          8
+        )} لديه نتيجة QA = FAIL`,
         entity_type: "work_order",
         entity_id: r.id,
         href: `/maintenance/work-orders/${r.id}`,
@@ -552,7 +581,10 @@ async function getMaintenanceAlerts(companyId) {
         severity: "danger",
         area: "maintenance",
         title: "عدم تطابق قطع",
-        message: `أمر العمل ${String(r.id).slice(0, 8)} لديه فروقات بين المصروف والمركب`,
+        message: `أمر العمل ${String(r.id).slice(
+          0,
+          8
+        )} لديه فروقات بين المصروف والمركب`,
         entity_type: "work_order",
         entity_id: r.id,
         href: `/maintenance/work-orders/${r.id}`,
@@ -575,6 +607,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
     365,
     Math.max(1, Number(options.daysWindow || 30))
   );
+
   const limit = Math.min(200, Math.max(1, Number(options.limit || 50)));
 
   const now = new Date();
@@ -616,6 +649,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         updated_at: true,
       },
     }),
+
     prisma.vehicles.findMany({
       where: {
         company_id: companyId,
@@ -640,6 +674,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         updated_at: true,
       },
     }),
+
     prisma.vehicles.count({
       where: {
         company_id: companyId,
@@ -650,6 +685,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         },
       },
     }),
+
     prisma.vehicles.count({
       where: {
         company_id: companyId,
@@ -659,6 +695,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         },
       },
     }),
+
     prisma.drivers.findMany({
       where: {
         company_id: companyId,
@@ -686,6 +723,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         updated_at: true,
       },
     }),
+
     prisma.drivers.findMany({
       where: {
         company_id: companyId,
@@ -712,6 +750,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         updated_at: true,
       },
     }),
+
     prisma.drivers.count({
       where: {
         company_id: companyId,
@@ -722,6 +761,7 @@ async function getComplianceSnapshot(companyId, options = {}) {
         },
       },
     }),
+
     prisma.drivers.count({
       where: {
         company_id: companyId,
@@ -793,6 +833,7 @@ async function getComplianceAlerts(companyId, options = {}) {
 
   for (const v of snapshot.items.vehicles_expired || []) {
     const daysOverdue = Number(v.days_overdue || 0);
+
     const label =
       [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
       v.display_name ||
@@ -825,6 +866,7 @@ async function getComplianceAlerts(companyId, options = {}) {
 
   for (const v of snapshot.items.vehicles_expiring || []) {
     const daysToDue = Number(v.days_left || 0);
+
     const label =
       [v.fleet_no, v.plate_no].filter(Boolean).join(" - ") ||
       v.display_name ||
@@ -865,7 +907,9 @@ async function getComplianceAlerts(companyId, options = {}) {
         severity: "danger",
         area: "compliance",
         title: "رخصة سائق منتهية",
-        message: `رخصة السائق ${d.full_name || "—"} منتهية منذ ${daysOverdue} يوم`,
+        message: `رخصة السائق ${
+          d.full_name || "—"
+        } منتهية منذ ${daysOverdue} يوم`,
         entity_type: "driver",
         entity_id: d.id,
         href: `/drivers/${d.id}`,
@@ -894,7 +938,9 @@ async function getComplianceAlerts(companyId, options = {}) {
         severity: "warn",
         area: "compliance",
         title: "رخصة سائق تقترب من الانتهاء",
-        message: `رخصة السائق ${d.full_name || "—"} تنتهي خلال ${daysToDue} يوم`,
+        message: `رخصة السائق ${
+          d.full_name || "—"
+        } تنتهي خلال ${daysToDue} يوم`,
         entity_type: "driver",
         entity_id: d.id,
         href: `/drivers/${d.id}`,
@@ -916,8 +962,230 @@ async function getComplianceAlerts(companyId, options = {}) {
   return alerts;
 }
 
+async function getTripBusinessAlerts({
+  companyId,
+  user,
+  clientId = null,
+  siteId = null,
+}) {
+  const isSupervisor = isSupervisorRole(user?.role);
+  const userId = user?.id || user?.sub || user?.userId || null;
+
+  const where = {
+    company_id: companyId,
+  };
+
+  if (clientId) where.client_id = clientId;
+  if (siteId) where.site_id = siteId;
+
+  if (isSupervisor && userId) {
+    where.trip_assignments = {
+      some: {
+        company_id: companyId,
+        field_supervisor_id: userId,
+      },
+    };
+  }
+
+  const rows = await prisma.trips.findMany({
+    where,
+    select: {
+      id: true,
+      status: true,
+      financial_status: true,
+      client_id: true,
+      site_id: true,
+      trip_assignments: {
+        where: {
+          company_id: companyId,
+          is_active: true,
+        },
+        select: {
+          id: true,
+        },
+      },
+      trip_revenues: {
+        where: {
+          company_id: companyId,
+        },
+        orderBy: {
+          entered_at: "desc",
+        },
+        select: {
+          id: true,
+          status: true,
+          amount: true,
+          currency: true,
+          entered_at: true,
+        },
+      },
+      cash_expenses: {
+        where: {
+          company_id: companyId,
+          approval_status: "APPROVED",
+        },
+        select: {
+          amount: true,
+        },
+      },
+      created_at: true,
+    },
+    orderBy: {
+      created_at: "desc",
+    },
+    take: 200,
+  });
+
+  const alerts = [];
+
+  for (const t of rows || []) {
+    const hasAssignment = (t.trip_assignments || []).length > 0;
+
+    const revenues = t.trip_revenues || [];
+
+    const approvedRevenue =
+      revenues.find(
+        (r) => String(r.status || "").toUpperCase() === "APPROVED"
+      ) || null;
+
+    const totalExpenses = (t.cash_expenses || []).reduce(
+      (s, e) => s + Number(e.amount || 0),
+      0
+    );
+
+    if (!hasAssignment && t.status !== "CANCELLED") {
+      alerts.push(
+        buildAlert({
+          id: `TRIP_NO_ASSIGNMENT:${t.id}`,
+          type: "TRIP_NO_ASSIGNMENT",
+          severity: "warn",
+          area: "operations",
+          title: "رحلة بدون تعيين",
+          message: `الرحلة ${String(t.id).slice(0, 8)} بدون مركبة أو سائق`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+        })
+      );
+    }
+
+    if (!approvedRevenue && t.status === "COMPLETED") {
+      alerts.push(
+        buildAlert({
+          id: `TRIP_NO_REVENUE:${t.id}`,
+          type: "TRIP_NO_REVENUE",
+          severity: "danger",
+          area: "finance",
+          title: "رحلة بدون إيراد",
+          message: `الرحلة ${String(t.id).slice(
+            0,
+            8
+          )} لا يوجد لها إيراد معتمد`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+        })
+      );
+    }
+
+    if (!approvedRevenue) continue;
+
+    const revenueAmount = Number(approvedRevenue.amount || 0);
+    const profit = revenueAmount - totalExpenses;
+
+    const profitMarginPct =
+      revenueAmount > 0 ? (profit / revenueAmount) * 100 : null;
+
+    const costRatioPct =
+      revenueAmount > 0 ? (totalExpenses / revenueAmount) * 100 : null;
+
+    if (totalExpenses > revenueAmount) {
+      alerts.push(
+        buildAlert({
+          id: `TRIP_LOSS:${t.id}`,
+          type: "TRIP_LOSS",
+          severity: "danger",
+          area: "finance",
+          title: "رحلة خاسرة",
+          message: `الرحلة ${String(t.id).slice(0, 8)} تحقق خسارة`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+          meta: {
+            revenue: toMoneyNumber(revenueAmount),
+            expenses: toMoneyNumber(totalExpenses),
+            profit: toMoneyNumber(profit),
+          },
+        })
+      );
+    }
+
+    if (
+      revenueAmount > 0 &&
+      profit > 0 &&
+      profitMarginPct !== null &&
+      profitMarginPct < 10
+    ) {
+      alerts.push(
+        buildAlert({
+          id: `LOW_MARGIN_TRIP:${t.id}`,
+          type: "LOW_MARGIN_TRIP",
+          severity: "warn",
+          area: "finance",
+          title: "رحلة بهامش ربح منخفض",
+          message: `الرحلة ${String(t.id).slice(
+            0,
+            8
+          )} هامش ربحها منخفض (${profitMarginPct.toFixed(2)}%)`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+          meta: {
+            revenue: toMoneyNumber(revenueAmount),
+            expenses: toMoneyNumber(totalExpenses),
+            profit: toMoneyNumber(profit),
+            profit_margin_pct: toMoneyNumber(profitMarginPct),
+          },
+        })
+      );
+    }
+
+    if (revenueAmount > 0 && costRatioPct !== null && costRatioPct > 80) {
+      alerts.push(
+        buildAlert({
+          id: `HIGH_COST_TRIP:${t.id}`,
+          type: "HIGH_COST_TRIP",
+          severity: "warn",
+          area: "finance",
+          title: "رحلة بتكلفة مرتفعة",
+          message: `الرحلة ${String(t.id).slice(
+            0,
+            8
+          )} تكلفتها تمثل ${costRatioPct.toFixed(2)}% من الإيراد`,
+          entity_type: "trip",
+          entity_id: t.id,
+          href: `/trips/${t.id}`,
+          created_at: t.created_at,
+          meta: {
+            revenue: toMoneyNumber(revenueAmount),
+            expenses: toMoneyNumber(totalExpenses),
+            cost_ratio_pct: toMoneyNumber(costRatioPct),
+          },
+        })
+      );
+    }
+  }
+
+  return alerts;
+}
+
 async function applyReadState(user, items) {
   const userId = user?.id || user?.sub || user?.userId || null;
+
   if (!userId || !Array.isArray(items) || !items.length) {
     return items || [];
   }
@@ -928,7 +1196,9 @@ async function applyReadState(user, items) {
   const reads = await prisma.alert_reads.findMany({
     where: {
       user_id: userId,
-      alert_key: { in: keys },
+      alert_key: {
+        in: keys,
+      },
     },
     select: {
       alert_key: true,
@@ -940,6 +1210,7 @@ async function applyReadState(user, items) {
 
   return items.map((item) => {
     const found = readsMap.get(String(item.alert_key || item.id));
+
     return {
       ...item,
       is_read: Boolean(found),
@@ -950,8 +1221,10 @@ async function applyReadState(user, items) {
 
 function applyReadStatusFilter(items, readStatus) {
   const status = String(readStatus || "all").toLowerCase();
+
   if (status === "read") return items.filter((x) => x.is_read);
   if (status === "unread") return items.filter((x) => !x.is_read);
+
   return items;
 }
 
@@ -974,27 +1247,40 @@ async function getBaseAlerts(user, filters = {}) {
 
   const parts = await Promise.all([
     areas.includes("operations")
-      ? getOperationsAlerts({ companyId, user, clientId, siteId })
+      ? getOperationsAlerts({
+          companyId,
+          user,
+          clientId,
+          siteId,
+        })
       : Promise.resolve([]),
+
     areas.includes("finance")
-      ? getFinanceAlerts({ companyId, clientId })
+      ? getFinanceAlerts({
+          companyId,
+          clientId,
+        })
       : Promise.resolve([]),
+
     areas.includes("maintenance")
       ? getMaintenanceAlerts(companyId)
       : Promise.resolve([]),
+
     areas.includes("compliance")
       ? getComplianceAlerts(companyId, {
           daysWindow: filters.days || filters.daysWindow || 30,
           limit: filters.limit || 50,
         })
       : Promise.resolve([]),
-       areas.includes("operations")
-    ? getTripBusinessAlerts({ companyId, user })
-    : Promise.resolve([]),
 
-  areas.includes("finance")
-    ? getFinanceAlerts({ companyId, clientId })
-    : Promise.resolve([]),
+    areas.includes("operations") || areas.includes("finance")
+      ? getTripBusinessAlerts({
+          companyId,
+          user,
+          clientId,
+          siteId,
+        })
+      : Promise.resolve([]),
   ]);
 
   const items = parts.flat();
@@ -1008,164 +1294,11 @@ async function getBaseAlerts(user, filters = {}) {
 
     const ad = new Date(a.created_at).getTime();
     const bd = new Date(b.created_at).getTime();
+
     return bd - ad;
   });
 
   return items;
-}
-async function getTripBusinessAlerts({ companyId, user }) {
-  const rows = await prisma.trips.findMany({
-    where: {
-      company_id: companyId,
-    },
-    select: {
-      id: true,
-      status: true,
-      financial_status: true,
-      trip_assignments: {
-        where: { is_active: true },
-        select: { id: true },
-      },
-      trip_revenues: {
-        select: {
-          id: true,
-          status: true,
-          amount: true,
-        },
-      },
-      cash_expenses: {
-        where: { approval_status: "APPROVED" },
-        select: {
-          amount: true,
-        },
-      },
-      created_at: true,
-    },
-    take: 200,
-  });
-
-  const alerts = [];
-
-  for (const t of rows) {
-    const hasAssignment = (t.trip_assignments || []).length > 0;
-    const revenues = t.trip_revenues || [];
-    const approvedRevenue = revenues.find(r => r.status === "APPROVED");
-    const totalExpenses = (t.cash_expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
-
-    // 🚨 1. بدون تعيين
-    if (!hasAssignment && t.status !== "CANCELLED") {
-      alerts.push(buildAlert({
-        id: `TRIP_NO_ASSIGNMENT:${t.id}`,
-        type: "TRIP_NO_ASSIGNMENT",
-        severity: "warn",
-        area: "operations",
-        title: "رحلة بدون تعيين",
-        message: `الرحلة ${t.id.slice(0,8)} بدون مركبة أو سائق`,
-        entity_type: "trip",
-        entity_id: t.id,
-        href: `/trips/${t.id}`,
-        created_at: t.created_at,
-      }));
-    }
-
-    // 🚨 2. بدون إيراد
-    if (!approvedRevenue && t.status === "COMPLETED") {
-      alerts.push(buildAlert({
-        id: `TRIP_NO_REVENUE:${t.id}`,
-        type: "TRIP_NO_REVENUE",
-        severity: "danger",
-        area: "finance",
-        title: "رحلة بدون إيراد",
-        message: `الرحلة ${t.id.slice(0,8)} لا يوجد لها إيراد معتمد`,
-        entity_type: "trip",
-        entity_id: t.id,
-        href: `/trips/${t.id}`,
-        created_at: t.created_at,
-      }));
-    }
-
-    // 🚨 3. خسارة
-    if (approvedRevenue) {
-      const revenueAmount = Number(approvedRevenue.amount || 0);
-      const profit = revenueAmount - totalExpenses;
-      const profitMarginPct =
-      revenueAmount > 0 ? (profit / revenueAmount) * 100 : null;
-
-      const costRatioPct =
-      revenueAmount > 0 ? (totalExpenses / revenueAmount) * 100 : null;
-
-      if (totalExpenses > revenueAmount) {
-        alerts.push(buildAlert({
-          id: `TRIP_LOSS:${t.id}`,
-          type: "TRIP_LOSS",
-          severity: "danger",
-          area: "finance",
-          title: "رحلة خاسرة",
-          message: `الرحلة ${t.id.slice(0,8)} تحقق خسارة`,
-          entity_type: "trip",
-          entity_id: t.id,
-          href: `/trips/${t.id}`,
-          created_at: t.created_at,
-          meta: {
-            revenue: revenueAmount,
-            expenses: totalExpenses,
-          },
-        }));
-      }
-    }
-  }
-// 🚨 4. هامش ربح منخفض
-if (
-  revenueAmount > 0 &&
-  profit > 0 &&
-  profitMarginPct !== null &&
-  profitMarginPct < 10
-) {
-  alerts.push(buildAlert({
-    id: `LOW_MARGIN_TRIP:${t.id}`,
-    type: "LOW_MARGIN_TRIP",
-    severity: "warn",
-    area: "finance",
-    title: "رحلة بهامش ربح منخفض",
-    message: `الرحلة ${t.id.slice(0,8)} هامش ربحها منخفض (${profitMarginPct.toFixed(2)}%)`,
-    entity_type: "trip",
-    entity_id: t.id,
-    href: `/trips/${t.id}`,
-    created_at: t.created_at,
-    meta: {
-      revenue: revenueAmount,
-      expenses: totalExpenses,
-      profit,
-      profit_margin_pct: Number(profitMarginPct.toFixed(2)),
-    },
-  }));
-}
-
-// 🚨 5. تكلفة عالية مقارنة بالإيراد
-if (
-  revenueAmount > 0 &&
-  costRatioPct !== null &&
-  costRatioPct > 80
-) {
-  alerts.push(buildAlert({
-    id: `HIGH_COST_TRIP:${t.id}`,
-    type: "HIGH_COST_TRIP",
-    severity: "warn",
-    area: "finance",
-    title: "رحلة بتكلفة مرتفعة",
-    message: `الرحلة ${t.id.slice(0,8)} تكلفتها تمثل ${costRatioPct.toFixed(2)}% من الإيراد`,
-    entity_type: "trip",
-    entity_id: t.id,
-    href: `/trips/${t.id}`,
-    created_at: t.created_at,
-    meta: {
-      revenue: revenueAmount,
-      expenses: totalExpenses,
-      cost_ratio_pct: Number(costRatioPct.toFixed(2)),
-    },
-  }));
-}
-  return alerts;
 }
 
 exports.getAlerts = async (user, filters = {}) => {
@@ -1173,6 +1306,7 @@ exports.getAlerts = async (user, filters = {}) => {
   const readStatus = String(filters.readStatus || "all").toLowerCase();
 
   let items = await getBaseAlerts(user, filters);
+
   items = await applyReadState(user, items);
   items = applyReadStatusFilter(items, readStatus);
 
@@ -1212,8 +1346,14 @@ exports.getAlertsSummary = async (user, filters = {}) => {
   };
 
   for (const a of data.items || []) {
-    if (out.by_severity[a.severity] != null) out.by_severity[a.severity] += 1;
-    if (out.by_area[a.area] != null) out.by_area[a.area] += 1;
+    if (out.by_severity[a.severity] != null) {
+      out.by_severity[a.severity] += 1;
+    }
+
+    if (out.by_area[a.area] != null) {
+      out.by_area[a.area] += 1;
+    }
+
     if (a.is_read) out.read += 1;
     else out.unread += 1;
   }
@@ -1223,6 +1363,7 @@ exports.getAlertsSummary = async (user, filters = {}) => {
 
 exports.markAlertRead = async (user, alertKey) => {
   const userId = user?.id || user?.sub || user?.userId || null;
+
   if (!userId) {
     const err = new Error("Unauthorized");
     err.status = 401;
@@ -1230,6 +1371,7 @@ exports.markAlertRead = async (user, alertKey) => {
   }
 
   const key = String(alertKey || "").trim();
+
   if (!key) {
     const err = new Error("alert_key is required");
     err.status = 400;
@@ -1256,6 +1398,7 @@ exports.markAlertRead = async (user, alertKey) => {
 
 exports.markAllAlertsRead = async (user, filters = {}) => {
   const userId = user?.id || user?.sub || user?.userId || null;
+
   if (!userId) {
     const err = new Error("Unauthorized");
     err.status = 401;
@@ -1269,8 +1412,11 @@ exports.markAllAlertsRead = async (user, filters = {}) => {
   });
 
   const unreadItems = Array.isArray(data?.items) ? data.items : [];
+
   if (!unreadItems.length) {
-    return { updated: 0 };
+    return {
+      updated: 0,
+    };
   }
 
   const now = new Date();
