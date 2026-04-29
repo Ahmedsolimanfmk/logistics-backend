@@ -126,6 +126,8 @@ async function executeParsedQuery({ companyId, user, parsed }) {
     top_sites_by_trips: analyticsService.getTopSitesByTrips,
     top_vehicles_by_trips: analyticsService.getTopVehiclesByTrips,
     trips_profit_summary: analyticsService.getTripsProfitSummary,
+    trip_profit_summary: analyticsService.getTripProfitSummary,
+    trip_profit_summary: analyticsService.getTripProfitSummary,
     top_profitable_trips: analyticsService.getTopProfitableTrips,
     worst_trips_by_profit: analyticsService.getWorstTrips,
     low_margin_trips: analyticsService.getLowMarginTrips,

@@ -321,6 +321,17 @@ async function getLowMarginTrips({ companyId, user, query = {} }) {
     query: ctx.query,
   });
 }
+async function getTripProfitSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return profitAnalytics.getTripProfitSummary({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    tripHint: query.trip_hint,
+    query: ctx.query,
+  });
+}
 module.exports = {
   getFinanceExpenseSummary,
   getFinanceExpenseByType,
@@ -351,4 +362,5 @@ module.exports = {
   getTopProfitableTrips,
   getWorstTrips,
   getLowMarginTrips,
+  getTripProfitSummary,
 };

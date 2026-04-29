@@ -121,8 +121,8 @@ function buildSelectionFollowUps(entity) {
   }
 
   if (entity?.type === "trip") {
-    return ["اعرض التفاصيل"];
-  }
+  return ["ربحها كام؟", "هل الرحلة مربحة؟", "مصروفاتها كام؟", "اعرض التفاصيل"];
+}
 
   return ["اعرض التفاصيل"];
 }

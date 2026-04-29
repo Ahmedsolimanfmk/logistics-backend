@@ -421,9 +421,21 @@ async function getAiInsights({ companyId, user, query }) {
     insights,
   };
 }
+async function getTripProfitSummary({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return profitAnalytics.getTripProfitSummary({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    tripHint: query.trip_hint,
+    query: ctx.query,
+  });
+}
 
 module.exports = {
   queryAiAnalytics,
   getAiSuggestedQuestions,
   getAiInsights,
+  getTripProfitSummary,
 };
