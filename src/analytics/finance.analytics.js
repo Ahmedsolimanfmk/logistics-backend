@@ -82,7 +82,7 @@ async function resolveVehicleIdsByHint(companyId, vehicleHint) {
   });
 
   const ids = vehicles.map((v) => v.id).filter(Boolean);
-  return ids.length ? ids : ["__NO_MATCH__"];
+  return ids.length ? ids : [];
 }
 
 async function resolveVendorIdsByHint(companyId, vendorHint) {
@@ -105,7 +105,7 @@ async function resolveVendorIdsByHint(companyId, vendorHint) {
   });
 
   const ids = vendors.map((v) => v.id).filter(Boolean);
-  return ids.length ? ids : ["__NO_MATCH__"];
+  return ids.length ? ids : [];
 }
 
 async function buildExpenseWhere(companyId, range, query = {}, { nonRejected = false } = {}) {
