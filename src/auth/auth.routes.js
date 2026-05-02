@@ -81,11 +81,11 @@ router.post("/login", async (req, res) => {
         status: "ACTIVE",
       },
       select: {
-        company_id: true,
-        company: {
-          select: { name: true },
-        },
-      },
+  company_id: true,
+  companies: {
+    select: { name: true },
+  },
+},
       orderBy: { joined_at: "asc" },
     });
 
@@ -97,7 +97,7 @@ router.post("/login", async (req, res) => {
 
     // ✅ تعريف مرة واحدة فقط
     let companyId = membership?.company_id || null;
-    let companyName = membership?.company?.name || null;
+    let companyName = membership?.companies?.name || null;
 
     // =====================
     // SUPER ADMIN fallback
