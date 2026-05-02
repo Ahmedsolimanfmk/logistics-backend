@@ -74,9 +74,16 @@ router.post("/login", async (req, res) => {
         is_active: true,
         status: "ACTIVE",
       },
-      select: { company_id: true },
+      select: {
+  company_id: true,
+  company: {
+    select: { name: true },
+  },
+},
       orderBy: { joined_at: "asc" },
     });
+let companyId = membership?.company_id || null;
+let companyName = membership?.company?.name || null;
 
     if (!membership && platformRole !== "SUPER_ADMIN") {
       return res.status(403).json({
@@ -102,6 +109,7 @@ router.post("/login", async (req, res) => {
         effective_role: effectiveRole,
         platform_role: platformRole,
         company_id: companyId,
+        company_name: companyName,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
@@ -116,6 +124,7 @@ router.post("/login", async (req, res) => {
         role: effectiveRole,
         platform_role: platformRole,
         company_id: companyId,
+        company_name: companyName,
       },
     });
   } catch (e) {
@@ -164,20 +173,62 @@ router.post("/switch-company", authRequired, async (req, res) => {
         effective_role: req.user.effective_role,
         platform_role: req.user.platform_role,
         company_id,
+        company_name: company?.name,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
-
+const company = await prisma.companies.findUnique({
+  where: { id: company_id },
+  select: { name: true },
+});
     return res.json({
       token,
       company_id,
+      company_name: company?.name,
     });
   } catch (e) {
     return res.status(500).json({
       message: "Switch failed",
       error: e.message,
     });
+  }
+});
+// GET /auth/my-companies
+router.get("/my-companies", authRequired, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const isSuperAdmin = req.user.platform_role === "SUPER_ADMIN";
+
+    if (isSuperAdmin) {
+      // السوبر أدمن يشوف كل الشركات
+      const companies = await prisma.companies.findMany({
+        select: { id: true, name: true },
+        orderBy: { created_at: "desc" },
+      });
+
+      return res.json({ data: companies });
+    }
+
+    // المستخدم العادي: الشركات اللي هو عضو فيها
+    const memberships = await prisma.company_users.findMany({
+      where: {
+        user_id: userId,
+        is_active: true,
+        status: "ACTIVE",
+      },
+      select: {
+        company: {
+          select: { id: true, name: true },
+        },
+      },
+    });
+
+    const companies = memberships.map((m) => m.company);
+
+    return res.json({ data: companies });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to load companies" });
   }
 });
 
