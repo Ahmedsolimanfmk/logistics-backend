@@ -21,12 +21,15 @@ function resolveEffectiveRole(user) {
   return String(user?.role || "").trim().toUpperCase();
 }
 
+// 🔐 LOGIN
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
-      return res.status(400).json({ message: "email and password are required" });
+      return res.status(400).json({
+        message: "email and password are required",
+      });
     }
 
     const emailNorm = String(email).trim();
@@ -50,12 +53,7 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const hash = user.password_hash;
-    if (!hash) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const ok = await bcrypt.compare(String(password), String(hash));
+    const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
@@ -69,34 +67,115 @@ router.post("/login", async (req, res) => {
     const effectiveRole = resolveEffectiveRole(user);
     const platformRole = normalizePlatformRole(user.platform_role) || "USER";
 
+    // 🔥 membership
+    const membership = await prisma.company_users.findFirst({
+      where: {
+        user_id: user.id,
+        is_active: true,
+        status: "ACTIVE",
+      },
+      select: { company_id: true },
+      orderBy: { joined_at: "asc" },
+    });
+
+    if (!membership && platformRole !== "SUPER_ADMIN") {
+      return res.status(403).json({
+        message: "No active company membership found",
+      });
+    }
+
+    let companyId = membership?.company_id || null;
+
+    // ✅ SUPER ADMIN fallback
+    if (!companyId && platformRole === "SUPER_ADMIN") {
+      const defaultCompany = await prisma.companies.findFirst({
+        select: { id: true },
+      });
+
+      companyId = defaultCompany?.id || null;
+    }
+
     const token = jwt.sign(
       {
         sub: user.id,
         role: effectiveRole,
         effective_role: effectiveRole,
         platform_role: platformRole,
-        email: user.email || undefined,
+        company_id: companyId,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     return res.json({
-      _build: "AUTH_LOGIN_V4_PLATFORM_ROLE_2026-03-31",
       token,
       user: {
         id: user.id,
         full_name: user.full_name,
         email: user.email,
         role: effectiveRole,
-        effective_role: effectiveRole,
         platform_role: platformRole,
+        company_id: companyId,
       },
     });
   } catch (e) {
     console.error("LOGIN ERROR:", e);
     return res.status(500).json({
       message: "Login failed",
+      error: e.message,
+    });
+  }
+});
+const { authRequired } = require("../auth/jwt.middleware");
+
+// 🔁 SWITCH COMPANY
+router.post("/switch-company", authRequired, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { company_id } = req.body;
+
+    if (!company_id) {
+      return res.status(400).json({
+        message: "company_id is required",
+      });
+    }
+
+    // 🔥 تحقق إن المستخدم عضو في الشركة
+    const membership = await prisma.company_users.findFirst({
+      where: {
+        user_id: userId,
+        company_id,
+        is_active: true,
+        status: "ACTIVE",
+      },
+    });
+
+    // ✅ SUPER ADMIN bypass
+    if (!membership && req.user.platform_role !== "SUPER_ADMIN") {
+      return res.status(403).json({
+        message: "Not allowed in this company",
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        sub: userId,
+        role: req.user.role,
+        effective_role: req.user.effective_role,
+        platform_role: req.user.platform_role,
+        company_id,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({
+      token,
+      company_id,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Switch failed",
       error: e.message,
     });
   }

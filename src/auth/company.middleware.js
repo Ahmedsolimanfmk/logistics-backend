@@ -1,54 +1,29 @@
-const prisma = require("../prisma");
-const { getUserRole } = require("./access");
+// src/auth/company.middleware.js
 
 async function requireCompany(req, res, next) {
   try {
-    const userId = req.user?.sub || req.user?.id || null;
-    const userRole = String(getUserRole(req) || "").toUpperCase();
+    const user = req.user;
 
-    if (!userId) {
+    if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    if (userRole === "SUPER_ADMIN") {
-      const defaultCompany = await prisma.companies.findFirst({
-        where: { code: "COMP-DEFAULT" },
-        select: { id: true },
-      });
-
-      if (!defaultCompany) {
-        return res.status(500).json({
-          message: "Default company not found",
-        });
-      }
-
-      req.companyId = defaultCompany.id;
+    // 🔥 SUPER ADMIN
+    if (user.platform_role === "SUPER_ADMIN") {
+      req.companyId = user.company_id || null;
       req.isSuperAdmin = true;
-
       return next();
     }
 
-    const membership = await prisma.company_users.findFirst({
-      where: {
-        user_id: userId,
-        is_active: true,
-        status: "ACTIVE",
-      },
-      select: {
-        company_id: true,
-      },
-      orderBy: {
-        joined_at: "asc",
-      },
-    });
-
-    if (!membership?.company_id) {
+    // 👤 normal users
+    if (!user.company_id) {
       return res.status(403).json({
-        message: "No active company membership found",
+        message: "No company assigned in token",
       });
     }
 
-    req.companyId = membership.company_id;
+    req.companyId = user.company_id;
+
     return next();
   } catch (error) {
     return res.status(500).json({

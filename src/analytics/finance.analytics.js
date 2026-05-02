@@ -123,7 +123,11 @@ async function buildExpenseWhere(companyId, range, query = {}, { nonRejected = f
 
   if (query?.vehicle_hint) {
     const vehicleIds = await resolveVehicleIdsByHint(companyId, query.vehicle_hint);
-    where.vehicle_id = { in: vehicleIds };
+    if (vehicleIds && vehicleIds.length > 0) {
+  where.vehicle_id = { in: vehicleIds };
+} else {
+  return { __empty: true };
+}
   }
 
   if (query?.vendor_hint || query?.vendor_name) {
