@@ -1,4 +1,4 @@
-// src/auth/company.middleware.js
+const { getUserRole } = require("./access");
 
 async function requireCompany(req, res, next) {
   try {
@@ -8,21 +8,37 @@ async function requireCompany(req, res, next) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // 🔥 SUPER ADMIN
+    // 🧠 Debug (امسحه بعد ما تتأكد)
+    console.log("JWT company:", user.company_id);
+    console.log("HEADER company:", req.headers["x-company-id"]);
+
+    // ✅ SUPER ADMIN
     if (user.platform_role === "SUPER_ADMIN") {
-      req.companyId = user.company_id || null;
+      req.companyId =
+        user.company_id || req.headers["x-company-id"] || null;
+
       req.isSuperAdmin = true;
+
+      if (!req.companyId) {
+        return res.status(400).json({
+          message: "Company context is missing",
+        });
+      }
+
       return next();
     }
 
-    // 👤 normal users
-    if (!user.company_id) {
-      return res.status(403).json({
-        message: "No company assigned in token",
+    // ✅ normal users
+    const companyId =
+      user.company_id || req.headers["x-company-id"];
+
+    if (!companyId) {
+      return res.status(400).json({
+        message: "Company context is missing",
       });
     }
 
-    req.companyId = user.company_id;
+    req.companyId = companyId;
 
     return next();
   } catch (error) {
