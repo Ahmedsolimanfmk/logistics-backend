@@ -33,6 +33,7 @@ const contractsRoutes = require("./contracts/contracts.routes");
 const pricingRoutes = require("./pricing/pricing.routes");
 const contractPricingRoutes = require("./contract-pricing/contract-pricing.routes");
 const companiesRoutes = require("./companies/companies.routes");
+const driverCustodyRoutes = require("./driver-custody/driver-custody.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -114,6 +115,7 @@ app.use("/companies", authRequired, companiesRoutes);
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);
 app.use("/clients", clientsRoutes);
+app.use("/driver-custody", authRequired, driverCustodyRoutes);
 
 // =======================
 // Health check
