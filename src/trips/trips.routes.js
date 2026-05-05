@@ -2,6 +2,7 @@ const router = require("express").Router();
 const { authRequired } = require("../auth/jwt.middleware");
 const { requireCompany } = require("../auth/company.middleware");
 const { isAdminOrAccountant } = require("../auth/access");
+const { loadCompanyContext } = require("../middlewares/company-context.middleware");
 
 const tripsController = require("./trips.controller");
 const cashController = require("../cash/cash.controller");
@@ -64,6 +65,7 @@ const closeTripFinance = mustBeFn(
 
 router.use(authRequired);
 router.use(requireCompany);
+router.use(loadCompanyContext);
 
 // List / Create
 router.get("/", getTrips);

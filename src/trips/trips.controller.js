@@ -1172,6 +1172,20 @@ async function finishTrip(req, res) {
 
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
+    if (req.features?.custody_enabled) {
+  const pendingCustody = await prisma.driver_custody?.count?.({
+    where: {
+      trip_id: id,
+      status: "PENDING",
+    },
+  });
+
+  if (pendingCustody > 0) {
+    return res.status(400).json({
+      message: "Cannot finish trip: pending driver custody not settled",
+    });
+  }
+}
     if (trip.status !== "IN_PROGRESS") {
       return res.status(400).json({
         message: `Trip must be IN_PROGRESS to finish (current=${trip.status})`,

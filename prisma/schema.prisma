@@ -117,6 +117,30 @@ model fleets {
   @@map("fleets")
 }
 
+model driver_custody {
+  id         String  @id @default(uuid()) @db.Uuid
+  company_id String  @db.Uuid
+  trip_id    String? @db.Uuid
+  driver_id  String  @db.Uuid
+
+  type   driver_custody_type
+  amount Float?
+
+  reference      String? // رقم الفاتورة / التحويل
+  attachment_url String? // صورة إيصال / فاتورة
+
+  status String @default("PENDING") // PENDING / SETTLED
+
+  notes String?
+
+  created_at DateTime @default(now())
+
+  // Relations
+  company companies @relation(fields: [company_id], references: [id])
+  trip    trips?    @relation(fields: [trip_id], references: [id])
+  driver  drivers   @relation(fields: [driver_id], references: [id])
+}
+
 model fleet_vehicles {
   id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   company_id    String    @db.Uuid
@@ -569,6 +593,7 @@ model trips {
   trip_assignments   trip_assignments[]
   trip_events        trip_events[]
   trip_revenues      trip_revenues[]
+  driverCustodies    driver_custody[]
 
   @@unique([company_id, trip_code], map: "uq_trips_company_trip_code")
   @@index([company_id], map: "idx_trips_company_id")
@@ -1346,6 +1371,7 @@ model drivers {
 
   company          companies          @relation(fields: [company_id], references: [id], onDelete: Cascade)
   trip_assignments trip_assignments[]
+  driverCustodies  driver_custody[]
 
   @@unique([company_id, employee_code], map: "uq_drivers_company_employee_code")
   @@unique([company_id, phone], map: "uq_drivers_company_phone")
@@ -1402,6 +1428,11 @@ enum company_membership_status {
   LEFT
 }
 
+enum company_type {
+  DIRECT_TRANSPORT
+  CONTRACTOR
+}
+
 model companies {
   id                String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   code              String         @unique
@@ -1419,8 +1450,13 @@ model companies {
   logo_url          String?
   is_active         Boolean        @default(true)
   status            company_status @default(ACTIVE)
-  created_at        DateTime       @default(now()) @db.Timestamptz(6)
-  updated_at        DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // ✅ الجديد
+  company_type company_type      @default(DIRECT_TRANSPORT)
+  features     company_features?
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
   memberships                    company_users[]
   subscriptions                  company_subscriptions[]
@@ -1475,6 +1511,7 @@ model companies {
   contract_pricing_rules         contract_pricing_rules[]
   routes                         routes[]
   partCategories                 part_categories[]
+  driverCustodies                driver_custody[]
 }
 
 model company_users {
@@ -1485,6 +1522,7 @@ model company_users {
   status         company_membership_status @default(ACTIVE)
   is_active      Boolean                   @default(true)
   joined_at      DateTime                  @default(now()) @db.Timestamptz(6)
+  company_type   company_type              @default(DIRECT_TRANSPORT)
   invited_at     DateTime?
   invited_by     String?
   deactivated_at DateTime?
@@ -1498,6 +1536,19 @@ model company_users {
   @@unique([company_id, user_id])
   @@index([company_id, company_role])
   @@index([user_id, status, is_active])
+}
+
+model company_features {
+  id         String @id @default(uuid()) @db.Uuid
+  company_id String @unique @db.Uuid // ✅ ده المهم
+
+  fleet_enabled     Boolean @default(true)
+  inventory_enabled Boolean @default(true)
+  custody_enabled   Boolean @default(false)
+
+  created_at DateTime @default(now())
+
+  company companies @relation(fields: [company_id], references: [id])
 }
 
 model company_subscriptions {
@@ -1867,6 +1918,12 @@ enum ai_run_status {
   SUCCESS
   FAILED
   CANCELLED
+}
+
+enum driver_custody_type {
+  CASH_RECEIVED
+  TRANSFER
+  DELIVERY_PROOF
 }
 
 model ai_conversations {
