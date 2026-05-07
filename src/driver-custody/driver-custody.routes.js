@@ -9,7 +9,9 @@ const router = express.Router();
 
 router.use(authRequired);
 router.use(requireCompany);
-router.use(loadCompanyContext);
+router.use(loadCompanyContext);3
+router.post("/transfer", controller.addTransfer);
+router.post("/proof", controller.addDeliveryProof);
 
 // تسجيل استلام فلوس
 router.post("/cash", controller.addCashReceipt);

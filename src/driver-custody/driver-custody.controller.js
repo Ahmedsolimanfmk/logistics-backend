@@ -33,7 +33,65 @@ async function addCashReceipt(req, res) {
     });
   }
 }
+async function addTransfer(req, res) {
+  try {
+    const companyId = req.companyId;
+
+    const { driver_id, trip_id, amount, reference, attachment_url, notes } =
+      req.body;
+
+    const data = await service.addTransfer({
+      companyId,
+      driverId: driver_id,
+      tripId: trip_id,
+      amount,
+      reference,
+      attachmentUrl: attachment_url,
+      notes,
+    });
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+
+async function addDeliveryProof(req, res) {
+  try {
+    const companyId = req.companyId;
+
+    const { driver_id, trip_id, reference, attachment_url, notes } =
+      req.body;
+
+    const data = await service.addDeliveryProof({
+      companyId,
+      driverId: driver_id,
+      tripId: trip_id,
+      reference,
+      attachmentUrl: attachment_url,
+      notes,
+    });
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
 
 module.exports = {
   addCashReceipt,
+  addTransfer,
+  addDeliveryProof,
 };

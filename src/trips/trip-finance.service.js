@@ -285,6 +285,12 @@ async function getTripFinanceSummary(tripId, companyId) {
     profit: toMoney(profit),
     profit_status: profitStatus,
 
+custody: {
+  received: toMoney(custodyReceived),
+  transferred: toMoney(custodyTransferred),
+  pending: toMoney(custodyPending),
+},
+
     metrics,
     flags,
 
@@ -300,6 +306,37 @@ async function getTripFinanceSummary(tripId, companyId) {
     pending_expenses_items: pendingExpenses,
   };
 }
+// =======================
+// Driver Custody Summary
+// =======================
+const custody = await prisma.driver_custody.findMany({
+  where: {
+    company_id: companyId,
+    trip_id: tripId,
+  },
+  select: {
+    type: true,
+    amount: true,
+    status: true,
+  },
+});
+
+let custodyReceived = 0;
+let custodyTransferred = 0;
+
+for (const row of custody) {
+  const amt = toAmount(row.amount);
+
+  if (row.type === "CASH_RECEIVED") {
+    custodyReceived += amt;
+  }
+
+  if (row.type === "TRANSFER") {
+    custodyTransferred += amt;
+  }
+}
+
+const custodyPending = custodyReceived - custodyTransferred;
 
 module.exports = {
   getTripFinanceSummary,

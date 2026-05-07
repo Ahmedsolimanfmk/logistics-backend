@@ -85,7 +85,34 @@ function normalizeString(v) {
   const s = String(v).trim();
   return s || null;
 }
+// =======================
+// Driver Custody Validation (NEW - SAFE)
+// =======================
+async function validateDriverCustody({ companyId, tripId }) {
+  const deliveryProof = await prisma.driver_custody.findFirst({
+    where: {
+      company_id: companyId,
+      trip_id: tripId,
+      type: "DELIVERY_PROOF",
+      status: "SETTLED",
+    },
+    select: { id: true },
+  });
 
+  const pendingCash = await prisma.driver_custody.count({
+    where: {
+      company_id: companyId,
+      trip_id: tripId,
+      type: "CASH_RECEIVED",
+      status: "PENDING",
+    },
+  });
+
+  return {
+    hasDeliveryProof: !!deliveryProof,
+    pendingCash,
+  };
+}
 // =======================
 // Compliance enforcement
 // =======================
@@ -1131,7 +1158,6 @@ async function startTrip(req, res) {
     });
   }
 }
-
 // =======================
 // POST /trips/:id/finish
 // =======================
@@ -1172,17 +1198,18 @@ async function finishTrip(req, res) {
 
     if (!trip) return res.status(404).json({ message: "Trip not found" });
 
-    if (req.features?.custody_enabled) {
-  const pendingCustody = await prisma.driver_custody?.count?.({
-    where: {
-      trip_id: id,
-      status: "PENDING",
-    },
-  });
+  // =======================
+// Contractor custody check (CORRECT)
+// =======================
+if (req.features?.custody_enabled) {
+  const { hasDeliveryProof, pendingCash } =
+    await validateDriverCustody({ companyId, tripId: id });
 
-  if (pendingCustody > 0) {
+  if (!hasDeliveryProof && pendingCash > 0) {
     return res.status(400).json({
-      message: "Cannot finish trip: pending driver custody not settled",
+      message:
+        "Cannot finish trip: pending cash not transferred or no delivery proof",
+      pending_cash: pendingCash,
     });
   }
 }
