@@ -137,27 +137,9 @@ async function getTripFinanceSummary(tripId, companyId) {
     pendingExpenses,
   ] = await Promise.all([
     prisma.trip_revenues.findFirst({
-      where: {
-        company_id: companyId,
-        trip_id: tripId,
-      },
+      where: { company_id: companyId, trip_id: tripId },
       orderBy: [{ entered_at: "desc" }],
-      select: {
-        id: true,
-        amount: true,
-        currency: true,
-        source: true,
-        status: true,
-        entered_at: true,
-        approved_at: true,
-        notes: true,
-        contract_id: true,
-        invoice_id: true,
-        entered_by: true,
-        approved_by: true,
-      },
     }),
-
     prisma.trip_revenues.findFirst({
       where: {
         company_id: companyId,
@@ -165,51 +147,19 @@ async function getTripFinanceSummary(tripId, companyId) {
         status: "APPROVED",
       },
       orderBy: [{ entered_at: "desc" }],
-      select: {
-        id: true,
-        amount: true,
-        currency: true,
-        source: true,
-        status: true,
-        entered_at: true,
-        approved_at: true,
-        notes: true,
-        contract_id: true,
-        invoice_id: true,
-        entered_by: true,
-        approved_by: true,
-      },
     }),
-
     prisma.cash_expenses.findMany({
       where: {
         company_id: companyId,
         trip_id: tripId,
         approval_status: "APPROVED",
       },
-      select: {
-        id: true,
-        amount: true,
-        payment_source: true,
-        expense_type: true,
-        approval_status: true,
-        created_at: true,
-      },
     }),
-
     prisma.cash_expenses.findMany({
       where: {
         company_id: companyId,
         trip_id: tripId,
         approval_status: { in: ["PENDING", "APPEALED"] },
-      },
-      select: {
-        id: true,
-        amount: true,
-        payment_source: true,
-        expense_type: true,
-        approval_status: true,
-        created_at: true,
       },
     }),
   ]);
@@ -217,7 +167,6 @@ async function getTripFinanceSummary(tripId, companyId) {
   let expenses = 0;
   let companyExpenses = 0;
   let advanceExpenses = 0;
-
   const breakdownByType = {};
 
   for (const row of approvedExpenses) {
@@ -251,6 +200,40 @@ async function getTripFinanceSummary(tripId, companyId) {
   if (profit > 0) profitStatus = "PROFIT";
   if (profit < 0) profitStatus = "LOSS";
 
+  // =======================
+  // Driver Custody Summary ✅ (المكان الصح)
+  // =======================
+  const custody = await prisma.driver_custody.findMany({
+    where: {
+      company_id: companyId,
+      trip_id: tripId,
+    },
+  });
+
+  let custodyReceived = 0;
+  let custodyTransferred = 0;
+
+  for (const row of custody) {
+    const amt = toAmount(row.amount);
+
+    if (row.type === "CASH_RECEIVED") {
+      custodyReceived += amt;
+    }
+
+    if (row.type === "TRANSFER") {
+      custodyTransferred += amt;
+    }
+  }
+
+  const custodyPending = custodyReceived - custodyTransferred;
+
+  // 🔥 Real Profit
+  const realProfit = profit - custodyPending;
+
+  let realProfitStatus = "BREAK_EVEN";
+  if (realProfit > 0) realProfitStatus = "PROFIT";
+  if (realProfit < 0) realProfitStatus = "LOSS";
+
   const metrics = calculateTripFinanceMetrics({
     revenue,
     expenses,
@@ -266,77 +249,27 @@ async function getTripFinanceSummary(tripId, companyId) {
     company_id: trip.company_id,
     financial_status: trip.financial_status || "OPEN",
 
-    trip_info: {
-      client_id: trip.client_id,
-      trip_type: trip.trip_type,
-      cargo_type: trip.cargo_type,
-      cargo_weight: trip.cargo_weight,
-      origin: trip.origin,
-      destination: trip.destination,
-    },
-
     revenue: toMoney(revenue),
     expenses: toMoney(expenses),
     pending_expenses: toMoney(pendingExpensesTotal),
 
-    company_expenses: toMoney(companyExpenses),
-    advance_expenses: toMoney(advanceExpenses),
-
     profit: toMoney(profit),
     profit_status: profitStatus,
 
-custody: {
-  received: toMoney(custodyReceived),
-  transferred: toMoney(custodyTransferred),
-  pending: toMoney(custodyPending),
-},
+    // 🔥 الجديد
+    real_profit: toMoney(realProfit),
+    real_profit_status: realProfitStatus,
+
+    custody: {
+      received: toMoney(custodyReceived),
+      transferred: toMoney(custodyTransferred),
+      pending: toMoney(custodyPending),
+    },
 
     metrics,
     flags,
-
-    currency: revenueSourceRow?.currency || trip.revenue_currency || "EGP",
-
-    revenue_record: revenueSourceRow,
-    latest_revenue_record: latestRevenueRow || null,
-    latest_approved_revenue_record: latestApprovedRevenueRow || null,
-
-    breakdown_by_type: breakdownByType,
-
-    expenses_items: approvedExpenses,
-    pending_expenses_items: pendingExpenses,
   };
 }
-// =======================
-// Driver Custody Summary
-// =======================
-const custody = await prisma.driver_custody.findMany({
-  where: {
-    company_id: companyId,
-    trip_id: tripId,
-  },
-  select: {
-    type: true,
-    amount: true,
-    status: true,
-  },
-});
-
-let custodyReceived = 0;
-let custodyTransferred = 0;
-
-for (const row of custody) {
-  const amt = toAmount(row.amount);
-
-  if (row.type === "CASH_RECEIVED") {
-    custodyReceived += amt;
-  }
-
-  if (row.type === "TRANSFER") {
-    custodyTransferred += amt;
-  }
-}
-
-const custodyPending = custodyReceived - custodyTransferred;
 
 module.exports = {
   getTripFinanceSummary,
