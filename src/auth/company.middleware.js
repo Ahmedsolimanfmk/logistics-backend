@@ -1,14 +1,23 @@
 function requireCompany(req, res, next) {
-  if (!req.user || !req.user.company_id) {
+  // 🔥 1. من التوكن
+  let companyId = req.user?.company_id;
+
+  // 🔥 2. fallback من header (مهم جدًا مع الفرونت)
+  if (!companyId) {
+    companyId = req.headers["x-company-id"];
+  }
+
+  if (!companyId) {
     return res.status(400).json({
       message: "Company context missing",
     });
   }
 
-  req.companyId = req.user.company_id;
+  req.companyId = companyId;
+
   next();
 }
 
 module.exports = {
-  requireCompany, // ⚠️ مهم جدًا
+  requireCompany,
 };
