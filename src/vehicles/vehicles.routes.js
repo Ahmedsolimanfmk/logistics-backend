@@ -37,7 +37,7 @@ router.post(
   requireAdminOrHR,
   requireCompanyFeature("vehicles.access"),
   requireCompanyLimit("max_vehicles", async (req) => {
-    return require("../prisma").vehicles.count({
+    require("../prisma").vehicle.count({
       where: { company_id: req.companyId },
     });
   }),
