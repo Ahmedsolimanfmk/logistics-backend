@@ -1,52 +1,46 @@
-const { getUserRole } = require("./access");
+const jwt = require("jsonwebtoken");
 
-async function requireCompany(req, res, next) {
+function authRequired(req, res, next) {
   try {
-    const user = req.user;
+    const header = req.headers.authorization || "";
+    const [type, token] = header.split(" ");
 
-    if (!user) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    // 🧠 Debug (امسحه بعد ما تتأكد)
-    console.log("JWT company:", user.company_id);
-    console.log("HEADER company:", req.headers["x-company-id"]);
-
-    // ✅ SUPER ADMIN
-    if (user.platform_role === "SUPER_ADMIN") {
-      req.companyId =
-        user.company_id || req.headers["x-company-id"] || null;
-
-      req.isSuperAdmin = true;
-
-      if (!req.companyId) {
-        return res.status(400).json({
-          message: "Company context is missing",
-        });
-      }
-
-      return next();
-    }
-
-    // ✅ normal users
-    const companyId =
-      user.company_id || req.headers["x-company-id"];
-
-    if (!companyId) {
-      return res.status(400).json({
-        message: "Company context is missing",
+    if (type !== "Bearer" || !token) {
+      return res.status(401).json({
+        message: "Missing Authorization: Bearer <token>",
       });
     }
 
-    req.companyId = companyId;
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
+        message: "Server misconfigured: JWT_SECRET missing",
+      });
+    }
 
-    return next();
-  } catch (error) {
-    return res.status(500).json({
-      message: "Failed to resolve company",
-      error: error?.message || "Unknown error",
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.user = {
+      sub: decoded.sub,
+      role: decoded.role,
+      effective_role: decoded.effective_role || decoded.role,
+      platform_role: decoded.platform_role || "USER",
+
+      // 🔥 الجديد
+      company_id: decoded.company_id || null,
+      company_name: decoded.company_name || null,
+      is_impersonating: decoded.is_impersonating || false,
+
+      email: decoded.email || null,
+      iat: decoded.iat,
+      exp: decoded.exp,
+    };
+
+    next();
+  } catch (err) {
+    return res.status(401).json({
+      message: "Invalid or expired token",
     });
   }
 }
 
-module.exports = { requireCompany };
+module.exports = { authRequired };

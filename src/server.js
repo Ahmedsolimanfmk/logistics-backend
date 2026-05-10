@@ -11,6 +11,7 @@ const path = require("path");
 const { authRequired } = require("./auth/jwt.middleware");
 
 // Routes
+const adminRoutes = require("./admin/admin.routes");
 const authRoutes = require("./auth/auth.routes");
 const vehiclesRoutes = require("./vehicles/vehicles.routes");
 const tripsRoutes = require("./trips/trips.routes");
@@ -111,6 +112,7 @@ app.use("/contracts", authRequired, contractsRoutes);
 app.use("/pricing-rules", authRequired, pricingRoutes);
 app.use("/contract-pricing", authRequired, contractPricingRoutes);
 app.use("/companies", authRequired, companiesRoutes);
+app.use("/admin", authRequired, adminRoutes);
 
 // Public (حسب قرارك)
 app.use("/sites", sitesRoutes);

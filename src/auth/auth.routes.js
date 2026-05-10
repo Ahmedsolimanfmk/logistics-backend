@@ -23,6 +23,16 @@ function resolveEffectiveRole(user) {
   return String(user?.role || "").trim().toUpperCase();
 }
 
+function buildToken(payload) {
+  if (!process.env.JWT_SECRET) {
+    throw new Error("JWT_SECRET missing");
+  }
+
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
+}
+
 // =====================
 // 🔐 LOGIN
 // =====================
@@ -36,11 +46,9 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const emailNorm = String(email).trim();
-
     const user = await prisma.users.findFirst({
       where: {
-        email: { equals: emailNorm, mode: "insensitive" },
+        email: { equals: email, mode: "insensitive" },
       },
       select: {
         id: true,
@@ -53,7 +61,7 @@ router.post("/login", async (req, res) => {
       },
     });
 
-    if (!user || user.is_active === false) {
+    if (!user || !user.is_active) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -62,46 +70,23 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({
-        message: "Server misconfigured: JWT_SECRET missing",
-      });
-    }
-
     const effectiveRole = resolveEffectiveRole(user);
     const platformRole = normalizePlatformRole(user.platform_role) || "USER";
 
-    // =====================
-    // Membership
-    // =====================
     const membership = await prisma.company_users.findFirst({
       where: {
         user_id: user.id,
         is_active: true,
         status: "ACTIVE",
       },
-      select: {
-  company_id: true,
-  companies: {
-    select: { name: true },
-  },
-},
+      include: { companies: true },
       orderBy: { joined_at: "asc" },
     });
 
-    if (!membership && platformRole !== "SUPER_ADMIN") {
-      return res.status(403).json({
-        message: "No active company membership found",
-      });
-    }
-
-    // ✅ تعريف مرة واحدة فقط
     let companyId = membership?.company_id || null;
     let companyName = membership?.companies?.name || null;
 
-    // =====================
     // SUPER ADMIN fallback
-    // =====================
     if (!companyId && platformRole === "SUPER_ADMIN") {
       const defaultCompany = await prisma.companies.findFirst({
         select: { id: true, name: true },
@@ -111,21 +96,20 @@ router.post("/login", async (req, res) => {
       companyName = defaultCompany?.name || null;
     }
 
-    // =====================
-    // JWT
-    // =====================
-    const token = jwt.sign(
-      {
-        sub: user.id,
-        role: effectiveRole,
-        effective_role: effectiveRole,
-        platform_role: platformRole,
-        company_id: companyId,
-        company_name: companyName,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    if (!companyId) {
+      return res.status(403).json({
+        message: "No active company membership found",
+      });
+    }
+
+    const token = buildToken({
+      sub: user.id,
+      role: effectiveRole,
+      platform_role: platformRole,
+      company_id: companyId,
+      company_name: companyName,
+      is_impersonating: false,
+    });
 
     return res.json({
       token,
@@ -137,6 +121,7 @@ router.post("/login", async (req, res) => {
         platform_role: platformRole,
         company_id: companyId,
         company_name: companyName,
+        is_impersonating: false,
       },
     });
   } catch (e) {
@@ -149,7 +134,7 @@ router.post("/login", async (req, res) => {
 });
 
 // =====================
-// 🔁 SWITCH COMPANY
+// 🔁 SWITCH COMPANY = IMPERSONATION
 // =====================
 router.post("/switch-company", authRequired, async (req, res) => {
   try {
@@ -162,7 +147,9 @@ router.post("/switch-company", authRequired, async (req, res) => {
       });
     }
 
-    // 🔥 تحقق العضوية
+    const isSuperAdmin = req.user.platform_role === "SUPER_ADMIN";
+
+    // تحقق العضوية
     const membership = await prisma.company_users.findFirst({
       where: {
         user_id: userId,
@@ -172,16 +159,20 @@ router.post("/switch-company", authRequired, async (req, res) => {
       },
     });
 
-    if (!membership && req.user.platform_role !== "SUPER_ADMIN") {
+    if (!membership && !isSuperAdmin) {
       return res.status(403).json({
         message: "Not allowed in this company",
       });
     }
 
-    // ✅ هات الشركة الأول
+    // تحقق الشركة
     const company = await prisma.companies.findUnique({
       where: { id: company_id },
-      select: { name: true },
+      select: {
+        id: true,
+        name: true,
+        is_active: true,
+      },
     });
 
     if (!company) {
@@ -190,28 +181,91 @@ router.post("/switch-company", authRequired, async (req, res) => {
       });
     }
 
-    // ✅ اعمل token
-    const token = jwt.sign(
-      {
-        sub: userId,
-        role: req.user.role,
-        effective_role: req.user.effective_role,
-        platform_role: req.user.platform_role,
-        company_id,
-        company_name: company.name,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    if (!company.is_active) {
+      return res.status(403).json({
+        message: "Company is inactive",
+      });
+    }
+
+    // Logging (اختياري لكن مهم)
+    if (isSuperAdmin) {
+      try {
+        await prisma.admin_logs.create({
+          data: {
+            admin_id: userId,
+            company_id,
+            action: "IMPERSONATE",
+          },
+        });
+      } catch (e) {
+        console.warn("admin_logs not found, skipping logging");
+      }
+    }
+
+    const token = buildToken({
+      sub: userId,
+      role: req.user.role,
+      platform_role: req.user.platform_role,
+      company_id,
+      company_name: company.name,
+      is_impersonating: isSuperAdmin,
+    });
 
     return res.json({
       token,
       company_id,
       company_name: company.name,
+      is_impersonating: isSuperAdmin,
     });
   } catch (e) {
     return res.status(500).json({
       message: "Switch failed",
+      error: e.message,
+    });
+  }
+});
+
+// =====================
+// 🔁 STOP IMPERSONATION
+// =====================
+router.post("/stop-impersonation", authRequired, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+
+    const membership = await prisma.company_users.findFirst({
+      where: {
+        user_id: userId,
+        is_active: true,
+        status: "ACTIVE",
+      },
+      include: { companies: true },
+      orderBy: { joined_at: "asc" },
+    });
+
+    if (!membership) {
+      return res.status(400).json({
+        message: "No company membership",
+      });
+    }
+
+    const token = buildToken({
+      sub: userId,
+      role: req.user.role,
+      platform_role: req.user.platform_role,
+      company_id: membership.company_id,
+      company_name: membership.companies.name,
+      is_impersonating: false,
+    });
+
+    return res.json({
+      token,
+      company_id: membership.company_id,
+      company_name: membership.companies.name,
+      is_impersonating: false,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Failed to stop impersonation",
       error: e.message,
     });
   }
@@ -253,6 +307,7 @@ router.get("/my-companies", authRequired, async (req, res) => {
   } catch (e) {
     return res.status(500).json({
       message: "Failed to load companies",
+      error: e.message,
     });
   }
 });
