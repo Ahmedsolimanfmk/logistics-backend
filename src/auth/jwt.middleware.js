@@ -22,15 +22,22 @@ function authRequired(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     req.user = {
-      sub: decoded.sub,
-      role: decoded.role,
-      effective_role: decoded.effective_role || decoded.role,
-      platform_role: decoded.platform_role || "USER",
-      email: decoded.email || null,
-      iat: decoded.iat,
-      exp: decoded.exp,
-    };
+  sub: decoded.sub,
 
+  role: decoded.role,
+  effective_role: decoded.effective_role || decoded.role,
+  platform_role: decoded.platform_role || "USER",
+
+  // 🔥 مهم جدًا
+  company_id: decoded.company_id || null,
+  company_name: decoded.company_name || null,
+  is_impersonating: decoded.is_impersonating || false,
+
+  email: decoded.email || null,
+
+  iat: decoded.iat,
+  exp: decoded.exp,
+};
     next();
   } catch (err) {
     return res.status(401).json({
