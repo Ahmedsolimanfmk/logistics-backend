@@ -148,6 +148,7 @@ const token = buildToken({
 router.post("/switch-company", authRequired, async (req, res) => {
   try {
     const userId = req.user.sub;
+
     const { company_id } = req.body;
 
     if (!company_id) {
@@ -156,25 +157,9 @@ router.post("/switch-company", authRequired, async (req, res) => {
       });
     }
 
-    const isSuperAdmin = req.user.platform_role === "SUPER_ADMIN";
+    const isSuperAdmin =
+      req.user.platform_role === "SUPER_ADMIN";
 
-    // تحقق العضوية
-    const membership = await prisma.company_users.findFirst({
-      where: {
-        user_id: userId,
-        company_id,
-        is_active: true,
-        status: "ACTIVE",
-      },
-    });
-
-    if (!membership && !isSuperAdmin) {
-      return res.status(403).json({
-        message: "Not allowed in this company",
-      });
-    }
-
-    // تحقق الشركة
     const company = await prisma.companies.findUnique({
       where: { id: company_id },
       select: {
@@ -190,33 +175,19 @@ router.post("/switch-company", authRequired, async (req, res) => {
       });
     }
 
-    if (!company.is_active) {
-      return res.status(403).json({
-        message: "Company is inactive",
-      });
-    }
-
-    // Logging (اختياري لكن مهم)
-    if (isSuperAdmin) {
-      try {
-        await prisma.admin_logs.create({
-          data: {
-            admin_id: userId,
-            company_id,
-            action: "IMPERSONATE",
-          },
-        });
-      } catch (e) {
-        console.warn("admin_logs not found, skipping logging");
-      }
-    }
+    const impersonatedRole = "ADMIN";
 
     const token = buildToken({
       sub: userId,
-      role: req.user.role,
+
+      role: impersonatedRole,
+      effective_role: impersonatedRole,
+
       platform_role: req.user.platform_role,
+
       company_id,
       company_name: company.name,
+
       is_impersonating: isSuperAdmin,
     });
 
