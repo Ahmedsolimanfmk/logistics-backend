@@ -62,16 +62,22 @@ router.post("/login", async (req, res) => {
     });
 
     if (!user || !user.is_active) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
     }
 
     const ok = await bcrypt.compare(password, user.password_hash);
+
     if (!ok) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
     }
 
     const effectiveRole = resolveEffectiveRole(user);
-    const platformRole = normalizePlatformRole(user.platform_role) || "USER";
+    const platformRole =
+      normalizePlatformRole(user.platform_role) || "USER";
 
     const membership = await prisma.company_users.findFirst({
       where: {
@@ -79,17 +85,24 @@ router.post("/login", async (req, res) => {
         is_active: true,
         status: "ACTIVE",
       },
-      include: { companies: true },
-      orderBy: { joined_at: "asc" },
+      include: {
+        companies: true,
+      },
+      orderBy: {
+        joined_at: "asc",
+      },
     });
 
     let companyId = membership?.company_id || null;
     let companyName = membership?.companies?.name || null;
 
-    // SUPER ADMIN fallback
+    // ✅ SUPER ADMIN fallback
     if (!companyId && platformRole === "SUPER_ADMIN") {
       const defaultCompany = await prisma.companies.findFirst({
-        select: { id: true, name: true },
+        select: {
+          id: true,
+          name: true,
+        },
       });
 
       companyId = defaultCompany?.id || null;
@@ -102,23 +115,20 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const impersonatedRole = "ADMIN";
+    // ✅ LOGIN TOKEN
+    const token = buildToken({
+      sub: user.id,
 
-const token = buildToken({
-  sub: userId,
+      role: effectiveRole,
+      effective_role: effectiveRole,
 
-  // 👇 يتحول لدور الشركة
-  role: impersonatedRole,
-  effective_role: impersonatedRole,
+      platform_role: platformRole,
 
-  // 👇 يحتفظ بصلاحية السوبر ادمن الأصلية
-  platform_role: req.user.platform_role,
+      company_id: companyId,
+      company_name: companyName,
 
-  company_id,
-  company_name: company.name,
-
-  is_impersonating: isSuperAdmin,
-});
+      is_impersonating: false,
+    });
 
     return res.json({
       token,
@@ -126,15 +136,21 @@ const token = buildToken({
         id: user.id,
         full_name: user.full_name,
         email: user.email,
+
         role: effectiveRole,
+        effective_role: effectiveRole,
+
         platform_role: platformRole,
+
         company_id: companyId,
         company_name: companyName,
+
         is_impersonating: false,
       },
     });
   } catch (e) {
     console.error("LOGIN ERROR:", e);
+
     return res.status(500).json({
       message: "Login failed",
       error: e.message,
@@ -160,8 +176,27 @@ router.post("/switch-company", authRequired, async (req, res) => {
     const isSuperAdmin =
       req.user.platform_role === "SUPER_ADMIN";
 
+    // ✅ membership check
+    const membership = await prisma.company_users.findFirst({
+      where: {
+        user_id: userId,
+        company_id,
+        is_active: true,
+        status: "ACTIVE",
+      },
+    });
+
+    if (!membership && !isSuperAdmin) {
+      return res.status(403).json({
+        message: "Not allowed in this company",
+      });
+    }
+
+    // ✅ company check
     const company = await prisma.companies.findUnique({
-      where: { id: company_id },
+      where: {
+        id: company_id,
+      },
       select: {
         id: true,
         name: true,
@@ -175,6 +210,13 @@ router.post("/switch-company", authRequired, async (req, res) => {
       });
     }
 
+    if (!company.is_active) {
+      return res.status(403).json({
+        message: "Company is inactive",
+      });
+    }
+
+    // ✅ SUPER ADMIN becomes ADMIN inside company
     const impersonatedRole = "ADMIN";
 
     const token = buildToken({
@@ -218,8 +260,12 @@ router.post("/stop-impersonation", authRequired, async (req, res) => {
         is_active: true,
         status: "ACTIVE",
       },
-      include: { companies: true },
-      orderBy: { joined_at: "asc" },
+      include: {
+        companies: true,
+      },
+      orderBy: {
+        joined_at: "asc",
+      },
     });
 
     if (!membership) {
@@ -230,10 +276,15 @@ router.post("/stop-impersonation", authRequired, async (req, res) => {
 
     const token = buildToken({
       sub: userId,
-      role: req.user.role,
-      platform_role: req.user.platform_role,
+
+      role: "SUPER_ADMIN",
+      effective_role: "SUPER_ADMIN",
+
+      platform_role: "SUPER_ADMIN",
+
       company_id: membership.company_id,
       company_name: membership.companies.name,
+
       is_impersonating: false,
     });
 
@@ -257,17 +308,28 @@ router.post("/stop-impersonation", authRequired, async (req, res) => {
 router.get("/my-companies", authRequired, async (req, res) => {
   try {
     const userId = req.user.sub;
-    const isSuperAdmin = req.user.platform_role === "SUPER_ADMIN";
 
+    const isSuperAdmin =
+      req.user.platform_role === "SUPER_ADMIN";
+
+    // ✅ SUPER ADMIN gets all companies
     if (isSuperAdmin) {
       const companies = await prisma.companies.findMany({
-        select: { id: true, name: true },
-        orderBy: { created_at: "desc" },
+        select: {
+          id: true,
+          name: true,
+        },
+        orderBy: {
+          created_at: "desc",
+        },
       });
 
-      return res.json({ data: companies });
+      return res.json({
+        data: companies,
+      });
     }
 
+    // ✅ normal user companies
     const memberships = await prisma.company_users.findMany({
       where: {
         user_id: userId,
@@ -276,14 +338,19 @@ router.get("/my-companies", authRequired, async (req, res) => {
       },
       select: {
         company: {
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+          },
         },
       },
     });
 
     const companies = memberships.map((m) => m.company);
 
-    return res.json({ data: companies });
+    return res.json({
+      data: companies,
+    });
   } catch (e) {
     return res.status(500).json({
       message: "Failed to load companies",
