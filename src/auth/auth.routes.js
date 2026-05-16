@@ -102,14 +102,23 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const token = buildToken({
-      sub: user.id,
-      role: effectiveRole,
-      platform_role: platformRole,
-      company_id: companyId,
-      company_name: companyName,
-      is_impersonating: false,
-    });
+    const impersonatedRole = "ADMIN";
+
+const token = buildToken({
+  sub: userId,
+
+  // 👇 يتحول لدور الشركة
+  role: impersonatedRole,
+  effective_role: impersonatedRole,
+
+  // 👇 يحتفظ بصلاحية السوبر ادمن الأصلية
+  platform_role: req.user.platform_role,
+
+  company_id,
+  company_name: company.name,
+
+  is_impersonating: isSuperAdmin,
+});
 
     return res.json({
       token,
