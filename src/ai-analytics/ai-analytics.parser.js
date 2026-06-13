@@ -16,6 +16,9 @@ const {
   extractTitle,
   extractVendorName,
   extractPaidMethod,
+  extractDriverHint,
+  extractPartHint,
+  extractWarehouseHint,
 } = require("./ai-analytics.extractors");
 
 // =======================
@@ -129,7 +132,9 @@ function buildEntities(question) {
     trip_hint: extractTripHint(question) || null,
     work_order_hint: extractWorkOrderHint(question) || null,
     client_hint: extractClientHint(question) || null,
-    part_hint: null,
+    part_hint: extractPartHint(question) || null,
+    driver_hint: extractDriverHint(question) || null,
+    warehouse_hint: extractWarehouseHint(question) || null,
     site_hint: extractSiteHint(question) || null,
     expense_type: extractExpenseType(question) || null,
     vendor_name: extractVendorName(question) || null,
@@ -246,6 +251,58 @@ function buildActionParsed(base, overrides = {}) {
 // =======================
 function detectAction(question, body = {}, base) {
   const text = normalizeArabicText(question);
+
+  if (includesAny(text, SYNONYMS.actions?.createTrip || [])) {
+    return buildActionParsed(base, {
+      module: "trips",
+      domain: "trips",
+      intent: "create_trip",
+      confidence: 0.95,
+      action_payload: {
+        client_hint: extractClientHint(question),
+        site_hint: extractSiteHint(question),
+      },
+    });
+  }
+
+  if (includesAny(text, SYNONYMS.actions?.assignDriver || [])) {
+    return buildActionParsed(base, {
+      module: "trips",
+      domain: "trips",
+      intent: "assign_trip_driver",
+      confidence: 0.95,
+      action_payload: {
+        trip_hint: extractTripHint(question),
+        driver_hint: extractDriverHint(question),
+      },
+    });
+  }
+
+  if (includesAny(text, SYNONYMS.actions?.createAdvance || [])) {
+    return buildActionParsed(base, {
+      module: "finance",
+      domain: "finance",
+      intent: "create_advance",
+      confidence: 0.95,
+      action_payload: {
+        amount: extractAmount(question),
+      },
+    });
+  }
+
+  if (includesAny(text, SYNONYMS.actions?.issuePart || [])) {
+    return buildActionParsed(base, {
+      module: "inventory",
+      domain: "inventory",
+      intent: "issue_part",
+      confidence: 0.95,
+      action_payload: {
+        part_hint: extractPartHint(question),
+        vehicle_hint: extractVehicleHint(question),
+        warehouse_hint: extractWarehouseHint(question),
+      },
+    });
+  }
 
   if (includesAny(text, SYNONYMS.actions?.createWorkOrder || [])) {
     return buildActionParsed(base, {
@@ -547,6 +604,23 @@ function parseFinance(question, base) {
     });
   }
 
+  if (
+    includesAny(text, SYNONYMS.finance?.advances || [])
+  ) {
+    return withQuery(base, {
+      module: "finance",
+      domain: "finance",
+      intent: "open_advances",
+      confidence: 0.9,
+      metric: "open_advances",
+      group_by: null,
+      options: {
+        ...base.options,
+        response_type: "table",
+      },
+    });
+  }
+
   return null;
 }
 
@@ -689,6 +763,24 @@ function parseMaintenance(question, base) {
         ...base.options,
         limit: finalLimit,
         response_type: finalLimit > 1 ? "table" : "summary",
+      },
+    });
+  }
+
+  if (
+    includesAny(text, SYNONYMS.maintenance?.licenseExpiry || [])
+  ) {
+    return withQuery(base, {
+      module: "maintenance",
+      domain: "maintenance",
+      intent: "vehicle_license_expiry",
+      confidence: 0.9,
+      metric: "expiring_licenses",
+      group_by: null,
+      options: {
+        ...base.options,
+        limit: limit || 10,
+        response_type: "table",
       },
     });
   }

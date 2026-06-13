@@ -263,6 +263,17 @@ function buildActionAnswer({ parsed, execution }) {
           )} جنيه. رقم المصروف: ${expenseId}.`;
     }
 
+    if (intent === "create_trip") {
+      const tripCode = execution?.data?.trip?.trip_code || "غير معروف";
+      const clientName = execution?.data?.trip?.client?.name || "العميل";
+      return `تم إنشاء رحلة بنجاح للعميل "${clientName}" برقم ${tripCode}.`;
+    }
+
+    if (intent === "create_advance") {
+      const amount = execution?.data?.cash_advance?.amount || 0;
+      return `تم إنشاء وتسجيل عهدة بنجاح بقيمة ${money(amount)} جنيه.`;
+    }
+
     return "تم تنفيذ الأمر بنجاح.";
   }
 
@@ -435,6 +446,10 @@ function buildUiMeta({ parsed, result, answer }) {
   else if (intent === "reference_previous_item") title = "عنصر من النتائج السابقة";
   else if (intent === "reference_previous_entity") title = "نفس الكيان السابق";
   else if (intent === "reference_previous_expand_limit") title = "توسيع النتائج السابقة";
+  else if (intent === "open_advances") title = "العهد المفتوحة";
+  else if (intent === "vehicle_license_expiry") title = "انتهاء رخص المركبات";
+  else if (intent === "create_trip") title = "إنشاء رحلة";
+  else if (intent === "create_advance") title = "تسجيل عهدة";
 
   return {
     mode: parsed?.mode || "unknown",
@@ -1093,6 +1108,35 @@ if (intent === "low_margin_trips") {
       result,
       answer: buildProfitAnswer(parsed, result),
     });
+  }
+
+  if (intent === "open_advances") {
+    const items = pickItems(result);
+    const totalAmount = pickValue(result, [["summary", "total_amount"], ["total_amount"]]) || 0;
+    
+    if (!items.length) {
+      return answerWithUi({ parsed, result, answer: "لا توجد عهد مفتوحة حاليًا." });
+    }
+
+    const answer = `يوجد ${items.length} عهد مفتوحة بقيمة إجمالية ${money(totalAmount)} جنيه.\n${
+      renderTopList(items, x => x.supervisor_name || "مشرف غير معروف", x => x.amount || 0)
+    }`;
+    
+    return answerWithUi({ parsed, result, answer });
+  }
+
+  if (intent === "vehicle_license_expiry") {
+    const items = pickItems(result);
+    
+    if (!items.length) {
+      return answerWithUi({ parsed, result, answer: "لا توجد رخص مركبات تقترب من الانتهاء." });
+    }
+
+    const answer = `يوجد ${items.length} مركبات تقترب رخصها من الانتهاء:\n${
+      items.map(x => `- المركبة "${x.display_name || x.plate_no}" تنتهي رخصتها بعد ${x.days_left} يوم.`).join('\n')
+    }`;
+    
+    return answerWithUi({ parsed, result, answer });
   }
 
   return answerWithUi({

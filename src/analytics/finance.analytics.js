@@ -548,6 +548,58 @@ async function getExpenseApprovalBreakdown({ companyId, range, scope, query = {}
   };
 }
 
+async function getOpenAdvances({ companyId, range, scope, query = {} }) {
+  const rows = await prisma.cash_advances.findMany({
+    where: {
+      company_id: companyId,
+      status: "OPEN",
+    },
+    select: {
+      id: true,
+      amount: true,
+      currency: true,
+      created_at: true,
+      supervisor_user: {
+        select: {
+          full_name: true,
+        },
+      },
+    },
+    orderBy: {
+      created_at: "desc",
+    },
+  });
+
+  const items = rows.map((r) => ({
+    advance_id: r.id,
+    supervisor_name: r.supervisor_user?.full_name || "غير محدد",
+    amount: toMoney(r.amount),
+    currency: r.currency || "EGP",
+    created_at: r.created_at,
+  }));
+
+  return {
+    metric: "open_advances",
+    range: {
+      from: range.from,
+      to: range.to,
+      key: range.key,
+    },
+    filters: {
+      company_id: companyId,
+      role: scope?.role || null,
+    },
+    data: {
+      items,
+    },
+    summary: {
+      currency: "EGP",
+      advances_count: items.length,
+      total_amount: toMoney(items.reduce((sum, item) => sum + item.amount, 0)),
+    },
+  };
+}
+
 module.exports = {
   getExpenseSummary,
   getExpenseByType,
@@ -555,4 +607,5 @@ module.exports = {
   getExpenseByPaymentSource,
   getTopVendors,
   getExpenseApprovalBreakdown,
+  getOpenAdvances,
 };

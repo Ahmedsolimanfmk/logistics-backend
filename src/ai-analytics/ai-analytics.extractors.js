@@ -93,6 +93,31 @@ function extractWorkOrderHint(question) {
   ]);
 }
 
+function extractDriverHint(question) {
+  const raw = toRawText(question);
+
+  return matchFirst(raw, [
+    /(?:للسائق|لسائق|سائق|السائق|السواق|سواق|للسواق)\s+([^\n\r,.]+)/i,
+  ]);
+}
+
+function extractWarehouseHint(question) {
+  const raw = toRawText(question);
+
+  return matchFirst(raw, [
+    /(?:من مخزن|مخزن|المخزن|مستودع|المستودع)\s+([^\n\r,.]+)/i,
+  ]);
+}
+
+function extractPartHint(question) {
+  const raw = toRawText(question);
+
+  return matchFirst(raw, [
+    /(?:قطعة غيار|قطعة|قطعه|القطعة|القطعه|صنف|الصنف)\s+([^\n\r,.]+)/i,
+    /(?:تغيير|تركيب|صرف)\s+([^\n\r,.]+)\s+(للمركبة|للمركبه|للسيارة|للسياره)/i,
+  ]);
+}
+
 function extractExpenseType(question) {
   const text = normalizeArabicText(question);
 
@@ -199,4 +224,7 @@ module.exports = {
   extractTitle,
   extractVendorName,
   extractPaidMethod,
+  extractDriverHint,
+  extractPartHint,
+  extractWarehouseHint,
 };

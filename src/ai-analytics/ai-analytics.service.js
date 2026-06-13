@@ -327,6 +327,12 @@ async function getAiInsights({ companyId, user, query }) {
       user,
       query: { range: "last_month" },
     });
+
+    data.openAdvances = await analyticsService.getOpenAdvances({
+      companyId,
+      user,
+      query: { limit: 10 },
+    });
   }
 
   if (!context || context === "ar") {
@@ -354,6 +360,12 @@ async function getAiInsights({ companyId, user, query }) {
       companyId,
       user,
       query: { range: "this_month", limit: 5 },
+    });
+
+    data.expiringLicenses = await analyticsService.getExpiringLicenses({
+      companyId,
+      user,
+      query: { limit: 10 },
     });
   }
 
@@ -421,21 +433,11 @@ async function getAiInsights({ companyId, user, query }) {
     insights,
   };
 }
-async function getTripProfitSummary({ companyId, user, query = {} }) {
-  const ctx = buildContext(companyId, user, query);
 
-  return profitAnalytics.getTripProfitSummary({
-    companyId: ctx.companyId,
-    range: ctx.range,
-    scope: ctx.scope,
-    tripHint: query.trip_hint,
-    query: ctx.query,
-  });
-}
 
 module.exports = {
   queryAiAnalytics,
   getAiSuggestedQuestions,
   getAiInsights,
-  getTripProfitSummary,
+
 };

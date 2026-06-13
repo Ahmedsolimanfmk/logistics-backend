@@ -932,6 +932,256 @@ async function createExpenseExecutor({ companyId, user, payload }) {
 }
 
 // =======================
+// REAL Executor: Create Advance
+// =======================
+async function createAdvanceExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const userId = getUserId(user);
+  if (!userId) return buildError("Unauthorized", payload);
+
+  const role = user?.role || null;
+  if (!isAdminOrAccountant(role)) {
+    return buildError("Only ADMIN or ACCOUNTANT can create cash advances via AI", payload);
+  }
+
+  const amount = Number(payload?.amount || 0);
+  if (!amount || amount <= 0) return buildError("يجب تحديد مبلغ العهدة", payload);
+
+  const assignment = await prisma.supervisor_assignments.findFirst({
+    where: { company_id: companyId, is_active: true },
+    select: { supervisor_id: true },
+  });
+
+  if (!assignment) {
+    return buildError("No active supervisor found to assign advance to", payload);
+  }
+
+  const created = await prisma.cash_advances.create({
+    data: {
+      company_id: companyId,
+      field_supervisor_id: assignment.supervisor_id,
+      issued_by: userId,
+      amount,
+      currency: "EGP",
+      status: "OPEN",
+    },
+    select: {
+      id: true,
+      amount: true,
+      status: true,
+    },
+  });
+
+  return buildSuccess("createAdvanceExecutor", {
+    cash_advance: created,
+  });
+}
+
+// =======================
+// REAL Executor: Create Trip
+// =======================
+async function createTripExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const userId = getUserId(user);
+  if (!userId) return buildError("Unauthorized", payload);
+
+  const clientHint = cleanText(payload?.client_hint);
+  
+  let client = null;
+  if (clientHint) {
+    client = await prisma.clients.findFirst({
+      where: { company_id: companyId, name: { contains: clientHint, mode: "insensitive" }, is_active: true },
+      select: { id: true, name: true }
+    });
+  }
+
+  if (!client) {
+    client = await prisma.clients.findFirst({
+      where: { company_id: companyId, is_active: true },
+      select: { id: true, name: true }
+    });
+  }
+
+  if (!client) {
+    return buildError("No active clients found to create trip", payload);
+  }
+
+  const siteHint = cleanText(payload?.site_hint);
+  let site = null;
+
+  if (siteHint) {
+    site = await prisma.sites.findFirst({
+      where: { company_id: companyId, client_id: client.id, name: { contains: siteHint, mode: "insensitive" }, is_active: true },
+      select: { id: true, name: true }
+    });
+  }
+
+  if (!site) {
+    site = await prisma.sites.findFirst({
+      where: { company_id: companyId, client_id: client.id, is_active: true },
+      select: { id: true, name: true }
+    });
+  }
+
+  if (!site) {
+    return buildError("No active sites found for client", payload);
+  }
+
+  const tripCode = "TRP-AI-" + Math.floor(Math.random() * 1000000);
+
+  const created = await prisma.trips.create({
+    data: {
+      company_id: companyId,
+      client_id: client.id,
+      site_id: site.id,
+      created_by: userId,
+      trip_code: tripCode,
+      status: "DRAFT",
+      financial_status: "OPEN",
+    },
+    select: {
+      id: true,
+      trip_code: true,
+      status: true,
+      client: { select: { name: true } },
+      site: { select: { name: true } },
+    },
+  });
+
+  return buildSuccess("createTripExecutor", {
+    trip: created,
+  });
+}
+
+// =======================
+// REAL Executor: Assign Driver
+// =======================
+async function assignTripDriverExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const tripHint = cleanText(payload?.trip_hint);
+  const driverHint = cleanText(payload?.driver_hint);
+
+  if (!tripHint) return buildError("يجب تحديد رقم أو كود الرحلة", payload);
+  if (!driverHint) return buildError("يجب تحديد اسم السائق", payload);
+
+  const trip = await resolveTripByHint({ companyId, tripHint });
+  if (!trip) return buildError(`لم يتم العثور على رحلة تطابق: ${tripHint}`, payload);
+
+  const driver = await prisma.drivers.findFirst({
+    where: { company_id: companyId, full_name: { contains: driverHint, mode: "insensitive" }, status: "ACTIVE" },
+    select: { id: true, full_name: true }
+  });
+
+  if (!driver) return buildError(`لم يتم العثور على سائق يطابق: ${driverHint}`, payload);
+
+  const existingAssignment = await prisma.trip_assignments.findFirst({
+    where: { company_id: companyId, trip_id: trip.id, is_active: true },
+    select: { id: true, vehicle_id: true }
+  });
+
+  if (!existingAssignment) {
+    return buildError("لا توجد مركبة معينة على هذه الرحلة. يرجى تعيين مركبة أولاً.", payload);
+  }
+
+  const updated = await prisma.trip_assignments.update({
+    where: { id: existingAssignment.id },
+    data: { driver_id: driver.id },
+    select: { id: true, driver: { select: { full_name: true } } }
+  });
+
+  return buildSuccess("assignTripDriverExecutor", {
+    trip,
+    driver: updated.driver
+  });
+}
+
+// =======================
+// REAL Executor: Issue Part
+// =======================
+async function issuePartExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const userId = getUserId(user);
+  if (!userId) return buildError("Unauthorized", payload);
+
+  const partHint = cleanText(payload?.part_hint);
+  const vehicleHint = cleanText(payload?.vehicle_hint);
+  const warehouseHint = cleanText(payload?.warehouse_hint);
+
+  if (!partHint) return buildError("يجب تحديد القطعة المراد صرفها", payload);
+  if (!vehicleHint) return buildError("يجب تحديد المركبة", payload);
+  if (!warehouseHint) return buildError("يجب تحديد المخزن (مثال: من المخزن الرئيسي)", payload);
+
+  const vehicle = await resolveVehicleByHint({ companyId, vehicleHint });
+  if (!vehicle) return buildError(`لم يتم العثور على مركبة: ${vehicleHint}`, payload);
+
+  const part = await prisma.parts.findFirst({
+    where: { company_id: companyId, name: { contains: partHint, mode: "insensitive" }, is_active: true },
+    select: { id: true, name: true }
+  });
+
+  if (!part) return buildError(`لم يتم العثور على قطعة: ${partHint}`, payload);
+
+  const warehouse = await prisma.warehouses.findFirst({
+    where: { company_id: companyId, name: { contains: warehouseHint, mode: "insensitive" }, is_active: true },
+    select: { id: true, name: true }
+  });
+
+  if (!warehouse) return buildError(`لم يتم العثور على مخزن: ${warehouseHint}`, payload);
+
+  const now = new Date();
+  
+  const workOrder = await prisma.maintenance_work_orders.findFirst({
+    where: { company_id: companyId, vehicle_id: vehicle.id, status: "OPEN" },
+    select: { id: true }
+  });
+
+  if (!workOrder) {
+    return buildError("المركبة ليس لديها أمر عمل صيانة مفتوح للصرف عليه.", payload);
+  }
+
+  const issue = await prisma.inventory_issues.create({
+    data: {
+      company_id: companyId,
+      work_order_id: workOrder.id,
+      warehouse_id: warehouse.id,
+      issued_by: userId,
+      issued_at: now,
+      status: "DRAFT",
+      notes: "تم الإنشاء عبر المساعد الذكي",
+      inventory_issue_lines: {
+        create: [
+          {
+            company_id: companyId,
+            part_id: part.id,
+            qty: 1,
+            notes: "AI Issue"
+          }
+        ]
+      }
+    },
+    select: {
+      id: true,
+      status: true
+    }
+  });
+
+  return buildSuccess("issuePartExecutor", {
+    issue,
+    part,
+    vehicle: buildVehicleSummary(vehicle),
+    warehouse
+  });
+}
+
+// =======================
 // Dispatcher
 // =======================
 async function runAiExecutor({ action, companyId, user, payload }) {
@@ -939,6 +1189,10 @@ async function runAiExecutor({ action, companyId, user, payload }) {
     create_maintenance_request: createMaintenanceRequestExecutor,
     create_work_order: createWorkOrderExecutor,
     create_expense: createExpenseExecutor,
+    create_advance: createAdvanceExecutor,
+    create_trip: createTripExecutor,
+    assign_trip_driver: assignTripDriverExecutor,
+    issue_part: issuePartExecutor,
   };
 
   const executor = executors[action];
@@ -969,4 +1223,8 @@ module.exports = {
   createMaintenanceRequestExecutor,
   createWorkOrderExecutor,
   createExpenseExecutor,
+  createAdvanceExecutor,
+  createTripExecutor,
+  assignTripDriverExecutor,
+  issuePartExecutor,
 };

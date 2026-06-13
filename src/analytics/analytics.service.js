@@ -100,6 +100,17 @@ async function getFinanceExpenseApprovalBreakdown({
   });
 }
 
+async function getFinanceOpenAdvances({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return financeAnalytics.getOpenAdvances({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    query: ctx.query,
+  });
+}
+
 // =======================
 // AR
 // =======================
@@ -146,6 +157,18 @@ async function getMaintenanceCostByVehicle({ companyId, user, query = {} }) {
   const ctx = buildContext(companyId, user, query);
 
   return maintenanceAnalytics.getCostByVehicle({
+    companyId: ctx.companyId,
+    range: ctx.range,
+    scope: ctx.scope,
+    limit: resolveLimit(query, 10, 50),
+    query: ctx.query,
+  });
+}
+
+async function getMaintenanceExpiringLicenses({ companyId, user, query = {} }) {
+  const ctx = buildContext(companyId, user, query);
+
+  return maintenanceAnalytics.getExpiringLicenses({
     companyId: ctx.companyId,
     range: ctx.range,
     scope: ctx.scope,
@@ -339,12 +362,14 @@ module.exports = {
   getFinanceExpenseByPaymentSource,
   getFinanceTopVendors,
   getFinanceExpenseApprovalBreakdown,
+  getFinanceOpenAdvances,
 
   getArOutstandingSummary,
   getArTopDebtors,
 
   getMaintenanceOpenWorkOrders,
   getMaintenanceCostByVehicle,
+  getMaintenanceExpiringLicenses,
 
   getInventoryTopIssuedParts,
   getInventoryLowStockItems,

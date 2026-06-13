@@ -109,12 +109,14 @@ async function executeParsedQuery({ companyId, user, parsed }) {
     expense_by_payment_source: analyticsService.getFinanceExpenseByPaymentSource,
     top_vendors: analyticsService.getFinanceTopVendors,
     expense_approval_breakdown: analyticsService.getFinanceExpenseApprovalBreakdown,
+    open_advances: analyticsService.getFinanceOpenAdvances,
 
     outstanding_summary: analyticsService.getArOutstandingSummary,
     top_debtors: analyticsService.getArTopDebtors,
 
     open_work_orders: analyticsService.getMaintenanceOpenWorkOrders,
     maintenance_cost_by_vehicle: analyticsService.getMaintenanceCostByVehicle,
+    vehicle_license_expiry: analyticsService.getMaintenanceExpiringLicenses,
 
     top_issued_parts: analyticsService.getInventoryTopIssuedParts,
     low_stock_items: analyticsService.getInventoryLowStockItems,
@@ -126,7 +128,6 @@ async function executeParsedQuery({ companyId, user, parsed }) {
     top_sites_by_trips: analyticsService.getTopSitesByTrips,
     top_vehicles_by_trips: analyticsService.getTopVehiclesByTrips,
     trips_profit_summary: analyticsService.getTripsProfitSummary,
-    trip_profit_summary: analyticsService.getTripProfitSummary,
     trip_profit_summary: analyticsService.getTripProfitSummary,
     top_profitable_trips: analyticsService.getTopProfitableTrips,
     worst_trips_by_profit: analyticsService.getWorstTrips,

@@ -81,6 +81,16 @@ function buildFinanceInsights(data = {}) {
     );
   }
 
+  const openAdvances = pickItems(data?.openAdvances);
+  if (openAdvances.length > 0) {
+    pushInsight(
+      items,
+      "finance_advances",
+      "warning",
+      `⚠️ يوجد ${openAdvances.length} عهد مفتوحة لم تتم تسويتها.`
+    );
+  }
+
   return items;
 }
 
@@ -123,6 +133,16 @@ function buildMaintenanceInsights(data = {}) {
       : "لا توجد أوامر عمل مفتوحة."
   );
 
+  const expiringLicenses = pickItems(data?.expiringLicenses);
+  if (expiringLicenses.length > 0) {
+    pushInsight(
+      items,
+      "maintenance_licenses",
+      "error",
+      `⚠️ احذر: يوجد ${expiringLicenses.length} مركبات تقترب رخصتها من الانتهاء!`
+    );
+  }
+
   return items;
 }
 
@@ -156,6 +176,22 @@ function buildTripsInsights(data = {}) {
       "trips_total",
       "info",
       `إجمالي الرحلات هو ${total}.`
+    );
+  }
+
+  const needsClosureCount = pickNumber(data?.tripsNeedFinancialClosure, [
+    ["data", "total_need_financial_closure"],
+    ["total_need_financial_closure"],
+    ["data", "count"],
+    ["count"]
+  ]) || pickItems(data?.tripsNeedFinancialClosure).length;
+
+  if (needsClosureCount > 0) {
+    pushInsight(
+      items,
+      "trips_closure",
+      "warning",
+      `⚠️ تنبيه: يوجد ${needsClosureCount} رحلة غير مغلقة مالياً.`
     );
   }
 

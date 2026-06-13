@@ -195,7 +195,59 @@ async function getCostByVehicle({ companyId, range, scope, limit = 10 }) {
   };
 }
 
+async function getExpiringLicenses({ companyId, range, scope, limit = 10, query = {} }) {
+  const now = new Date();
+  const next30Days = new Date();
+  next30Days.setDate(next30Days.getDate() + 30);
+
+  const rows = await prisma.vehicles.findMany({
+    where: {
+      company_id: companyId,
+      license_expiry_date: {
+        gte: now,
+        lte: next30Days,
+      },
+    },
+    select: {
+      id: true,
+      fleet_no: true,
+      plate_no: true,
+      display_name: true,
+      license_expiry_date: true,
+    },
+    orderBy: {
+      license_expiry_date: "asc",
+    },
+    take: limit,
+  });
+
+  const items = rows.map((r) => ({
+    vehicle_id: r.id,
+    fleet_no: r.fleet_no,
+    plate_no: r.plate_no,
+    display_name: r.display_name,
+    license_expiry_date: r.license_expiry_date,
+    days_left: Math.max(0, Math.ceil((r.license_expiry_date - now) / (1000 * 60 * 60 * 24))),
+  }));
+
+  return {
+    metric: "vehicle_license_expiry",
+    range: {
+      from: range.from,
+      to: range.to,
+      key: range.key,
+    },
+    filters: {
+      company_id: companyId,
+      role: scope?.role || null,
+    },
+    data: { items },
+    summary: { vehicles_count: items.length },
+  };
+}
+
 module.exports = {
   getOpenWorkOrders,
   getCostByVehicle,
+  getExpiringLicenses,
 };
