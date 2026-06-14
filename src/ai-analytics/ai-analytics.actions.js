@@ -1182,6 +1182,105 @@ async function issuePartExecutor({ companyId, user, payload }) {
 }
 
 // =======================
+// REAL Executor: Create Invoice (AR)
+// =======================
+async function createInvoiceExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const userId = getUserId(user);
+  if (!userId) return buildError("Unauthorized", payload);
+
+  const clientHint = cleanText(payload?.client_hint);
+  if (!clientHint) return buildError("يجب تحديد اسم العميل", payload);
+
+  const amount = Number(payload?.amount || 0);
+  if (!amount || amount <= 0) return buildError("يجب تحديد مبلغ الفاتورة", payload);
+
+  const client = await prisma.clients.findFirst({
+    where: { company_id: companyId, name: { contains: clientHint, mode: "insensitive" }, is_active: true },
+    select: { id: true, name: true }
+  });
+
+  if (!client) return buildError(`لم يتم العثور على عميل: ${clientHint}`, payload);
+
+  const invoiceNo = "INV-AI-" + Math.floor(Math.random() * 1000000);
+
+  const created = await prisma.ar_invoices.create({
+    data: {
+      company_id: companyId,
+      client_id: client.id,
+      invoice_no: invoiceNo,
+      issue_date: new Date(),
+      amount: amount,
+      total_amount: amount,
+      status: "DRAFT",
+      created_by: userId,
+      notes: "تم الإنشاء عبر المساعد الذكي",
+    },
+    select: {
+      id: true,
+      invoice_no: true,
+      amount: true,
+      status: true,
+      client: { select: { name: true } }
+    }
+  });
+
+  return buildSuccess("createInvoiceExecutor", {
+    invoice: created
+  });
+}
+
+// =======================
+// REAL Executor: Create Payment (AR)
+// =======================
+async function createPaymentExecutor({ companyId, user, payload }) {
+  const companyError = requireCompanyId(companyId, payload);
+  if (companyError) return companyError;
+
+  const userId = getUserId(user);
+  if (!userId) return buildError("Unauthorized", payload);
+
+  const clientHint = cleanText(payload?.client_hint);
+  if (!clientHint) return buildError("يجب تحديد اسم العميل", payload);
+
+  const amount = Number(payload?.amount || 0);
+  if (!amount || amount <= 0) return buildError("يجب تحديد مبلغ الدفعة", payload);
+
+  const client = await prisma.clients.findFirst({
+    where: { company_id: companyId, name: { contains: clientHint, mode: "insensitive" }, is_active: true },
+    select: { id: true, name: true }
+  });
+
+  if (!client) return buildError(`لم يتم العثور على عميل: ${clientHint}`, payload);
+
+  const created = await prisma.ar_payments.create({
+    data: {
+      company_id: companyId,
+      client_id: client.id,
+      payment_date: new Date(),
+      amount: amount,
+      method: "BANK_TRANSFER",
+      status: "DRAFT",
+      created_by: userId,
+      notes: "سداد محول من البنك (عبر المساعد الذكي)",
+    },
+    select: {
+      id: true,
+      amount: true,
+      method: true,
+      status: true,
+      client: { select: { name: true } }
+    }
+  });
+
+  return buildSuccess("createPaymentExecutor", {
+    payment: created
+  });
+}
+
+// =======================
 // Dispatcher
 // =======================
 async function runAiExecutor({ action, companyId, user, payload }) {
@@ -1193,6 +1292,8 @@ async function runAiExecutor({ action, companyId, user, payload }) {
     create_trip: createTripExecutor,
     assign_trip_driver: assignTripDriverExecutor,
     issue_part: issuePartExecutor,
+    create_invoice: createInvoiceExecutor,
+    create_payment: createPaymentExecutor,
   };
 
   const executor = executors[action];
@@ -1227,4 +1328,6 @@ module.exports = {
   createTripExecutor,
   assignTripDriverExecutor,
   issuePartExecutor,
+  createInvoiceExecutor,
+  createPaymentExecutor,
 };

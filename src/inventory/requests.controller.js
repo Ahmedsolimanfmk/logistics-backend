@@ -395,8 +395,8 @@ async function approveRequest(req, res) {
                   part_id: partId,
                   part_item_id: item.id,
                   qty: 1,
-                  unit_cost: null,
-                  total_cost: null,
+                  unit_cost: ln.part?.default_unit_cost ?? 0,
+                  total_cost: Number(ln.part?.default_unit_cost ?? 0),
                   notes: ln.notes || null,
                 },
               })
@@ -467,8 +467,8 @@ async function approveRequest(req, res) {
             part_id: partId,
             part_item_id: null,
             qty,
-            unit_cost: null,
-            total_cost: null,
+            unit_cost: ln.part?.default_unit_cost ?? 0,
+            total_cost: Number(ln.part?.default_unit_cost ?? 0) * qty,
             notes: ln.notes || null,
           },
         });

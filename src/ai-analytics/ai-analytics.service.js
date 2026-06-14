@@ -328,7 +328,7 @@ async function getAiInsights({ companyId, user, query }) {
       query: { range: "last_month" },
     });
 
-    data.openAdvances = await analyticsService.getOpenAdvances({
+    data.openAdvances = await analyticsService.getFinanceOpenAdvances({
       companyId,
       user,
       query: { limit: 10 },
@@ -362,7 +362,7 @@ async function getAiInsights({ companyId, user, query }) {
       query: { range: "this_month", limit: 5 },
     });
 
-    data.expiringLicenses = await analyticsService.getExpiringLicenses({
+    data.expiringLicenses = await analyticsService.getMaintenanceExpiringLicenses({
       companyId,
       user,
       query: { limit: 10 },

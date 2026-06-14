@@ -21,6 +21,8 @@ const {
   toggleVehicle,
   deleteVehicle,
   getVehicleSummary,
+  getFleetDashboard,
+  getFleetExpenses
 } = require("./vehicles.controller");
 
 const router = Router();
@@ -33,10 +35,16 @@ router.use(requireCompany);
 router.use(requireCompanyActive);
 
 // =====================
+// DASHBOARD
+// =====================
+router.get("/dashboard", requireCompanyFeature("vehicles.access"), getFleetDashboard);
+
+// =====================
 // LIST
 // =====================
 router.get("/", requireCompanyFeature("vehicles.access"), getVehicles);
 router.get("/active", requireCompanyFeature("vehicles.access"), getActiveVehicles);
+router.get("/expenses", requireCompanyFeature("vehicles.access"), getFleetExpenses);
 
 // =====================
 // CREATE (WITH LIMIT)

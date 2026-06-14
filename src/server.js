@@ -13,6 +13,7 @@ const { authRequired } = require("./auth/jwt.middleware");
 // Routes
 const adminRoutes = require("./admin/admin.routes");
 const authRoutes = require("./auth/auth.routes");
+const assignmentsRoutes = require("./vehicles/assignments.routes");
 const vehiclesRoutes = require("./vehicles/vehicles.routes");
 const tripsRoutes = require("./trips/trips.routes");
 const driversRoutes = require("./drivers/drivers.routes");
@@ -35,6 +36,7 @@ const pricingRoutes = require("./pricing/pricing.routes");
 const contractPricingRoutes = require("./contract-pricing/contract-pricing.routes");
 const companiesRoutes = require("./companies/companies.routes");
 const driverCustodyRoutes = require("./driver-custody/driver-custody.routes");
+const notificationsRoutes = require("./notifications/notifications.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -114,10 +116,11 @@ app.use("/contract-pricing", authRequired, contractPricingRoutes);
 app.use("/companies", authRequired, companiesRoutes);
 app.use("/admin", authRequired, adminRoutes);
 
-// Public (حسب قرارك)
 app.use("/sites", sitesRoutes);
 app.use("/clients", clientsRoutes);
 app.use("/driver-custody", authRequired, driverCustodyRoutes);
+app.use("/assignments", authRequired, assignmentsRoutes);
+app.use("/notifications", authRequired, notificationsRoutes);
 
 // =======================
 // Health check

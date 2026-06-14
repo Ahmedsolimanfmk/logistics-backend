@@ -379,12 +379,24 @@ async function getWorkOrderById(req, res) {
         post_maintenance_reports: true,
       },
     });
-
     if (!row) return res.status(404).json({ message: "Work order not found" });
 
     await assertMaintenanceVehicleAccess({ req, vehicleId: row.vehicle_id });
 
-    return res.json({ work_order: normalizeWorkOrderRow(row) });
+    const partsAgg = await prisma.inventory_issue_lines.aggregate({
+      _sum: { total_cost: true },
+      where: {
+        company_id: companyId,
+        issue: { work_order_id: id, status: "POSTED" }
+      }
+    });
+
+    const total_parts_cost = Number(partsAgg._sum?.total_cost || 0);
+
+    const work_order = normalizeWorkOrderRow(row);
+    work_order.total_parts_cost = total_parts_cost;
+
+    return res.json({ work_order });
   } catch (e) {
     const sc = e?.statusCode || 500;
     if (sc !== 500) return res.status(sc).json({ message: e.message });

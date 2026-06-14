@@ -180,6 +180,8 @@ async function listIssuedParts(req, res) {
         warehouse: line.issue?.warehouse || null,
         work_order: line.issue?.work_order || null,
         issued_qty: 0,
+        unit_cost: 0,
+        total_cost: 0,
         issued_at: null,
         serial_items: [],
       };
@@ -187,6 +189,8 @@ async function listIssuedParts(req, res) {
       prev.issue_ids.add(line.issue_id);
       prev.issue_line_ids.push(line.id);
       prev.issued_qty += toNum(line.qty);
+      prev.total_cost += toNum(line.total_cost);
+      if (!prev.unit_cost) prev.unit_cost = toNum(line.unit_cost);
 
       if (
         !prev.issued_at ||
@@ -234,6 +238,8 @@ async function listIssuedParts(req, res) {
         issued_qty: issuedQty,
         installed_qty: installedQty,
         remaining_qty: remainingQty,
+        unit_cost: row.unit_cost,
+        total_cost: row.total_cost,
 
         issued_at: row.issued_at,
         last_installed_at: installed.last_installed_at,

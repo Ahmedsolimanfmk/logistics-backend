@@ -364,6 +364,34 @@ function detectAction(question, body = {}, base) {
     });
   }
 
+  if (includesAny(text, SYNONYMS.actions?.createInvoice || [])) {
+    return buildActionParsed(base, {
+      module: "ar",
+      domain: "ar",
+      intent: "create_invoice",
+      confidence: 0.95,
+      action_payload: {
+        client_hint: extractClientHint(question),
+        amount: extractAmount(question),
+        notes: String(question || "").trim(),
+      },
+    });
+  }
+
+  if (includesAny(text, SYNONYMS.actions?.createPayment || [])) {
+    return buildActionParsed(base, {
+      module: "ar",
+      domain: "ar",
+      intent: "create_payment",
+      confidence: 0.95,
+      action_payload: {
+        client_hint: extractClientHint(question),
+        amount: extractAmount(question),
+        notes: String(question || "").trim(),
+      },
+    });
+  }
+
   return null;
 }
 

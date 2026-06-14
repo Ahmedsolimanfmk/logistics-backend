@@ -6,8 +6,94 @@
 
 const prisma = require("../prisma");
 
-// =======================
-// Helpers
+// =====================
+// FLEET DASHBOARD
+// =====================
+exports.getFleetDashboard = async (req, res, next) => {
+  try {
+    const companyId = req.companyId;
+
+    // 1. Vehicle Stats
+    const vehicleStats = await prisma.vehicles.groupBy({
+      by: ["status"],
+      where: { company_id: companyId },
+      _count: { id: true },
+    });
+
+    const vData = { total: 0, ACTIVE: 0, IN_MAINTENANCE: 0, IDLE: 0 };
+    vehicleStats.forEach(v => {
+      vData[v.status] = v._count.id;
+      vData.total += v._count.id;
+    });
+
+    // 2. Driver Stats
+    const driverStats = await prisma.drivers.groupBy({
+      by: ["status"],
+      where: { company_id: companyId },
+      _count: { id: true },
+    });
+    
+    const dData = { total: 0, active: 0, inactive: 0 };
+    driverStats.forEach(d => {
+      if (d.status === "ACTIVE") dData.active += d._count.id;
+      else dData.inactive += d._count.id;
+      dData.total += d._count.id;
+    });
+
+    // 3. Maintenance Stats
+    const maintenanceStats = await prisma.maintenance_requests.groupBy({
+      by: ["status"],
+      where: { company_id: companyId },
+      _count: { id: true }
+    });
+
+    const mData = { total: 0, PENDING: 0, APPROVED: 0, COMPLETED: 0, REJECTED: 0 };
+    maintenanceStats.forEach(m => {
+      mData[m.status] = m._count.id;
+      mData.total += m._count.id;
+    });
+
+    // 4. Expiring Licenses (Vehicles) - Next 30 days
+    const nextMonth = new Date();
+    nextMonth.setDate(nextMonth.getDate() + 30);
+    const expiringVehicles = await prisma.vehicles.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: { lte: nextMonth, gte: new Date() }
+      },
+      select: { id: true, plate_no: true, license_expiry_date: true },
+      take: 10,
+      orderBy: { license_expiry_date: "asc" }
+    });
+
+    // 5. Expiring Licenses (Drivers)
+    const expiringDrivers = await prisma.drivers.findMany({
+      where: {
+        company_id: companyId,
+        license_expiry_date: { lte: nextMonth, gte: new Date() }
+      },
+      select: { id: true, full_name: true, license_expiry_date: true },
+      take: 10,
+      orderBy: { license_expiry_date: "asc" }
+    });
+
+    res.json({
+      vehicles: vData,
+      drivers: dData,
+      maintenance: mData,
+      expiring: {
+        vehicles: expiringVehicles,
+        drivers: expiringDrivers
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// =====================
+// LIST VEHICLES
 // =======================
 
 function normalizeText(input) {
@@ -632,6 +718,59 @@ async function getVehicleSummary(req, res) {
   }
 }
 
+// =====================
+// GET FLEET EXPENSES
+// =====================
+exports.getFleetExpenses = async (req, res, next) => {
+  try {
+    const companyId = req.companyId;
+    const { vehicle_id, start_date, end_date } = req.query;
+
+    const where = { company_id: companyId, vehicle_id: { not: null } };
+    if (vehicle_id) where.vehicle_id = vehicle_id;
+    if (start_date || end_date) {
+      where.created_at = {};
+      if (start_date) where.created_at.gte = new Date(start_date);
+      if (end_date) where.created_at.lte = new Date(end_date);
+    }
+
+    const rawExpenses = await prisma.cash_expenses.groupBy({
+      by: ["vehicle_id", "expense_type"],
+      where,
+      _sum: { amount: true },
+    });
+
+    const vehicleIds = [...new Set(rawExpenses.map(e => e.vehicle_id))];
+    const vehicles = await prisma.vehicles.findMany({
+      where: { id: { in: vehicleIds }, company_id: companyId },
+      select: { id: true, fleet_no: true, plate_no: true, display_name: true }
+    });
+    
+    const vehiclesMap = {};
+    vehicles.forEach(v => { vehiclesMap[v.id] = v; });
+
+    const reportByVehicle = {};
+    let grandTotal = 0;
+
+    rawExpenses.forEach(exp => {
+      const vid = exp.vehicle_id;
+      if (!reportByVehicle[vid]) {
+        reportByVehicle[vid] = { vehicle: vehiclesMap[vid], total: 0, breakdown: {} };
+      }
+      const amount = Number(exp._sum.amount) || 0;
+      reportByVehicle[vid].breakdown[exp.expense_type] = amount;
+      reportByVehicle[vid].total += amount;
+      grandTotal += amount;
+    });
+
+    const reportArray = Object.values(reportByVehicle).sort((a, b) => b.total - a.total);
+
+    return res.json({ items: reportArray, grandTotal, filters: { start_date, end_date, vehicle_id } });
+  } catch (e) {
+    next(e);
+  }
+};
+
 module.exports = {
   getActiveVehicles,
   getVehicles,
@@ -641,4 +780,6 @@ module.exports = {
   updateVehicle,
   toggleVehicle,
   deleteVehicle,
+  getFleetDashboard: exports.getFleetDashboard,
+  getFleetExpenses: exports.getFleetExpenses
 };

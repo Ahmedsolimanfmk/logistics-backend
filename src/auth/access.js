@@ -29,7 +29,8 @@ function hasRole(userOrReq, ...allowedRoles) {
 }
 
 function isSuperAdmin(userOrReq) {
-  return hasRole(userOrReq, PLATFORM_ROLES.SUPER_ADMIN);
+  const src = userOrReq?.user ? userOrReq.user : userOrReq;
+  return roleUpper(src?.platform_role) === PLATFORM_ROLES.SUPER_ADMIN;
 }
 
 function isAdmin(userOrReq) {

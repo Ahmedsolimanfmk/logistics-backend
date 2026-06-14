@@ -15,8 +15,8 @@ const partItemsCtrl = require("./partItems.controller");
 const requestsCtrl = require("./requests.controller");
 const issuesCtrl = require("./issues.controller");
 const stockCtrl = require("./stock.controller");
-// ✅ NEW
 const categoriesCtrl = require("./categories.controller");
+const dashboardCtrl = require("./dashboard.controller");
 
 const router = express.Router();
 
@@ -25,6 +25,9 @@ router.use(authRequired);
 router.use(requireCompany);
 router.use(requireCompanyActive);
 router.use(requireCompanyFeature("inventory.access"));
+
+// ---------- Dashboard ----------
+router.get("/dashboard", dashboardCtrl.getInventoryDashboard);
 
 // ---------- Warehouses ----------
 router.get("/warehouses", warehousesCtrl.listWarehouses);
