@@ -346,16 +346,17 @@ exports.updateCompany = async (req, res, next) => {
 exports.updateFeatures = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { fleet_enabled, inventory_enabled, custody_enabled } = req.body;
+    const { fleet_enabled, inventory_enabled, custody_enabled, fuel_enabled } = req.body;
 
     const features = await prisma.company_features.upsert({
       where: { company_id: id },
-      update: { fleet_enabled, inventory_enabled, custody_enabled },
+      update: { fleet_enabled, inventory_enabled, custody_enabled, fuel_enabled },
       create: {
         company_id: id,
         fleet_enabled,
         inventory_enabled,
-        custody_enabled
+        custody_enabled,
+        fuel_enabled
       }
     });
 
@@ -508,15 +509,15 @@ exports.getCompanyStats = async (req, res, next) => {
 exports.updateFeatures = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { fleet_enabled, inventory_enabled, custody_enabled } = req.body;
+    const { fleet_enabled, inventory_enabled, custody_enabled, fuel_enabled } = req.body;
 
     const company = await prisma.companies.findUnique({ where: { id } });
     if (!company) return res.status(404).json({ message: "Company not found" });
 
     const updated = await prisma.company_features.upsert({
       where: { company_id: id },
-      create: { company_id: id, fleet_enabled, inventory_enabled, custody_enabled },
-      update: { fleet_enabled, inventory_enabled, custody_enabled }
+      create: { company_id: id, fleet_enabled, inventory_enabled, custody_enabled, fuel_enabled },
+      update: { fleet_enabled, inventory_enabled, custody_enabled, fuel_enabled }
     });
 
     res.json({ message: "Features updated", features: updated });

@@ -130,6 +130,8 @@ router.post("/login", async (req, res) => {
       is_impersonating: false,
     });
 
+    const features = companyId ? await prisma.company_features.findUnique({ where: { company_id: companyId } }) : null;
+
     return res.json({
       token,
       user: {
@@ -146,6 +148,7 @@ router.post("/login", async (req, res) => {
         company_name: companyName,
 
         is_impersonating: false,
+        features
       },
     });
   } catch (e) {
@@ -233,11 +236,14 @@ router.post("/switch-company", authRequired, async (req, res) => {
       is_impersonating: isSuperAdmin,
     });
 
+    const features = company_id ? await prisma.company_features.findUnique({ where: { company_id } }) : null;
+
     return res.json({
       token,
       company_id,
       company_name: company.name,
       is_impersonating: isSuperAdmin,
+      features
     });
   } catch (e) {
     return res.status(500).json({
@@ -288,11 +294,14 @@ router.post("/stop-impersonation", authRequired, async (req, res) => {
       is_impersonating: false,
     });
 
+    const features = membership.company_id ? await prisma.company_features.findUnique({ where: { company_id: membership.company_id } }) : null;
+
     return res.json({
       token,
       company_id: membership.company_id,
       company_name: membership.companies.name,
       is_impersonating: false,
+      features
     });
   } catch (e) {
     return res.status(500).json({
