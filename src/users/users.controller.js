@@ -314,6 +314,7 @@ async function createUser(req, res) {
         data: {
           company_id: req.companyId,
           user_id: createdUser.id,
+          company_role: roleNorm,
           is_active: true,
           status: "ACTIVE",
           joined_at: new Date(),
