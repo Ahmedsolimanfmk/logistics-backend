@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("./maintenance.controller");
-const authRequired = require("../auth/jwt.middleware");
+const { authRequired } = require("../auth/jwt.middleware");
 const { requireRole } = require("../auth/role.middleware");
 
 // Requires authentication for all maintenance routes
