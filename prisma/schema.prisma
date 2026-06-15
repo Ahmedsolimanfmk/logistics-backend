@@ -331,6 +331,7 @@ model vehicles {
   work_order_installations work_order_installations[]
   fleet_assignments        fleet_vehicles[]
   driver_assignments       vehicle_driver_assignments[]
+  fuel_transactions        fuel_transactions[]
 
   @@unique([company_id, fleet_no], map: "uq_vehicles_company_fleet_no")
   @@unique([company_id, plate_no], map: "uq_vehicles_company_plate_no")
@@ -1375,6 +1376,7 @@ model drivers {
   trip_assignments    trip_assignments[]
   driverCustodies     driver_custody[]
   vehicle_assignments vehicle_driver_assignments[]
+  fuel_transactions   fuel_transactions[]
 
   @@unique([company_id, employee_code], map: "uq_drivers_company_employee_code")
   @@unique([company_id, phone], map: "uq_drivers_company_phone")
@@ -1458,6 +1460,8 @@ model companies {
   company_type company_type      @default(DIRECT_TRANSPORT)
   features     company_features?
 
+  fuel_wallet_balance Float @default(0)
+
   created_at DateTime @default(now()) @db.Timestamptz(6)
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
@@ -1483,6 +1487,8 @@ model companies {
   trips                          trips[]
   trip_assignments               trip_assignments[]
   trip_events                    trip_events[]
+  fuel_wallet_recharges          fuel_wallet_recharges[]
+  fuel_transactions              fuel_transactions[]
   trip_revenues                  trip_revenues[]
   maintenance_requests           maintenance_requests[]
   maintenance_work_orders        maintenance_work_orders[]
@@ -1552,6 +1558,8 @@ model company_features {
   fleet_enabled     Boolean @default(true)
   inventory_enabled Boolean @default(true)
   custody_enabled   Boolean @default(false)
+  fuel_enabled      Boolean @default(false)
+  fuel_commission_pct Float @default(1.0)
 
   created_at DateTime @default(now())
 
@@ -2272,4 +2280,62 @@ model notifications {
   @@index([user_id])
   @@index([is_read])
   @@map("notifications")
+}
+
+model fuel_stations {
+  id             String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name           String
+  code           String?  @unique
+  contact_number String?
+  balance        Float    @default(0)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  transactions fuel_transactions[]
+
+  @@map("fuel_stations")
+}
+
+model fuel_wallet_recharges {
+  id             String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id     String   @db.Uuid
+  amount         Float
+  payment_method String?
+  reference      String?
+  status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  notes          String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  company companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id])
+  @@index([status])
+  @@map("fuel_wallet_recharges")
+}
+
+model fuel_transactions {
+  id                 String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  fuel_station_id    String   @db.Uuid
+  company_id         String   @db.Uuid
+  vehicle_id         String?  @db.Uuid
+  driver_id          String?  @db.Uuid
+  amount             Float
+  system_commission  Float
+  total_deducted     Float
+  status             String   @default("COMPLETED") // PENDING, COMPLETED, FAILED
+  receipt_image      String?
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+
+  fuel_station fuel_stations @relation(fields: [fuel_station_id], references: [id], onDelete: Cascade)
+  company      companies     @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  vehicle      vehicles?     @relation(fields: [vehicle_id], references: [id])
+  driver       drivers?      @relation(fields: [driver_id], references: [id])
+
+  @@index([fuel_station_id])
+  @@index([company_id])
+  @@index([vehicle_id])
+  @@index([status])
+  @@map("fuel_transactions")
 }
