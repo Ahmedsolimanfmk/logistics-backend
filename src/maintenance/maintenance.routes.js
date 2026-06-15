@@ -1,184 +1,27 @@
 const express = require("express");
 const router = express.Router();
+const controller = require("./maintenance.controller");
+const authRequired = require("../auth/jwt.middleware");
+const { requireRole } = require("../auth/role.middleware");
 
-const jwtMod = require("../auth/jwt.middleware");
-const { requireCompany } = require("../auth/company.middleware");
+// Requires authentication for all maintenance routes
+router.use(authRequired);
 
-const reqCtrl = require("./maintenance.requests.controller");
-const invCtrl = require("./maintenance.inventory.controller");
-const instCtrl = require("./maintenance.installations.controller");
-const workCtrl = require("./maintenance.workorders.controller");
-const vehCtrl = require("./maintenance.vehicles.controller");
-const attCtrl = require("./maintenance.attachments.controller");
-const invReqCtrl = require("./maintenance.inventory-requests.controller");
-const issuedPartsCtrl = require("./maintenance.issued-parts.controller");
-
-const authRequired =
-  typeof jwtMod === "function"
-    ? jwtMod
-    : typeof jwtMod?.authRequired === "function"
-    ? jwtMod.authRequired
-    : null;
-
-function fallback(name) {
-  return (req, res) =>
-    res.status(500).json({
-      message: `Route handler missing: ${name}`,
-      hint: "Check controller exports (module.exports).",
-    });
-}
-
-function pick(mod, names) {
-  if (!mod) return null;
-  if (typeof mod === "function") return mod;
-
-  for (const n of names) {
-    if (typeof mod[n] === "function") return mod[n];
-  }
-
-  return null;
-}
-
-if (!authRequired) {
-  console.error("authRequired is not a function. Check ../auth/jwt.middleware export.");
-}
+// Dashboard access roles (managers, supervisors)
+const adminRoles = ["SUPER_ADMIN", "ADMIN", "MAINTENANCE_MANAGER", "GENERAL_SUPERVISOR"];
 
 // Requests
-const createMaintenanceRequest =
-  pick(reqCtrl, ["createMaintenanceRequest"]) || fallback("createMaintenanceRequest");
-
-const listMaintenanceRequests =
-  pick(reqCtrl, ["listMaintenanceRequests"]) || fallback("listMaintenanceRequests");
-
-const getMaintenanceRequestById =
-  pick(reqCtrl, ["getMaintenanceRequestById"]) || fallback("getMaintenanceRequestById");
-
-const approveMaintenanceRequest =
-  pick(reqCtrl, ["approveMaintenanceRequest"]) || fallback("approveMaintenanceRequest");
-
-const rejectMaintenanceRequest =
-  pick(reqCtrl, ["rejectMaintenanceRequest"]) || fallback("rejectMaintenanceRequest");
-
-// Inventory
-const createIssueForWorkOrder =
-  pick(invCtrl, ["createIssueForWorkOrder"]) || fallback("createIssueForWorkOrder");
-
-const addIssueLines =
-  pick(invCtrl, ["addIssueLines"]) || fallback("addIssueLines");
-
-// Installations
-const addInstallations =
-  pick(instCtrl, ["addInstallations"]) || fallback("addInstallations");
-
-const listInstallations =
-  pick(instCtrl, ["listInstallations"]) || fallback("listInstallations");
+router.get("/requests", requireRole([...adminRoles, "FIELD_SUPERVISOR"]), controller.getAllRequests);
+router.put("/requests/:id/status", requireRole(adminRoles), controller.updateRequestStatus);
 
 // Work Orders
-const listWorkOrders =
-  pick(workCtrl, ["listWorkOrders"]) || fallback("listWorkOrders");
+router.get("/work-orders", requireRole([...adminRoles, "FIELD_SUPERVISOR"]), controller.getAllWorkOrders);
+router.post("/work-orders", requireRole(adminRoles), controller.createWorkOrder);
+router.get("/work-orders/:id", requireRole([...adminRoles, "FIELD_SUPERVISOR"]), controller.getWorkOrderById);
+router.put("/work-orders/:id", requireRole(adminRoles), controller.updateWorkOrder);
 
-const getWorkOrderById =
-  pick(workCtrl, ["getWorkOrderById"]) || fallback("getWorkOrderById");
-
-const getWorkOrderReport =
-  pick(workCtrl, ["getWorkOrderReport"]) || fallback("getWorkOrderReport");
-
-const upsertPostReport =
-  pick(workCtrl, ["upsertPostReport"]) || fallback("upsertPostReport");
-
-const completeWorkOrder =
-  pick(workCtrl, ["completeWorkOrder"]) || fallback("completeWorkOrder");
-
-// Vehicles
-const listVehicleOptions =
-  pick(vehCtrl, ["listVehicleOptions"]) || fallback("listVehicleOptions");
-
-// Attachments
-const listRequestAttachments =
-  pick(attCtrl, ["listRequestAttachments"]) || fallback("listRequestAttachments");
-
-const deleteAttachment =
-  pick(attCtrl, ["deleteAttachment"]) || fallback("deleteAttachment");
-
-const uploadRequestAttachments =
-  attCtrl && Array.isArray(attCtrl.uploadRequestAttachments)
-    ? attCtrl.uploadRequestAttachments
-    : pick(attCtrl, ["uploadRequestAttachments"]) || fallback("uploadRequestAttachments");
-const createInventoryRequestForWorkOrder =
-  pick(invReqCtrl, ["createInventoryRequestForWorkOrder"]) ||
-  fallback("createInventoryRequestForWorkOrder");
-
-const addInventoryRequestLines =
-  pick(invReqCtrl, ["addInventoryRequestLines"]) ||
-  fallback("addInventoryRequestLines");
-
-const listInventoryRequestsForWorkOrder =
-  pick(invReqCtrl, ["listInventoryRequestsForWorkOrder"]) ||
-  fallback("listInventoryRequestsForWorkOrder");
-
-// Global enforcement
-router.use(authRequired || fallback("authRequired"));
-router.use(requireCompany);
-
-// Requests
-router.route("/requests")
-  .post(createMaintenanceRequest)
-  .get(listMaintenanceRequests);
-
-router.get("/requests/:id", getMaintenanceRequestById);
-router.post("/requests/:id/approve", approveMaintenanceRequest);
-router.post("/requests/:id/reject", rejectMaintenanceRequest);
-
-// Request attachments
-router.get("/requests/:id/attachments", listRequestAttachments);
-
-if (Array.isArray(uploadRequestAttachments)) {
-  router.post("/requests/:id/attachments", ...uploadRequestAttachments);
-} else {
-  router.post("/requests/:id/attachments", uploadRequestAttachments);
-}
-
-router.delete("/attachments/:attachmentId", deleteAttachment);
-
-// Inventory issues
-router.post("/work-orders/:id/issues", createIssueForWorkOrder);
-router.post("/issues/:issueId/lines", addIssueLines);
-
-// Installations
-router.route("/work-orders/:id/installations")
-  .post(addInstallations)
-  .get(listInstallations);
-
-// Work Orders
-router.get("/work-orders", listWorkOrders);
-router.get("/work-orders/:id", getWorkOrderById);
-router.get("/work-orders/:id/report", getWorkOrderReport);
-router.post("/work-orders/:id/post-report", upsertPostReport);
-router.post("/work-orders/:id/complete", completeWorkOrder);
-
-// Vehicles options
-router.get("/vehicles/options", listVehicleOptions);
-
-router.post(
-  "/work-orders/:id/inventory-requests",
-  createInventoryRequestForWorkOrder
-);
-
-router.get(
-  "/work-orders/:id/inventory-requests",
-  listInventoryRequestsForWorkOrder
-);
-
-router.post(
-  "/inventory-requests/:requestId/lines",
-  addInventoryRequestLines
-);
-
-router.get("/issued-parts", issuedPartsCtrl.listIssuedParts);
-
-router.post(
-  "/issued-parts/work-orders/:workOrderId/parts/:partId/install",
-  issuedPartsCtrl.installIssuedPart
-);
+// Installations / Parts
+router.get("/parts", requireRole(adminRoles), controller.getPartsCatalog);
+router.post("/work-orders/:id/parts", requireRole(adminRoles), controller.addWorkOrderPart);
 
 module.exports = router;
