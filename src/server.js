@@ -38,6 +38,7 @@ const companiesRoutes = require("./companies/companies.routes");
 const driverCustodyRoutes = require("./driver-custody/driver-custody.routes");
 const notificationsRoutes = require("./notifications/notifications.routes");
 const fuelRoutes = require("./fuel/fuel.routes");
+const uploadRoutes = require("./upload/upload.routes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -123,6 +124,7 @@ app.use("/driver-custody", authRequired, driverCustodyRoutes);
 app.use("/assignments", authRequired, assignmentsRoutes);
 app.use("/notifications", authRequired, notificationsRoutes);
 app.use("/fuel", fuelRoutes);
+app.use("/upload", authRequired, uploadRoutes);
 
 // =======================
 // Health check
