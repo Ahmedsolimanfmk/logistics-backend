@@ -1,7 +1,8 @@
 // backend/src/fuel/fuel.routes.js
 const { Router } = require("express");
 const controller = require("./fuel.controller");
-const { authRequired, requireRole } = require("../auth/jwt.middleware");
+const { authRequired } = require("../auth/jwt.middleware");
+const { requireRole } = require("../auth/role.middleware");
 
 const router = Router();
 
