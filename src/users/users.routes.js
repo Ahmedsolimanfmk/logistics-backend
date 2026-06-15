@@ -17,10 +17,14 @@ const {
   updateUser,
   setUserStatus,
   resetUserPassword,
+  updateFcmToken,
 } = require("./users.controller");
 
 router.use(authRequired);
 router.use(requireCompany);
+
+// لجميع المستخدمين المسجلين الدخول
+router.put("/me/fcm-token", updateFcmToken);
 
 // HR + ADMIN (قراءة)
 router.get("/", requireAdminOrHR, listUsers);

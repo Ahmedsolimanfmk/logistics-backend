@@ -526,6 +526,37 @@ async function resetUserPassword(req, res) {
   }
 }
 
+// =======================
+// PUT /users/me/fcm-token
+// body: { fcm_token: "string" }
+// =======================
+async function updateFcmToken(req, res) {
+  try {
+    const userId = req.user?.id; // Assuming authRequired adds user.id
+    const { fcm_token } = req.body ?? {};
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (typeof fcm_token !== "string") {
+      return res.status(400).json({ message: "fcm_token is required and must be a string" });
+    }
+
+    await prisma.users.update({
+      where: { id: userId },
+      data: { fcm_token },
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to update FCM token",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   listUsers,
   getUserById,
@@ -533,4 +564,5 @@ module.exports = {
   updateUser,
   setUserStatus,
   resetUserPassword,
+  updateFcmToken,
 };

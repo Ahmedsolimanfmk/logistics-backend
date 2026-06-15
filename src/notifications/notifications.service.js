@@ -1,4 +1,18 @@
 const prisma = require("../prisma");
+const admin = require("firebase-admin");
+
+// Initialize Firebase Admin if credentials are provided in env
+try {
+  if (process.env.FIREBASE_CREDENTIALS && !admin.apps.length) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("Firebase Admin Initialized for Push Notifications");
+  }
+} catch (error) {
+  console.error("Failed to initialize Firebase Admin:", error.message);
+}
 
 /**
  * Service for generating and fetching system notifications
@@ -39,7 +53,7 @@ class NotificationsService {
    * Create a notification (Internal use)
    */
   async createNotification({ companyId, userId, title, message, type = "INFO", entityType = null, entityId = null }) {
-    return prisma.notifications.create({
+    const notification = await prisma.notifications.create({
       data: {
         company_id: companyId,
         user_id: userId,
@@ -50,6 +64,36 @@ class NotificationsService {
         entity_id: entityId,
       },
     });
+
+    // Try sending Push Notification via FCM
+    try {
+      if (admin.apps.length > 0) {
+        const user = await prisma.users.findUnique({
+          where: { id: userId },
+          select: { fcm_token: true }
+        });
+
+        if (user && user.fcm_token) {
+          await admin.messaging().send({
+            token: user.fcm_token,
+            notification: {
+              title: title,
+              body: message,
+            },
+            data: {
+              entityType: entityType || "",
+              entityId: entityId || "",
+              type: type || "INFO",
+            }
+          });
+          console.log(`Push notification sent to user ${userId}`);
+        }
+      }
+    } catch (pushError) {
+      console.error("Error sending push notification:", pushError.message);
+    }
+
+    return notification;
   }
 
   /**
