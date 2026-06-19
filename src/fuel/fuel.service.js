@@ -1,5 +1,5 @@
 // backend/src/fuel/fuel.service.js
-const { prisma } = require("../db/prisma");
+const prisma = require("../prisma");
 
 class FuelService {
   // =====================
