@@ -311,7 +311,6 @@ async function createVehicleClass(payload = {}) {
       company_id,
       code: upper(code),
       name,
-      description,
       is_active,
     },
   });
@@ -369,7 +368,6 @@ async function listCargoTypes(query = {}) {
     where.OR = [
       { code: { contains: q, mode: "insensitive" } },
       { name: { contains: q, mode: "insensitive" } },
-      { description: { contains: q, mode: "insensitive" } },
     ];
   }
 
@@ -410,7 +408,6 @@ async function createCargoType(payload = {}) {
   const company_id = requireCompanyId(payload.company_id);
   const code = s(payload.code);
   const name = s(payload.name);
-  const description = s(payload.description);
   const is_active = typeof payload.is_active === "boolean" ? payload.is_active : true;
 
   if (!code) throw buildError("code is required");
@@ -421,7 +418,6 @@ async function createCargoType(payload = {}) {
       company_id,
       code: upper(code),
       name,
-      description,
       is_active,
     },
   });
@@ -530,7 +526,6 @@ async function createZone(payload = {}) {
       company_id,
       code: code ? upper(code) : null,
       name,
-      description,
       is_active,
     },
   });
@@ -550,7 +545,6 @@ async function updateZone(id, payload = {}, company_id) {
     data.name = name;
   }
 
-  if (payload.description !== undefined) data.description = s(payload.description);
   if (typeof payload.is_active === "boolean") data.is_active = payload.is_active;
 
   return prisma.zones.update({
