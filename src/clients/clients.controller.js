@@ -345,6 +345,63 @@ exports.getClientById = async (req, res) => {
 };
 
 // =======================
+// POST /clients/bulk
+// =======================
+exports.bulkCreateClients = async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    if (!companyId) throw buildError("companyId is required", 400);
+
+    const { clients } = req.body;
+    if (!Array.isArray(clients) || clients.length === 0) {
+      throw buildError("A non-empty 'clients' array is required in the body", 400);
+    }
+
+    const dataToInsert = clients.map((c) => {
+      const name = s(c.name);
+      if (!name) return null;
+
+      return {
+        company_id: companyId,
+        name: name,
+        code: s(c.code),
+        phone: s(c.phone),
+        billing_email: s(c.email) || s(c.billing_email),
+        hq_address: s(c.hq_address),
+        primary_contact_name: s(c.contact_name) || s(c.primary_contact_name),
+        primary_contact_phone: s(c.contact_phone) || s(c.primary_contact_phone),
+        primary_contact_email: s(c.contact_email) || s(c.primary_contact_email),
+        tax_no: s(c.tax_no),
+        notes: s(c.notes),
+        is_active: typeof c.is_active === "boolean" ? c.is_active : true,
+      };
+    }).filter(Boolean);
+
+    if (dataToInsert.length === 0) {
+      throw buildError("No valid clients found to insert. 'name' is required for each.", 400);
+    }
+
+    const created = await prisma.clients.createMany({
+      data: dataToInsert,
+      skipDuplicates: true,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `${created.count} clients imported successfully`,
+      count: created.count,
+    });
+  } catch (e) {
+    console.error("bulkCreateClients error:", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e?.message || "Failed to bulk import clients",
+      error: e?.message || String(e),
+    });
+  }
+};
+
+// =======================
 // POST /clients
 // =======================
 exports.createClient = async (req, res) => {

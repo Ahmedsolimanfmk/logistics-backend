@@ -8,6 +8,7 @@ router.use(authRequired);
 router.get("/", clientsController.listClients);
 router.get("/:id", clientsController.getClientById);
 
+router.post("/bulk", clientsController.bulkCreateClients);
 router.post("/", clientsController.createClient);
 router.put("/:id", clientsController.updateClient);
 
